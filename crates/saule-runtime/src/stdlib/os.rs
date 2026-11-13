@@ -325,24 +325,16 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
     match args.get(idx) {
         Some(Value::Str(s)) => Ok((**s).clone()),
-        Some(other) => Err(format!(
-            "{name} expects a string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `string`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_integer(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(*n),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 

@@ -415,7 +415,7 @@ impl Vm {
             return RuntimeError::Raised {
                 message,
                 span: blamed.proto.span_at(blamed.pc.saturating_sub(1)),
-                label: format!("raised at level {level}: blamed on this call"),
+                label: format!("reported here, at this call (`error` level {level})"),
                 origin,
             };
         }

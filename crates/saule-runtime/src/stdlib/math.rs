@@ -8,7 +8,23 @@ use std::thread_local;
 
 use crate::native_packages::NativePackage;
 use crate::prelude::Prelude;
-use crate::stdlib::{expect_arity, expect_min_arity};
+use crate::stdlib::{missing_arg, wrong_arg};
+
+// Every function here names itself by its bare name (`"sqrt"`), the way the
+// tree-walker did. A message has to say `Math.sqrt`, which is what was
+// written, so the two arity checks qualify it on the way out.
+fn expect_arity(name: &str, args: &[Value], n: usize) -> Result<(), String> {
+    crate::stdlib::expect_arity(&format!("Math.{name}"), args, n)
+}
+
+fn expect_min_arity(name: &str, args: &[Value], n: usize) -> Result<(), String> {
+    crate::stdlib::expect_min_arity(&format!("Math.{name}"), args, n)
+}
+
+/// `Math.{name}` takes `counts` arguments (written "1 or 2"), and got `got`.
+fn takes(name: &str, counts: &str, got: usize) -> String {
+    format!("`Math.{name}` takes {counts} arguments, got {got}")
+}
 use crate::value::SauleStr;
 use crate::value::{ClassObject, Value};
 
@@ -246,12 +262,13 @@ fn number_at(args: &[Value], idx: usize, fn_name: &str) -> Result<Number, String
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(Number::Int(*n)),
         Some(Value::Float(f)) => Ok(Number::Float(*f)),
-        Some(v) => Err(format!(
-            "{fn_name} expects numeric arguments; arg #{} is `{}`",
-            idx + 1,
-            v.type_name()
+        Some(v) => Err(wrong_arg(
+            &format!("Math.{fn_name}"),
+            idx,
+            "a number (`integer` or `float`)",
+            v,
         )),
-        None => Err(format!("{fn_name} missing arg #{}", idx + 1)),
+        None => Err(missing_arg(&format!("Math.{fn_name}"), idx)),
     }
 }
 
@@ -275,7 +292,7 @@ fn math_asin(args: &[Value]) -> Result<Value, String> {
 
 fn math_atan(args: &[Value]) -> Result<Value, String> {
     if args.len() != 1 && args.len() != 2 {
-        return Err(format!("atan expects 1 or 2 arguments, got {}", args.len()));
+        return Err(takes("atan", "1 or 2", args.len()));
     }
     let y = number_at(args, 0, "atan")?.as_f64();
     if args.len() == 1 {
@@ -385,6 +402,11 @@ fn math_ceil(args: &[Value]) -> Result<Value, String> {
     }
 }
 
+/// What every message in this file looks like: the title, then ` — `, then
+/// the fix, which the runtime moves into the help line.
+const FMOD_BY_ZERO: &str =
+    "remainder by zero — `Math.fmod(a, b)` divides `a` by `b`, so check that `b` is not 0 first";
+
 fn math_fmod(args: &[Value]) -> Result<Value, String> {
     expect_arity("fmod", args, 2)?;
     let a = number_at(args, 0, "fmod")?;
@@ -392,7 +414,7 @@ fn math_fmod(args: &[Value]) -> Result<Value, String> {
     match (a, b) {
         (Number::Int(x), Number::Int(y)) => {
             if y == 0 {
-                return Err("fmod divisor cannot be zero".to_string());
+                return Err(FMOD_BY_ZERO.to_string());
             }
             Ok(Value::Int(x % y))
         }
@@ -400,7 +422,7 @@ fn math_fmod(args: &[Value]) -> Result<Value, String> {
             let x = a.as_f64();
             let y = b.as_f64();
             if y == 0.0 {
-                return Err("fmod divisor cannot be zero".to_string());
+                return Err(FMOD_BY_ZERO.to_string());
             }
             Ok(Value::Float(x % y))
         }
@@ -409,18 +431,22 @@ fn math_fmod(args: &[Value]) -> Result<Value, String> {
 
 fn math_log(args: &[Value]) -> Result<Value, String> {
     if args.len() != 1 && args.len() != 2 {
-        return Err(format!("log expects 1 or 2 arguments, got {}", args.len()));
+        return Err(takes("log", "1 or 2", args.len()));
     }
     let x = number_at(args, 0, "log")?.as_f64();
     if x <= 0.0 {
-        return Err("log expects a positive value".to_string());
+        return Err(format!(
+            "logarithm of {x:?}, which is not above 0 — a logarithm is only defined for values above 0; check the value before calling `Math.log`"
+        ));
     }
     if args.len() == 1 {
         Ok(Value::Float(x.ln()))
     } else {
         let base = number_at(args, 1, "log")?.as_f64();
         if base <= 0.0 || (base - 1.0).abs() < f64::EPSILON {
-            return Err("log base must be positive and not equal to 1".to_string());
+            return Err(format!(
+                "logarithm base {base:?} is not allowed — the base must be above 0 and not 1, e.g. `Math.log(x, 10.0)` or `Math.log(x, 2.0)`"
+            ));
         }
         Ok(Value::Float(x.log(base)))
     }
@@ -451,7 +477,9 @@ fn math_sqrt(args: &[Value]) -> Result<Value, String> {
     expect_arity("sqrt", args, 1)?;
     let x = number_at(args, 0, "sqrt")?.as_f64();
     if x < 0.0 {
-        return Err("sqrt expects a non-negative number".to_string());
+        return Err(format!(
+            "square root of a negative number ({x:?}) — `Math.sqrt` needs a value of 0 or more; use `Math.sqrt(Math.abs(x))` if the sign doesn't matter"
+        ));
     }
     Ok(Value::Float(x.sqrt()))
 }
@@ -465,31 +493,34 @@ fn math_random(args: &[Value]) -> Result<Value, String> {
                 Number::Int(i) => i,
                 Number::Float(f) => {
                     if f.fract() != 0.0 {
-                        return Err("random upper bound must be an integer".to_string());
+                        return Err(format!(
+                            "`Math.random` upper bound must be a whole number, got {f:?} — `Math.random(n)` picks an `integer` from 1 to n; for a float in [0, 1), call `Math.random()`"
+                        ));
                     }
                     f as i64
                 }
             };
             if hi < 1 {
-                return Err("random upper bound must be >= 1".to_string());
+                return Err(format!(
+                    "`Math.random` upper bound must be 1 or more, got {hi} — `Math.random(n)` picks from 1 to n; for another range use `Math.random(lo, hi)`"
+                ));
             }
             let span = hi as u64;
             Ok(Value::Int((next_u64() % span) as i64 + 1))
         }
         2 => {
-            let lo = to_i64(number_at(args, 0, "random")?, "random lower bound")?;
-            let hi = to_i64(number_at(args, 1, "random")?, "random upper bound")?;
+            let lo = to_i64(number_at(args, 0, "random")?, "the `Math.random` lower bound")?;
+            let hi = to_i64(number_at(args, 1, "random")?, "the `Math.random` upper bound")?;
             if lo > hi {
-                return Err("random expects lower bound <= upper bound".to_string());
+                return Err(format!(
+                    "`Math.random` lower bound {lo} is above the upper bound {hi} — swap them: `Math.random({hi}, {lo})`"
+                ));
             }
             let span = (hi as i128 - lo as i128 + 1) as u128;
             let v = (next_u64() as u128) % span;
             Ok(Value::Int(lo + v as i64))
         }
-        _ => Err(format!(
-            "random expects 0, 1, or 2 arguments, got {}",
-            args.len()
-        )),
+        _ => Err(takes("random", "0, 1 or 2", args.len())),
     }
 }
 
@@ -514,8 +545,8 @@ fn math_type(args: &[Value]) -> Result<Value, String> {
 
 fn math_ult(args: &[Value]) -> Result<Value, String> {
     expect_arity("ult", args, 2)?;
-    let a = to_i64(number_at(args, 0, "ult")?, "ult arg #1")? as u64;
-    let b = to_i64(number_at(args, 1, "ult")?, "ult arg #2")? as u64;
+    let a = to_i64(number_at(args, 0, "ult")?, "argument 1 of `Math.ult`")? as u64;
+    let b = to_i64(number_at(args, 1, "ult")?, "argument 2 of `Math.ult`")? as u64;
     Ok(Value::Bool(a < b))
 }
 
@@ -530,12 +561,12 @@ fn math_clamp(args: &[Value]) -> Result<Value, String> {
     expect_arity("clamp", args, 3)?;
     if all_ints(args) {
         let (value, min, max) = (
-            to_i64(number_at(args, 0, "clamp")?, "clamp")?,
-            to_i64(number_at(args, 1, "clamp")?, "clamp")?,
-            to_i64(number_at(args, 2, "clamp")?, "clamp")?,
+            to_i64(number_at(args, 0, "clamp")?, "argument 1 of `Math.clamp`")?,
+            to_i64(number_at(args, 1, "clamp")?, "argument 2 of `Math.clamp`")?,
+            to_i64(number_at(args, 2, "clamp")?, "argument 3 of `Math.clamp`")?,
         );
         if min > max {
-            return Err("clamp expects min <= max".to_string());
+            return Err(clamp_reversed(min, max));
         }
         return Ok(Value::Int(value.clamp(min, max)));
     }
@@ -543,9 +574,17 @@ fn math_clamp(args: &[Value]) -> Result<Value, String> {
     let min = number_at(args, 1, "clamp")?.as_f64();
     let max = number_at(args, 2, "clamp")?.as_f64();
     if min > max {
-        return Err("clamp expects min <= max".to_string());
+        return Err(clamp_reversed(min, max));
     }
     Ok(Value::Float(value.clamp(min, max)))
+}
+
+/// `Debug` rather than `Display` so a `float` keeps its `.0` — the reader
+/// should see the value they wrote.
+fn clamp_reversed(lo: impl std::fmt::Debug, hi: impl std::fmt::Debug) -> String {
+    format!(
+        "`Math.clamp` lower bound {lo:?} is above its upper bound {hi:?} — the order is `Math.clamp(n, lo, hi)`; swap the last two"
+    )
 }
 
 fn math_sign(args: &[Value]) -> Result<Value, String> {
@@ -566,7 +605,9 @@ fn to_i64(n: Number, label: &str) -> Result<i64, String> {
         Number::Int(i) => Ok(i),
         Number::Float(f) => {
             if f.fract() != 0.0 || !f.is_finite() || f < i64::MIN as f64 || f > i64::MAX as f64 {
-                Err(format!("{label} must be an integer"))
+                Err(format!(
+                    "{label} must be a whole number, got {f:?} — round it first with `Math.floor`, `Math.ceil` or `Math.round`"
+                ))
             } else {
                 Ok(f as i64)
             }

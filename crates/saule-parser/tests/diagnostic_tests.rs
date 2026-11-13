@@ -83,7 +83,13 @@ fn a_typed_local_missing_its_equals_says_so() {
         "expected `=` before the value of `build`, found identifier `Saule`"
     );
     assert_contains(&help.expect("names the fix"), "local build: T = value");
-    assert_contains(&strict_error(src).to_string(), "`=` before the value");
+    let strict = strict_error(src);
+    assert_contains(&strict.to_string(), "`=` before the value");
+    let label = strict
+        .labels()
+        .and_then(|mut l| l.next())
+        .and_then(|l| l.label().map(str::to_string));
+    assert_eq!(label.as_deref(), Some("add `=` before this value"));
 
     // The value is kept as the initializer, so nothing downstream complains
     // about `nil`.

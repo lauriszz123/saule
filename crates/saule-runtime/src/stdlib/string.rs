@@ -239,24 +239,16 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<SauleStr, String> {
     match args.get(idx) {
         Some(Value::Str(s)) => Ok(s.clone()),
-        Some(other) => Err(format!(
-            "{name} expects a string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `string`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_int(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(i)) => Ok(*i),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -481,15 +473,15 @@ fn str_char(args: &[Value]) -> Result<Value, String> {
             Value::Int(n) => *n,
             other => {
                 return Err(format!(
-                    "String.char expects integer arguments, got `{}` at argument {}",
-                    other.type_name(),
-                    i + 1
+                    "{} — `String.char` builds a string from character codes, e.g. `String.char(72, 105)` is \"Hi\"",
+                    super::wrong_arg("String.char", i, "an `integer` character code", other)
                 ));
             }
         };
         let Some(c) = u32::try_from(code).ok().and_then(char::from_u32) else {
             return Err(format!(
-                "String.char: code {code} at argument {} is not a valid character",
+                "String.char: code {code} at argument {} is not a valid character — \
+                 a character code is a Unicode scalar value: 0 to 1114111, excluding 55296 to 57343",
                 i + 1
             ));
         };
@@ -701,7 +693,10 @@ pub(crate) fn format_args_impl(args: &[Value]) -> Result<String, String> {
             chars.next();
         }
         let Some(spec) = spec_char else {
-            return Err("String.format: trailing `%` without format spec".to_string());
+            return Err(
+                "String.format: the format string ends with a lone `%` — write `%%` for a literal percent sign"
+                    .to_string(),
+            );
         };
 
         if spec == '%' {
@@ -710,7 +705,12 @@ pub(crate) fn format_args_impl(args: &[Value]) -> Result<String, String> {
         }
 
         let arg = args.get(arg_idx).ok_or_else(|| {
-            format!("String.format: not enough arguments for format string (missing arg {arg_idx})")
+            format!(
+                "String.format: placeholder {} has no value to fill it — each `%` placeholder takes one argument after the format string; \
+                 pass {} or remove the placeholder (`%%` is a literal percent sign)",
+                arg_idx,
+                if arg_idx == 1 { "one" } else { "another" }
+            )
         })?;
         arg_idx += 1;
 
@@ -762,7 +762,9 @@ fn format_one(
         'c' => {
             let n = as_int(arg, spec)?;
             let Some(c) = u32::try_from(n).ok().and_then(char::from_u32) else {
-                return Err(format!("String.format `%c`: {n} is not a valid character"));
+                return Err(format!(
+                    "String.format `%c`: {n} is not a valid character code — `%c` takes a Unicode scalar value: 0 to 1114111, excluding 55296 to 57343"
+                ));
             };
             c.to_string()
         }
@@ -778,7 +780,10 @@ fn format_one(
             }
         }
         other => {
-            return Err(format!("String.format: unsupported spec `%{other}`"));
+            return Err(format!(
+                "String.format: unknown placeholder `%{other}` — the placeholders are `%s` (any value), `%d`/`%i` (integer), \
+                 `%f`/`%e`/`%g` (float), `%x`/`%X`/`%o` (hex/octal), `%c` (character) and `%%` (a literal `%`)"
+            ));
         }
     };
 
@@ -810,8 +815,8 @@ fn as_int(v: &Value, spec: char) -> Result<i64, String> {
         Value::Int(i) => Ok(*i),
         Value::Float(f) => Ok(*f as i64),
         other => Err(format!(
-            "String.format `%{spec}`: expected integer, got `{}`",
-            other.type_name()
+            "String.format `%{spec}`: expected a number, got {} — `%{spec}` formats a number; use `%s` for any value",
+            crate::error::a_type(other.type_name())
         )),
     }
 }
@@ -821,8 +826,8 @@ fn as_float(v: &Value, spec: char) -> Result<f64, String> {
         Value::Int(i) => Ok(*i as f64),
         Value::Float(f) => Ok(*f),
         other => Err(format!(
-            "String.format `%{spec}`: expected number, got `{}`",
-            other.type_name()
+            "String.format `%{spec}`: expected a number, got {} — `%{spec}` formats a number; use `%s` for any value",
+            crate::error::a_type(other.type_name())
         )),
     }
 }
@@ -951,8 +956,8 @@ fn str_gmatch(args: &[Value]) -> Result<Value, String> {
     let pchars: Rc<Vec<char>> = Rc::new(pat.chars().collect());
     if pattern::is_anchored(&pchars) {
         return Err(
-            "String.gmatch cannot iterate an anchored pattern: `^` matches in one place \
-             only. Use String.match for a single anchored match, or drop the `^`."
+            "String.gmatch cannot loop over an anchored pattern — `^` matches in one place \
+             only; use `String.match` for a single anchored match, or drop the `^`"
                 .to_string(),
         );
     }
@@ -1002,7 +1007,10 @@ fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
     let limit = if args.len() >= 4 {
         let n = expect_int("String.gsub", args, 3)?;
         if n < 0 {
-            return Err(format!("String.gsub limit cannot be negative, got {n}"));
+            return Err(format!(
+                "String.gsub limit cannot be negative, got {n} — the limit is how many matches to replace; \
+                 pass 0 or more, or leave it out to replace every match"
+            ));
         }
         Some(n as usize)
     } else {
@@ -1100,11 +1108,11 @@ fn str_join(args: &[Value]) -> Result<Value, String> {
         Some(Value::Table(t)) => t.clone(),
         Some(other) => {
             return Err(format!(
-                "String.join expects a table at argument 2, got `{}`",
-                other.type_name()
+                "{} — the separator comes first: `String.join(\", \", parts)`",
+                super::wrong_arg("String.join", 1, "a `table`", other)
             ));
         }
-        None => return Err("String.join missing argument 2".to_string()),
+        None => return Err(super::missing_arg("String.join", 1)),
     };
     let t = table.borrow();
     let mut out = String::new();
@@ -1219,7 +1227,9 @@ fn pad(name: &str, args: &[Value], at_start: bool) -> Result<Value, String> {
         Some(_) => expect_string(name, args, 2)?.as_str().to_string(),
     };
     if fill.is_empty() {
-        return Err(format!("{name}: fill must not be empty"));
+        return Err(format!(
+            "{name}: the fill string is empty — padding repeats the fill, so it needs at least one character, e.g. \" \" or \"0\""
+        ));
     }
 
     let len = char_len_rc(&s) as i64;

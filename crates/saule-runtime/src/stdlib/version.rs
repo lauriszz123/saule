@@ -95,11 +95,16 @@ fn saule_at_least(args: &[Value]) -> Result<Vec<Value>, String> {
         Some(Value::Str(s)) => (**s).clone(),
         Some(other) => {
             return Err(format!(
-                "Saule.atLeast expects a string at argument 0, got `{}`",
-                other.type_name()
+                "{} — pass the version as text, e.g. `Saule.atLeast(\"26.7\")`",
+                super::wrong_arg("Saule.atLeast", 0, "a `string`", other)
             ));
         }
-        None => return Err("Saule.atLeast expects a version string".to_string()),
+        None => {
+            return Err(format!(
+                "{} — pass the version to compare against, e.g. `Saule.atLeast(\"26.7\")`",
+                super::missing_arg("Saule.atLeast", 0)
+            ));
+        }
     };
     Ok(vec![Value::Bool(saule_version::at_least(&required))])
 }

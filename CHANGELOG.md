@@ -51,8 +51,15 @@ history.
   "this is an `integer`, not a function"), and a help line with the fix,
   usually as a short example. Before, almost all of them were `type error:
   …` labelled "type mismatch or invalid operation", whatever had actually
-  happened, with the advice run into the title. A built-in function that refuses its argument
-  is now named in the label. A missing member lists the class's fields. A
+  happened, with the advice run into the title. A built-in function that
+  refuses its argument is now named in the label, and its help line ends
+  with the function's documented signature, so the argument order is always
+  in view. The standard library's own messages were rewritten to match:
+  every argument error reads "argument 2 of `String.rep` must be an
+  `integer`, got a `string`", and the rest say what to do — `Math.clamp`
+  with its bounds swapped says to swap them, a malformed pattern says how to
+  close it, a file opened only for reading names the modes that write. A
+  missing member lists the class's fields. A
   `for` loop's error points at the step or the iterated value, not at the
   whole loop. A failure that can only be a bug in Saule says so, and says
   where to report it.
@@ -60,8 +67,8 @@ history.
   included.
 - **A forgotten `=` in a typed `local` is reported as one.** `local build:
   integer Saule.build` used to fail with "cannot assign `nil` to `integer`";
-  it now says ``expected `=` before the value of `build` `` and points at
-  the value.
+  it now says ``expected `=` before the value of `build` ``, with "add `=`
+  before this value" under the value.
 - **Every benchmark is now under 2x Lua; the suite is at 1.33x.** These
   changes took the four that were still above it below:
   - **`closure`** (2.5x → **0.8x**): a local that holds one lambda for its

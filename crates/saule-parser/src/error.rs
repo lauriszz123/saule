@@ -37,7 +37,17 @@ impl ParseError {
             found: found.value.describe(),
             help: None,
             span: found.span.clone(),
+            label: "here".into(),
         }
+    }
+
+    /// Replace the caret's "here" with what to do at this spot, for a rule
+    /// that knows — "add `=` before this value".
+    pub(crate) fn with_label(mut self, text: impl Into<Cow<'static, str>>) -> Self {
+        if let ParseError::Expected { label, .. } = &mut self {
+            *label = text.into();
+        }
+        self
     }
 
     /// Attach the line that says what to do about it.
@@ -75,8 +85,11 @@ pub enum ParseError {
         found: Cow<'static, str>,
         #[help]
         help: Option<String>,
-        #[label("here")]
+        #[label("{label}")]
         span: Range<usize>,
+        /// What the caret says. "here" unless the rule knows what to do at
+        /// this spot — see [`ParseError::with_label`].
+        label: Cow<'static, str>,
     },
     /// `f<>(…)` — a call site wrote the angle brackets and no types.
     ///

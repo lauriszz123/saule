@@ -149,36 +149,24 @@ fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Va
 fn expect_bytes(name: &str, args: &[Value], idx: usize) -> Result<SauleBytes, String> {
     match args.get(idx) {
         Some(Value::Bytes(b)) => Ok(b.clone()),
-        Some(other) => Err(format!(
-            "{name} expects bytes at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "`bytes`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<SauleStr, String> {
     match args.get(idx) {
         Some(Value::Str(s)) => Ok(s.clone()),
-        Some(other) => Err(format!(
-            "{name} expects a string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `string`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_int(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(i)) => Ok(*i),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -551,7 +539,6 @@ mod tests {
     #[test]
     fn a_string_argument_where_bytes_are_wanted_names_both_types() {
         let err = bytes_len(&[Value::Str(SauleStr::new("x".into()))]).unwrap_err();
-        assert!(err.contains("expects bytes"), "{err}");
-        assert!(err.contains("string"), "{err}");
+        assert_eq!(err, "argument 1 of `Bytes.len` must be `bytes`, got a `string`");
     }
 }

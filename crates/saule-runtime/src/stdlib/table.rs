@@ -265,36 +265,24 @@ fn expect_table(
 ) -> Result<Rc<RefCell<TableObject>>, String> {
     match args.get(idx) {
         Some(Value::Table(t)) => Ok(t.clone()),
-        Some(other) => Err(format!(
-            "{name} expects a table at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `table`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_int_arg(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(*n),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_string_arg(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
     match args.get(idx) {
         Some(Value::Str(s)) => Ok((**s).clone()),
-        Some(other) => Err(format!(
-            "{name} expects a string at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `string`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -321,13 +309,15 @@ fn tbl_insert(args: &[Value]) -> Result<Vec<Value>, String> {
             let len = t.array.len() as i64;
             if pos < 1 || pos > len + 1 {
                 return Err(format!(
-                    "Table.insert: position {pos} out of range for length {len}"
+                    "Table.insert: position {pos} is out of range for a table of length {len} — \
+                     the position comes last, `Table.insert(t, value, pos)`, and must be from 1 to {}; leave it out to append",
+                    len + 1
                 ));
             }
             t.array.insert((pos - 1) as usize, value);
             Ok(vec![Value::Nil])
         }
-        n => Err(format!("Table.insert expects 2 or 3 arguments, got {n}")),
+        n => Err(format!("`Table.insert` takes 2 or 3 arguments, got {n}")),
     }
 }
 
@@ -466,8 +456,8 @@ fn invoke_comp(
         Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
     ) {
         return Err(format!(
-            "Table.sort: comparator must be a function, got `{}`",
-            comp.type_name()
+            "{} — pass a comparator such as `fn(a, b) -> boolean return a > b end`, or leave it out to sort ascending",
+            super::wrong_arg("Table.sort", 1, "a function", comp)
         ));
     }
     buf.clear();
@@ -514,7 +504,8 @@ fn tbl_concat(args: &[Value]) -> Result<Vec<Value>, String> {
     }
     if i < 1 || j > len {
         return Err(format!(
-            "Table.concat: range [{i}, {j}] out of bounds for length {len}"
+            "Table.concat: range {i} to {j} is out of bounds for a table of length {len} — \
+             `Table.concat(t, sep, i, j)` joins elements `i` through `j`, which must lie between 1 and {len}"
         ));
     }
 

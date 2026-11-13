@@ -35,6 +35,7 @@ impl Parser {
                             .to_string(),
                     ),
                     span: tok.span,
+                    label: "here".into(),
                 });
             }
             // `export name: T = expr` — a module-level variable. No keyword
@@ -485,6 +486,7 @@ impl Parser {
                     found: format!("`{last}`, which is not a name").into(),
                     help: Some(format!("write `import \"{path}\" as someName`")),
                     span: kw.span.start..end,
+                    label: "here".into(),
                 };
                 if !self.recovering() {
                     return Err(err);
@@ -555,6 +557,7 @@ impl Parser {
                 found: self.peek().value.describe(),
                 help: Some(IMPORT_FORMS.to_string()),
                 span: kw.span.start..end,
+                label: "here".into(),
             };
             if !self.recovering() {
                 return Err(err);

@@ -295,24 +295,16 @@ fn native_multi(name: &'static str, func: fn(&[Value]) -> Result<Vec<Value>, Str
 fn elements(name: &str, args: &[Value], idx: usize) -> Result<Vec<Value>, String> {
     match args.get(idx) {
         Some(Value::Table(t)) => Ok(t.borrow().array.clone()),
-        Some(other) => Err(format!(
-            "{name} expects a table at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `table`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
 fn expect_int(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(*n),
-        Some(other) => Err(format!(
-            "{name} expects an integer at argument {}, got `{}`",
-            idx + 1,
-            other.type_name()
-        )),
-        None => Err(format!("{name} missing argument {}", idx + 1)),
+        Some(other) => Err(super::wrong_arg(name, idx, "an `integer`", other)),
+        None => Err(super::missing_arg(name, idx)),
     }
 }
 
@@ -578,7 +570,9 @@ fn iter_chunk(args: &[Value]) -> Result<Vec<Value>, String> {
     let src = elements("Iter.chunk", args, 0)?;
     let size = expect_int("Iter.chunk", args, 1)?;
     if size < 1 {
-        return Err(format!("Iter.chunk: size must be at least 1, got {size}"));
+        return Err(format!(
+            "Iter.chunk: size must be at least 1, got {size} — the size is how many elements go in each chunk, e.g. `Iter.chunk(items, 3)`"
+        ));
     }
     let groups: Vec<Value> = src
         .chunks(size as usize)

@@ -380,12 +380,97 @@ fn a_built_in_refusing_its_argument_is_named_in_the_label() {
 
 #[test]
 fn a_built_ins_own_name_is_not_repeated_in_the_message() {
-    let s = shown("local t: table<integer, integer> = {1, 2}\nTable.insert(t, 9, 5)\n");
-    assert_eq!(s.message, "position 5 out of range for length 2");
-    assert_eq!(s.label, "`Table.insert` failed here");
-    assert_eq!(s.line, 2);
+    assert_eq!(
+        shown("local t: table<integer, integer> = {1, 2}\nTable.insert(t, 9, 5)\n"),
+        Shown {
+            message: "position 5 is out of range for a table of length 2".into(),
+            label: "`Table.insert` failed here".into(),
+            help: help(
+                "the position comes last, `Table.insert(t, value, pos)`, and must be from 1 to 3; leave it out to append\n\
+                 signature: `Table.insert<V>(t: table<V>, value: V, pos: integer?) -> nil`"
+            ),
+            line: 2,
+        }
+    );
     // `Table.insert(t, value, pos)`: position 3 appends to a length-2 table.
     ok("local t: table<integer, integer> = {1, 2}\nTable.insert(t, 9, 3)\n");
+}
+
+// ── the standard library's own messages ────────────────────────────────────
+
+#[test]
+fn every_built_in_failure_ends_with_its_documented_signature() {
+    for (src, signature) in [
+        (
+            "local o: string, n: integer = String.gsub(\"aaa\", \"a\", \"b\", -1)\n",
+            "signature: `String.gsub(s: string, pat: string, repl: string, limit: integer?) -> (string, integer)`",
+        ),
+        (
+            "local x: float = -9.0\nlocal r: float = Math.sqrt(x)\n",
+            "signature: `Math.sqrt<N>(n: N) -> float`",
+        ),
+        (
+            "local s: string = String.format(\"%s scored %d\", \"Ada\")\n",
+            "signature: `String.format(fmt: string, ...any) -> string`",
+        ),
+    ] {
+        let s = shown(src);
+        assert!(
+            s.help.as_deref().is_some_and(|h| h.ends_with(signature)),
+            "{src}\n{:?}",
+            s.help
+        );
+    }
+}
+
+#[test]
+fn a_failed_assertion_has_no_signature_to_distract_from_its_message() {
+    let s = shown("local x: integer? = nil\nassert(x, \"x must be set\")\n");
+    assert_eq!(s.help, None);
+}
+
+#[test]
+fn math_says_which_value_was_wrong_and_keeps_a_floats_point() {
+    let s = shown("local x: float = -9.0\nlocal r: float = Math.sqrt(x)\n");
+    assert_eq!(s.message, "square root of a negative number (-9.0)");
+    assert!(s.help.is_some_and(|h| h.contains("`Math.sqrt(Math.abs(x))`")));
+    ok("local x: float = 9.0\nlocal r: float = Math.sqrt(x)\n");
+
+    let s = shown("local c: integer = Math.clamp(5, 10, 1)\n");
+    assert_eq!(s.message, "`Math.clamp` lower bound 10 is above its upper bound 1");
+    assert!(s.help.is_some_and(|h| h.starts_with("the order is `Math.clamp(n, lo, hi)`")));
+    ok("local c: integer = Math.clamp(5, 1, 10)\n");
+}
+
+#[test]
+fn a_format_string_with_too_few_values_names_the_placeholder() {
+    let s = shown("local s: string = String.format(\"%s scored %d\", \"Ada\")\n");
+    assert_eq!(s.message, "placeholder 2 has no value to fill it");
+    assert_eq!(s.label, "`String.format` failed here");
+    ok("local s: string = String.format(\"%s scored %d\", \"Ada\", 3)\n");
+}
+
+#[test]
+fn a_malformed_pattern_says_how_to_close_it() {
+    let s = shown("local m: table<string>? = String.match(\"price: 10\", \"[0-9+\")\n");
+    assert_eq!(s.message, "malformed pattern: a `[` set is never closed");
+    assert!(s.help.is_some_and(|h| h.starts_with("end it with `]`")));
+    ok("local m: table<string>? = String.match(\"price: 10\", \"[0-9]+\")\n");
+}
+
+#[test]
+fn an_argument_message_names_the_argument_and_the_function() {
+    // A comparator held as `any` is the one shape the checker lets through.
+    let s = shown("local t: table<integer> = {3, 1}\nlocal cmp: any = 5\nTable.sort(t, cmp)\n");
+    assert_eq!(
+        s.message,
+        "argument 2 of `Table.sort` must be a function, got an `integer`"
+    );
+    assert!(
+        s.help.is_some_and(|h| h.starts_with("pass a comparator such as")),
+        "the fix comes before the signature"
+    );
+    ok("local t: table<integer> = {3, 1}\nlocal cmp: any = fn(a: integer, b: integer) -> boolean return a > b end\nTable.sort(t, cmp)\n");
 }
 
 #[test]

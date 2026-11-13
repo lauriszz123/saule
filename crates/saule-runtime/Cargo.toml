@@ -14,6 +14,9 @@ saule-parser = { path = "../saule-parser" }
 saule-semantic = { path = "../saule-semantic" }
 saule-typeck = { path = "../saule-typeck" }
 saule-native-abi = { path = "../saule-native-abi" }
+# The documented signature of a built-in, parameter names included, for the
+# help line of the error it raises. Read only when a call fails.
+saule-docs = { path = "../saule-docs" }
 miette = "7.6.0"
 thiserror = "2.0.18"
 toml = "0.8"
