@@ -40,11 +40,15 @@ const releasesUrl = `${repo}/releases`;
 
 const initial = await buildTimeChannels();
 const hasAny = Boolean(initial.stable || initial.latest);
+// When the answer above was read. A browser's cached answer older than this
+// is older than the page itself, and must not replace it — see `refresh`.
+const builtAt = Date.now();
 ---
 
 <div
 	class:list={['saule-releases', { 'saule-releases--compact': compact }]}
 	data-api={apiUrl}
+	data-built-at={builtAt}
 	hidden={!hasAny}
 	aria-label="Saule releases"
 >
@@ -154,7 +158,15 @@ const hasAny = Boolean(initial.stable || initial.latest);
 	}
 
 	async function refresh(roots: HTMLElement[]) {
-		const cached = readCache();
+		// A cached answer from before this page was built is older than what
+		// the page already shows, so it is ignored rather than rendered over
+		// it. Without this, blessing a release and redeploying still showed
+		// the old `stable` to anyone who had visited in the last ten minutes —
+		// and for as long as the API kept refusing them, since a refusal keeps
+		// the cached answer.
+		const builtAt = Number(roots[0]!.dataset.builtAt) || 0;
+		const stored = readCache();
+		const cached = stored && stored.at >= builtAt ? stored : null;
 		const age = cached ? Date.now() - cached.at : Infinity;
 		if (cached?.value) roots.forEach((r) => render(r, cached.value!));
 		if (cached && (cached.value ? age < FRESH_MS : age < BACKOFF_MS)) return;
