@@ -287,6 +287,11 @@ impl Slot {
         }
     }
 
+    /// Does a value of type `have` fit what the caret wants?
+    fn fits(&self, have: &str) -> bool {
+        self.rank(Some(have), "").starts_with('0')
+    }
+
     /// The sort bucket for an item of type `have`, given the item's own
     /// category bucket. `None` means the item has no type to judge — a
     /// keyword, or a binding with no annotation to read.
@@ -488,6 +493,29 @@ pub(crate) fn value_items(found: &Found, module: &Module, stmt_start: bool) -> V
                     .as_ref(),
                 "4",
             ),
+        ));
+    }
+
+    // The literal keywords, wherever a value can go but a statement cannot
+    // begin — `true` on a line of its own is not something anyone writes.
+    // Where a `boolean` is wanted (`local done: boolean = `, `if `,
+    // `alive and `) they lead the list; elsewhere they wait with the other
+    // keywords rather than crowding out names.
+    if !stmt_start {
+        let boolean = if slot.fits("boolean") { "00" } else { "15" };
+        for (kw, detail) in [("true", "boolean"), ("false", "boolean")] {
+            items.push(sorted(
+                item(kw.into(), CompletionItemKind::KEYWORD, Some(detail.into())),
+                boolean,
+            ));
+        }
+        items.push(sorted(
+            item(
+                "nil".into(),
+                CompletionItemKind::KEYWORD,
+                Some("no value".into()),
+            ),
+            "15",
         ));
     }
 

@@ -874,3 +874,54 @@ println(Util.nosuchthing())
     );
     assert!(err.contains("no member `nosuchthing` on `Util`"), "{err}");
 }
+
+// ─── Two imports binding one name ──────────────────────────────────────────
+
+/// The first import of a name wins, for the checker and the compiler alike.
+///
+/// The checker's seed has always kept the first binding (`entry().or_insert`),
+/// but the compiler's import table took the last. A module exporting a class
+/// with the same name as a package's, imported second, then won in codegen
+/// only: `c.bump()` checked against the package's `Counter` and compiled
+/// against the module's layout, which has no `bump` — "cannot compile a
+/// method the class does not declare". This is `from shine import Image`
+/// followed by `from uikit import *`, which exports a view called `Image`.
+#[test]
+fn the_first_import_of_a_name_wins_in_the_compiler_too() {
+    let home = fixture_home("first_import_wins");
+    std::fs::write(
+        home.join("shadow.sau"),
+        "export class Counter\n    fn other() -> integer\n        return 7\n    end\nend\n",
+    )
+    .expect("write the shadowing module");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Counter
+from shadow import *
+local c: Counter = Counter(1)
+println(c.bump())
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// The other order: the module's class is the one in scope, and the
+/// package's is not, so `other()` is what both stages see.
+#[test]
+fn a_later_package_import_does_not_replace_an_earlier_module_class() {
+    let home = fixture_home("first_import_wins_module_first");
+    std::fs::write(
+        home.join("shadow.sau"),
+        "export class Counter\n    fn other() -> integer\n        return 7\n    end\nend\n",
+    )
+    .expect("write the shadowing module");
+    let out = run_ok(
+        &home,
+        r#"from shadow import *
+from "fixture" import Counter
+local c: Counter = Counter()
+println(c.other())
+"#,
+    );
+    assert_eq!(out, "7\n");
+}

@@ -1,0 +1,18 @@
+-- The `FsKind` and `OsPlatform` values `Os` hands back are the prelude's own
+-- variants, so they compare `==` to the names a program writes.
+--
+-- They used to be built fresh on every call. Enum variants compare by
+-- identity, so `info.kind == FsKind.Dir` was false for a directory even
+-- though `match info.kind case FsKind.Dir` picked the right arm.
+
+local here: FsInfo = Os.fsInfo(Os.cwd())!
+assert(here.kind == FsKind.Dir, "a directory's kind is FsKind.Dir")
+assert(here.kind != FsKind.File, "and not FsKind.File")
+
+local plat: OsPlatform = Os.platform()
+local named: boolean = plat == OsPlatform.Linux or plat == OsPlatform.Macos
+	or plat == OsPlatform.Windows or plat == OsPlatform.Other
+assert(named, "Os.platform() is one of OsPlatform's own variants")
+assert(Os.platform() == plat, "and the same one every time")
+
+println("fs kind and platform compare by name")

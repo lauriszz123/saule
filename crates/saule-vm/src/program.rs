@@ -390,17 +390,23 @@ fn not_exported(unit: &Unit, name: &str, from: &str, span: &Range<usize>) -> Pro
 /// `import` asks for. Shared by the static and dynamic cases: once the
 /// exports exist, the two are the same thing to the compiler — a fixed set
 /// of values, resolved before the program runs.
+///
+/// A name an earlier `import` already bound is left alone; see `bound` in
+/// [`imported_layouts`].
 fn fold_native(
     unit: &Unit,
     edge: &Edge,
     vals: &HashMap<String, saule_runtime::Value>,
     natives: &mut HashMap<String, saule_runtime::Value>,
+    bound: &mut HashSet<String>,
 ) -> Result<(), ProgramError> {
     for (orig, local) in edge.names.bind(vals.keys().map(String::as_str)) {
         let Some(v) = vals.get(&orig) else {
             return Err(not_exported(unit, &orig, &edge.raw, &edge.span));
         };
-        natives.insert(local, v.clone());
+        if bound.insert(local.clone()) {
+            natives.insert(local, v.clone());
+        }
     }
     Ok(())
 }
@@ -416,6 +422,18 @@ fn imported_layouts(
     let mut natives: HashMap<String, saule_runtime::Value> = HashMap::new();
     let mut dynamic: Vec<(String, std::ops::Range<usize>)> = Vec::new();
     let mut type_slots = Vec::new();
+    // Every local name an import has bound so far. When two imports bring in
+    // the same name, the **first** one wins — the rule the type checker's
+    // seed already follows (`collect_seed` fills its tables with
+    // `entry().or_insert`). Binding the later one here instead meant the
+    // checker and the compiler disagreed about what a name *was*:
+    //
+    //     from shine import Image      -- the checker's `Image`
+    //     from uikit import *          -- uikit exports a view `Image` too
+    //
+    // checked `img.getDimensions()` against shine's native image, then
+    // compiled it against uikit's class layout, which has no such method.
+    let mut bound: HashSet<String> = HashSet::new();
     let slot_of = |name: &str| {
         bindings
             .module_slots
@@ -428,7 +446,7 @@ fn imported_layouts(
         // reach a module slot at all.
         let (from, from_path) = match &edge.target {
             Target::Native(vals) => {
-                fold_native(unit, edge, vals, &mut natives)?;
+                fold_native(unit, edge, vals, &mut natives, &mut bound)?;
                 continue;
             }
             // The same fold, plus a note to load the library at run time.
@@ -436,7 +454,7 @@ fn imported_layouts(
             // importing one package each load it where *they* would have,
             // and the cache in `load_library` makes the second a no-op.
             Target::Dynamic { package, exports } => {
-                fold_native(unit, edge, exports, &mut natives)?;
+                fold_native(unit, edge, exports, &mut natives, &mut bound)?;
                 dynamic.push((package.clone(), edge.span.clone()));
                 continue;
             }
@@ -447,6 +465,11 @@ fn imported_layouts(
         // alias when there is one.
         for (orig, local) in edge.names.bind(from.keys().map(String::as_str)) {
             let orig = &orig;
+            // A missing export is still an error even when shadowed, so the
+            // first-wins skip only applies to names the module does export.
+            if from.contains_key(orig) && !bound.insert(local.clone()) {
+                continue;
+            }
             match from.get(orig) {
                 Some(Export::Class(i)) => {
                     if let Some(s) = slot_of(&local) {

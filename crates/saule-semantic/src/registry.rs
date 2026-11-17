@@ -66,6 +66,10 @@ pub struct ClassInfo {
     /// the typechecker can infer `self.foo` / `instance.foo` and enforce
     /// assignment compatibility for indexed writes through fields.
     pub field_types: HashMap<String, Type>,
+    /// The fields declared `static`. A static field is read through the class
+    /// (`Player.maxHealth`) and an instance field through an object, so
+    /// tooling that lists one kind of access must be able to tell them apart.
+    pub static_fields: HashSet<String>,
     /// Method-name -> full signature. Populated for every `fn` declared
     /// on the class so the typechecker can answer "what does
     /// `Foo.bar(...)` return?".
@@ -474,6 +478,7 @@ pub fn build_registry(
                         implements_args: implements.iter().map(|i| i.args.clone()).collect(),
                         members: HashMap::new(),
                         field_types: HashMap::new(),
+                        static_fields: HashSet::new(),
                         methods: HashMap::new(),
                     };
                     for m in members {
@@ -481,11 +486,15 @@ pub fn build_registry(
                             ClassMember::Field {
                                 name,
                                 is_private,
+                                is_static,
                                 ty,
                                 ..
                             } => {
                                 info.members.insert(name.clone(), *is_private);
                                 info.field_types.insert(name.clone(), ty.clone());
+                                if *is_static {
+                                    info.static_fields.insert(name.clone());
+                                }
                             }
                             ClassMember::Method(meth) => {
                                 info.members.insert(meth.name.clone(), meth.is_private);

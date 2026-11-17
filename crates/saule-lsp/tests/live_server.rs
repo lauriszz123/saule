@@ -1162,3 +1162,31 @@ fn typing_a_from_line_under_an_import_leaves_the_import_alone() {
         assert!(offered.contains(&"kit".to_string()), "{text}: {offered:?}");
     }
 }
+
+/// A module created or deleted while the server runs is offered, or not, at
+/// `import` — even when the editor never says so. File watching is optional,
+/// and Neovim on Linux leaves it off, so the only signals were the startup
+/// scan and a restart: a new `settings.sau` stayed missing from `import se`
+/// until the server was restarted, and a deleted one was still offered.
+#[test]
+fn import_completion_sees_modules_made_and_removed_without_file_watching() {
+    let project = Project::new(&[("main.sau", "\n"), ("old.sau", "export x: integer = 1\n")]);
+    let main = project.path("main.sau");
+    let mut server = Server::start(Some(&project.0));
+    server.open(&main);
+
+    // Made on disk and never opened; no `didChangeWatchedFiles` is sent.
+    project.write("settings.sau", "export class Settings\nend\n");
+    std::fs::remove_file(project.path("old.sau")).unwrap();
+
+    server.change(&main, "import ");
+    let modules = complete(&mut server, &main, 0, 7);
+    assert!(modules.contains(&"settings".to_string()), "{modules:?}");
+    assert!(!modules.contains(&"old".to_string()), "{modules:?}");
+
+    // …and one made *and opened* in the editor is offered too.
+    project.write("world.sau", "export class World\nend\n");
+    server.open(&project.path("world.sau"));
+    let modules = complete(&mut server, &main, 0, 7);
+    assert!(modules.contains(&"world".to_string()), "{modules:?}");
+}

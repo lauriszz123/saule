@@ -1842,3 +1842,287 @@ fn a_stdlib_argument_ranks_by_type_but_offers_no_parameter_names() {
     );
     assert!(!ranked.iter().any(|l| l.ends_with(':')), "{ranked:?}");
 }
+
+// ── loops over calls, un-annotated containers, and indexing ─────────────────
+//
+// `for e in Event.poll() do e.` offered nothing: the loop variable was typed
+// only when the iterable was an annotated binding or `self.field`, so a loop
+// straight over a call — the way an event loop is always written — bound an
+// untyped `e`. Indexing a table (`evs[1].`) had the same gap.
+
+/// A class reached only as the element of a table some call returns.
+const PING: &str = "\
+class Ping
+    kind: string = \"\"
+    x: float = 0.0
+    fn describe() -> string
+        return self.kind
+    end
+end
+";
+
+/// `Feed.poll() -> table<Ping>`, registered the way a native package's
+/// static members are — `Event.poll()` in Shine has exactly this shape.
+fn with_native_feed() {
+    with_stdlib();
+    saule_typeck::sigs::register(
+        "Feed.poll",
+        vec![],
+        vec![saule_typeck::sigs::t_table(saule_typeck::sigs::t_named(
+            "Ping",
+        ))],
+    );
+}
+
+fn offers_ping_members(src: &str) {
+    let got = complete(src);
+    for want in ["describe", "kind", "x"] {
+        assert!(
+            got.contains(&want.to_string()),
+            "missing `{want}` in {got:?}\n{src}"
+        );
+    }
+}
+
+#[test]
+fn a_loop_over_a_native_call_types_its_variable() {
+    with_native_feed();
+    offers_ping_members(&format!(
+        "{PING}fn go()\n    for e in Feed.poll() do\n        e.@\n    end\nend\n"
+    ));
+    // Mid-condition, the exact position it was reported from.
+    offers_ping_members(&format!(
+        "{PING}fn go()\n    for e in Feed.poll() do\n        if e.@\n    end\nend\n"
+    ));
+}
+
+#[test]
+fn a_loop_over_an_unannotated_binding_types_its_variable() {
+    with_native_feed();
+    offers_ping_members(&format!(
+        "{PING}fn go()\n    local evs = Feed.poll()\n    for e in evs do\n        e.@\n    end\nend\n"
+    ));
+}
+
+#[test]
+fn a_loop_over_a_user_function_or_method_types_its_variable() {
+    let src = format!(
+        "{PING}fn all() -> table<Ping>\n    return {{}}\nend\nfn go()\n    for p in all() do\n        p.@\n    end\nend\n"
+    );
+    offers_ping_members(&src);
+
+    let src = format!(
+        "{PING}class World\n    local pings: table<Ping> = {{}}\n    fn each() -> table<Ping>\n        return self.pings\n    end\nend\nfn go(w: World)\n    for p in w.each() do\n        p.@\n    end\nend\n"
+    );
+    offers_ping_members(&src);
+
+    // A method called on `self`, inside the class.
+    let src = format!(
+        "{PING}class World\n    local pings: table<Ping> = {{}}\n    fn each() -> table<Ping>\n        return self.pings\n    end\n    fn go()\n        for p in self.each() do\n            p.@\n        end\n    end\nend\n"
+    );
+    offers_ping_members(&src);
+}
+
+#[test]
+fn an_indexed_element_offers_its_members() {
+    with_native_feed();
+    // Straight off the index.
+    offers_ping_members(&format!(
+        "{PING}fn go(evs: table<Ping>)\n    evs[1].@\nend\n"
+    ));
+    // Through an un-annotated binding.
+    offers_ping_members(&format!(
+        "{PING}fn go(evs: table<Ping>)\n    local e = evs[1]\n    e.@\nend\n"
+    ));
+    // The container itself un-annotated, from a native call.
+    offers_ping_members(&format!(
+        "{PING}fn go()\n    local evs = Feed.poll()\n    local e = evs[1]\n    e.@\nend\n"
+    ));
+    // Indexing the call directly.
+    offers_ping_members(&format!("{PING}fn go()\n    Feed.poll()[1].@\nend\n"));
+    // A safe index and a force-unwrap keep the element type.
+    offers_ping_members(&format!(
+        "{PING}fn go(evs: table<Ping>?)\n    evs?[1]!.@\nend\n"
+    ));
+}
+
+/// The loop variable is also *named* with its element type in the value
+/// list, the same as a loop over an annotated table.
+#[test]
+fn a_loop_over_a_call_names_its_variable_with_the_element_type() {
+    with_native_feed();
+    let src = format!("{PING}fn go()\n    for e in Feed.poll() do\n        @\n    end\nend\n");
+    assert_eq!(
+        detail_of(&src, "e"),
+        Some(Some("loop variable: Ping".into()))
+    );
+}
+
+// ── `local` members, seen from inside and outside their class ───────────────
+//
+// `Object.` inside `Object`'s own `init` offered nothing for a
+// `static local nextId`: a class name always completed public members only,
+// although the checker accepts `Object.nextId` anywhere inside `Object`.
+
+const COUNTER: &str = "\
+class Thing
+  static local nextId: integer = 1
+  static count: integer = 0
+  static local fn make() -> integer
+    return 1
+  end
+  local secret: integer = 0
+  shown: integer = 0
+";
+
+#[test]
+fn a_class_name_inside_its_class_offers_its_private_statics() {
+    let got = complete(&format!(
+        "{COUNTER}  fn init()\n    local a = Thing.@\n  end\nend\n"
+    ));
+    for want in ["nextId", "make", "count"] {
+        assert!(
+            got.contains(&want.to_string()),
+            "missing `{want}` in {got:?}"
+        );
+    }
+    // Statics only: instance fields are not reached through the class name.
+    assert!(!got.contains(&"secret".to_string()), "{got:?}");
+}
+
+#[test]
+fn another_instance_of_the_same_class_offers_its_private_fields() {
+    let got = complete(&format!(
+        "{COUNTER}  fn same(o: Thing) -> integer\n    return o.@\n  end\nend\n"
+    ));
+    assert!(got.contains(&"secret".to_string()), "{got:?}");
+    assert!(got.contains(&"shown".to_string()), "{got:?}");
+}
+
+#[test]
+fn outside_the_class_private_members_stay_hidden() {
+    let got = complete(&format!(
+        "{COUNTER}end\nfn go(o: Thing)\n  local a = Thing.@\nend\n"
+    ));
+    assert_eq!(got, vec!["count"]);
+    let got = complete(&format!(
+        "{COUNTER}end\nfn go(o: Thing)\n  local a = o.@\nend\n"
+    ));
+    assert_eq!(got, vec!["shown"]);
+}
+
+/// A parent's `local` members are not the child's — the checker rejects
+/// `self.secret` in a subclass, so `self.` must not offer it either.
+#[test]
+fn a_subclass_does_not_see_its_parents_private_members() {
+    let got = complete(&format!(
+        "{COUNTER}end\nclass Child extends Thing\n  local mine: integer = 0\n  fn go()\n    local a = self.@\n  end\nend\n"
+    ));
+    assert!(got.contains(&"mine".to_string()), "{got:?}");
+    assert!(got.contains(&"shown".to_string()), "{got:?}");
+    assert!(!got.contains(&"secret".to_string()), "{got:?}");
+    assert!(!got.contains(&"nextId".to_string()), "{got:?}");
+}
+
+// ── literals, and knowing what a position wants ─────────────────────────────
+//
+// `true` and `false` were never offered at all: value completion listed
+// names, never the literal keywords. And outside an argument slot nothing
+// knew what type a position wanted, so nothing could put them first.
+
+const DOOR: &str = "\
+class Door
+  local open: boolean = false
+  local tile: Tile = Tile.Grass
+  local count: integer = 0
+  fn init()
+  end
+";
+
+const TILE: &str = "enum Tile\n  Grass,\n  Water\nend\n";
+
+fn first_two(src: &str) -> Vec<String> {
+    complete_ranked(src).into_iter().take(2).collect()
+}
+
+#[test]
+fn true_and_false_are_offered_as_values() {
+    let got = complete(&format!(
+        "{TILE}{DOOR}  fn go()\n    print(@)\n  end\nend\n"
+    ));
+    for want in ["true", "false", "nil"] {
+        assert!(
+            got.contains(&want.to_string()),
+            "missing `{want}` in {got:?}"
+        );
+    }
+    // …and filtered by what has been typed, like any other item.
+    assert_eq!(
+        complete(&format!(
+            "{TILE}{DOOR}  fn go()\n    local a = tr@\n  end\nend\n"
+        )),
+        vec!["true"]
+    );
+}
+
+#[test]
+fn a_statement_start_does_not_offer_literals() {
+    let got = complete(&format!("{TILE}{DOOR}  fn go()\n    @\n  end\nend\n"));
+    assert!(!got.contains(&"true".to_string()), "{got:?}");
+}
+
+/// Every place a `boolean` is wanted puts `true` and `false` first.
+#[test]
+fn a_boolean_position_ranks_true_and_false_first() {
+    for body in [
+        "self.open = @",                // assignment to a boolean field
+        "local done: boolean = @",      // annotated local
+        "if @ then end",                // condition
+        "local both = self.open and @", // logical operand
+    ] {
+        let src = format!("{TILE}{DOOR}  fn go()\n    {body}\n  end\nend\n");
+        let mut top = first_two(&src);
+        top.sort();
+        assert_eq!(top, vec!["false", "true"], "{body}");
+    }
+    // A method's declared return type.
+    let src = format!("{TILE}{DOOR}  fn isOpen() -> boolean\n    return @\n  end\nend\n");
+    let mut top = first_two(&src);
+    top.sort();
+    assert_eq!(top, vec!["false", "true"]);
+    // A field's default.
+    let src = format!("{TILE}class Lamp\n  lit: boolean = @\nend\n");
+    let mut top = first_two(&src);
+    top.sort();
+    assert_eq!(top, vec!["false", "true"]);
+}
+
+/// Where something else is wanted, the literals stay out of the way.
+#[test]
+fn a_non_boolean_position_keeps_literals_behind_names() {
+    let src = format!("{TILE}{DOOR}  fn go()\n    self.count = @\n  end\nend\n");
+    let ranked = complete_ranked(&src);
+    let pos = |n: &str| ranked.iter().position(|r| r == n).unwrap();
+    assert!(pos("count") < pos("true"), "{ranked:?}");
+}
+
+/// A comparison wants another of what its left side is — here a `Tile`,
+/// not the `boolean` the comparison itself yields.
+#[test]
+fn a_comparison_wants_the_type_of_its_left_side() {
+    let src = format!("{TILE}{DOOR}  fn go()\n    if self.tile == @ then end\n  end\nend\n");
+    let ranked = complete_ranked(&src);
+    let pos = |n: &str| ranked.iter().position(|r| r == n).unwrap();
+    assert!(pos("Tile") < pos("true"), "{ranked:?}");
+    assert!(pos("tile") < pos("open"), "{ranked:?}");
+}
+
+/// A lambda's `return` answers the lambda, not the function around it.
+#[test]
+fn a_lambda_does_not_inherit_the_outer_return_type() {
+    let src = format!(
+        "{TILE}{DOOR}  fn count() -> boolean\n    local f = fn() -> integer\n      return @\n    end\n    return true\n  end\nend\n"
+    );
+    let top = first_two(&src);
+    assert!(!top.contains(&"true".to_string()), "{top:?}");
+}

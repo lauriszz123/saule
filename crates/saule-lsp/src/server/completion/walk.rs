@@ -144,9 +144,11 @@ pub(crate) struct Walk {
     /// shadows its parent — in `outer(a, inner(b…))` the caret is
     /// offered `inner`'s parameters, not `outer`'s.
     named_params: Vec<Param>,
-    /// Declared type of the argument slot currently being descended into.
-    /// Saved and restored around each argument the same way, so a nested
-    /// call's slot shadows its parent's.
+    /// The type the expression currently being descended into should
+    /// produce: an argument slot's declared type, a `local`'s or a field's
+    /// annotation, an assignment's target, a function's return type, the
+    /// `boolean` of a condition. Saved and restored around each one, so a
+    /// nested expectation shadows its parent's and never leaks sideways.
     expected: Option<Type>,
     /// Whether the statement position currently being walked sits inside a
     /// `match`. Saved and restored around each arm body.
@@ -156,6 +158,10 @@ pub(crate) struct Walk {
     block: Block,
     /// Whether the expression currently being walked is the operand of `#`.
     count_operand: bool,
+    /// The declared return type of the function or method being walked, so
+    /// `return ⟨caret⟩` knows what fits. Cleared inside a lambda, whose
+    /// `return` answers the lambda rather than the function around it.
+    returns: Option<Type>,
     /// The module each `import path as name` so far refers to, by name.
     namespaces: std::collections::HashMap<String, String>,
 }
@@ -202,6 +208,7 @@ impl Walk {
             match_arm: false,
             block: Block::Module,
             count_operand: false,
+            returns: None,
             namespaces: Default::default(),
         };
         w.block(&module.stmts);
@@ -256,36 +263,13 @@ impl Walk {
         }
     }
 
-    /// The declared type of an expression, for the shapes a loop iterates
-    /// over in practice: a binding in scope, and `self.field` inside a
-    /// method. Deliberately narrow — this exists to name a container so its
-    /// element type can be read out, not to re-implement inference.
+    /// The type of the container a loop iterates, so its element type can be
+    /// read out. Every shape a loop iterates in practice goes through the same
+    /// inference completion uses everywhere else: a binding (annotated or
+    /// not), `self.field`, and — the common case — a call that hands a table
+    /// back, like `Event.poll()` or `world.creatures()`.
     fn type_of(&self, expr: &Expr) -> Option<Type> {
-        let ty = match expr {
-            Expr::Ident(n) => self
-                .scope
-                .iter()
-                .rev()
-                .find(|v| &v.name == n)
-                .and_then(|v| v.ty.clone()),
-            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => {
-                let class = match &obj.value {
-                    Expr::Self_ => self.class.clone(),
-                    _ => self
-                        .type_of(&obj.value)
-                        .as_ref()
-                        .and_then(super::infer::class_of),
-                }?;
-                saule_semantic::registry::lookup_field_type(&class, name)
-            }
-            _ => None,
-        }?;
-        // A nullable iterable is a bug the checker reports; completion still
-        // has to answer for what is inside it.
-        Some(match ty {
-            Type::Nullable(inner) => *inner,
-            other => other,
-        })
+        super::infer::value_type(expr, self, 0).map(super::infer::strip_nullable)
     }
 
     fn bind_init(&mut self, name: &str, ty: Option<Type>, init: Option<Expr>, kind: &'static str) {
@@ -368,9 +352,12 @@ impl Walk {
             // A recovery hole has no children to walk — but the statements
             // around it still do, which is the point of recovering at all.
             Stmt::Error => {}
+            // `local done: boolean = ⟨caret⟩` wants a `boolean`.
             Stmt::Local { ty, value, .. } => {
                 self.ty(ty.as_ref());
-                self.opt_expr(value.as_ref());
+                if let Some(v) = value {
+                    self.expecting(ty.clone(), v);
+                }
             }
             Stmt::LocalMulti { names, values } => {
                 for (_, _, ty) in names {
@@ -378,15 +365,24 @@ impl Walk {
                 }
                 self.exprs(values);
             }
+            // `self.destroyed = ⟨caret⟩` wants whatever the target holds —
+            // and so does `n += ⟨caret⟩`.
             Stmt::Assign { target, value } | Stmt::CompoundAssign { target, value, .. } => {
                 self.expr(target);
-                self.expr(value);
+                let want = super::infer::value_type(&target.value, &*self, 0);
+                self.expecting(want, value);
             }
             Stmt::AssignMulti { targets, values } => {
                 self.exprs(targets);
                 self.exprs(values);
             }
             Stmt::Expr(e) => self.expr(e),
+            // `return ⟨caret⟩` wants the declared return type — for a single
+            // value; a multi-value return is a tuple slot-by-slot.
+            Stmt::Return(es) if es.len() == 1 => {
+                let want = self.returns.clone();
+                self.expecting(want, &es[0]);
+            }
             Stmt::Return(es) => self.exprs(es),
             Stmt::Throw(e) => self.expr(e),
             Stmt::If {
@@ -486,7 +482,9 @@ impl Walk {
                 for p in params {
                     self.bind(&p.name, Some(p.ty.clone()), "parameter");
                 }
+                let outer = std::mem::replace(&mut self.returns, return_ty.clone());
                 self.block_of(Block::Ended, body);
+                self.returns = outer;
                 self.scope.truncate(mark);
             }
             Decl::Class {
@@ -529,7 +527,10 @@ impl Walk {
                                 continue;
                             }
                             self.ty(Some(ty));
-                            self.opt_expr(default.as_ref());
+                            // `shown: boolean = ⟨caret⟩` — a field's default.
+                            if let Some(d) = default {
+                                self.expecting(Some(ty.clone()), d);
+                            }
                         }
                         ClassMember::Method(method) => {
                             self.params(&method.params);
@@ -538,7 +539,10 @@ impl Walk {
                             for p in &method.params {
                                 self.bind(&p.name, Some(p.ty.clone()), "parameter");
                             }
+                            let outer =
+                                std::mem::replace(&mut self.returns, method.return_ty.clone());
                             self.block_of(Block::Ended, &method.body);
+                            self.returns = outer;
                             self.scope.truncate(mark);
                         }
                     }
@@ -584,7 +588,9 @@ impl Walk {
                 for m in methods {
                     self.params(&m.params);
                     self.ty(m.return_ty.as_ref());
+                    let outer = std::mem::replace(&mut self.returns, m.return_ty.clone());
                     self.block_of(Block::Ended, &m.body);
+                    self.returns = outer;
                 }
             }
             // Module variables are in scope for the whole file, so bind the
@@ -606,7 +612,9 @@ impl Walk {
                     return;
                 }
                 self.ty(ty.as_ref());
-                self.opt_expr(value.as_ref());
+                if let Some(v) = value {
+                    self.expecting(ty.clone(), v);
+                }
                 self.bind_init(
                     name,
                     ty.clone(),
@@ -716,9 +724,35 @@ impl Walk {
                 self.expr(value);
                 self.ty(Some(ty));
             }
-            Expr::Binary { lhs, rhs, .. } => {
-                self.expr(lhs);
-                self.expr(rhs);
+            Expr::Binary { op, lhs, rhs } => {
+                use saule_ast::BinOp::*;
+                match op {
+                    // `alive and ⟨caret⟩` — both sides are conditions.
+                    And | Or => {
+                        let want = Some(Type::Named("boolean".into()));
+                        self.expecting(want.clone(), lhs);
+                        self.expecting(want, rhs);
+                    }
+                    // `tile == ⟨caret⟩` wants another of whatever is on the
+                    // left — a `Tile` variant, not the `boolean` the whole
+                    // comparison yields.
+                    Eq | NotEq | Lt | LtEq | Gt | GtEq => {
+                        self.expecting(None, lhs);
+                        let want = super::infer::value_type(&lhs.value, &*self, 0);
+                        self.expecting(want, rhs);
+                    }
+                    // `name .. ⟨caret⟩` takes anything printable.
+                    Concat => {
+                        self.expecting(None, lhs);
+                        self.expecting(None, rhs);
+                    }
+                    // Arithmetic and `??` yield the type their operands
+                    // have, so the outer expectation carries through.
+                    _ => {
+                        self.expr(lhs);
+                        self.expr(rhs);
+                    }
+                }
             }
             Expr::Index { obj, index } => {
                 self.expr(obj);
@@ -929,6 +963,8 @@ impl Walk {
     /// parameter types the callee declared, which fill in any the writer
     /// omitted — an explicit annotation on the lambda always wins.
     fn lambda(&mut self, params: &[Param], body: &LambdaBody, want: Option<&[Type]>) {
+        let outer_returns = self.returns.take();
+        let outer_expected = self.expected.take();
         self.params(params);
         let mark = self.scope.len();
         for (i, p) in params.iter().enumerate() {
@@ -943,6 +979,17 @@ impl Walk {
             LambdaBody::Block(b) => self.block_of(Block::Ended, b),
         }
         self.scope.truncate(mark);
+        self.returns = outer_returns;
+        self.expected = outer_expected;
+    }
+
+    /// Walk `e` knowing it should produce a `want`, then put back whatever
+    /// was expected before — the same save-and-restore an argument slot
+    /// gets, so an expectation never leaks into a sibling expression.
+    fn expecting(&mut self, want: Option<Type>, e: &Spanned<Expr>) {
+        let outer = std::mem::replace(&mut self.expected, want);
+        self.expr(e);
+        self.expected = outer;
     }
 }
 
@@ -1038,4 +1085,15 @@ fn native_params(qualified: &str) -> Option<Vec<Param>> {
             })
             .collect(),
     )
+}
+
+/// A loop variable is typed while the walk is still descending, before there
+/// is a [`Found`], so the walk answers inference's questions itself.
+impl super::infer::Scope for Walk {
+    fn bindings(&self) -> &[Visible] {
+        &self.scope
+    }
+    fn class(&self) -> Option<&String> {
+        self.class.as_ref()
+    }
 }

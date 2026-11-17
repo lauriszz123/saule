@@ -188,6 +188,13 @@ impl Backend {
             return None;
         };
 
+        // The file list may be stale when the editor never reports files
+        // being created or deleted; an import path is the one position that
+        // lists files, so it is the one that refreshes them first.
+        if matches!(found.ctx, Ctx::ImportPath { .. }) {
+            self.rescan_workspace_files().await;
+        }
+
         let items = match &found.ctx {
             Ctx::Member(recv) => member_items(recv, &found),
             Ctx::TypeName => type_items(),
