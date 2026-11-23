@@ -1,0 +1,26 @@
+[package]
+name = "saule-ipc"
+version.workspace = true
+edition.workspace = true
+description = "Calls between processes for Saule: framed messages with handles over Unix sockets or Windows named pipes, shared memory, services by name, and calls and objects on top."
+license.workspace = true
+
+# Unix-domain sockets that carry file descriptors, shared memory, and peer
+# credentials — plain Unix syscalls.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The same on Windows: named pipes driven through I/O completion ports by
+# mio — the event layer Tokio is built on — and the Win32 calls for handing
+# handles to another process, shared memory, and who is at the other end of
+# a pipe.
+[target.'cfg(windows)'.dependencies]
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }

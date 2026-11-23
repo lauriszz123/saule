@@ -832,6 +832,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "saule-ipc"
+version = "26.0.0"
+dependencies = [
+ "libc",
+ "mio",
+ "windows-sys",
+]
+
+[[package]]
 name = "saule-lexer"
 version = "26.0.0"
 dependencies = [
@@ -893,13 +902,12 @@ version = "26.0.0"
 name = "saule-runtime"
 version = "26.0.0"
 dependencies = [
- "libc",
  "libloading",
  "miette",
- "mio",
  "object",
  "saule-ast",
  "saule-docs",
+ "saule-ipc",
  "saule-lexer",
  "saule-native-abi",
  "saule-parser",
@@ -909,7 +917,6 @@ dependencies = [
  "saule-version",
  "thiserror",
  "toml",
- "windows-sys",
 ]
 
 [[package]]

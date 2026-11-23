@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::time::{Duration, Instant};
 
-use crate::ipc::channel::{MAX_BACKLOG, MAX_FDS, MAX_MESSAGE};
-use crate::ipc::services::{self, Peer};
+use crate::channel::{MAX_BACKLOG, MAX_FDS, MAX_MESSAGE};
+use crate::services::{self, Peer};
 
 /// What carries an open file, socket or shared memory between processes.
 pub type Handle = OwnedFd;

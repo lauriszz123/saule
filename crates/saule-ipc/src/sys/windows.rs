@@ -55,8 +55,8 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentProcessId, OpenProcess, PROCESS_DUP_HANDLE,
 };
 
-use crate::ipc::channel::{MAX_BACKLOG, MAX_FDS, MAX_MESSAGE};
-use crate::ipc::services::{self, Peer};
+use crate::channel::{MAX_BACKLOG, MAX_FDS, MAX_MESSAGE};
+use crate::services::{self, Peer};
 
 /// What carries an open file or shared memory between processes.
 pub type Handle = OwnedHandle;
