@@ -1,0 +1,14 @@
+-- `publish` takes an object implementing the interface.
+-- Should be an argument type error naming `Svc`.
+
+export extern interface Svc
+	fn n() -> integer
+end
+
+class NotIt
+	fn n() -> integer
+		return 1
+	end
+end
+
+Svc.publish("fixture.wrong", NotIt())

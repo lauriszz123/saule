@@ -1213,3 +1213,12 @@ fn every_import_form_keeps_its_spelling() {
 fn a_namespace_member_keeps_its_namespace() {
     stays_as_written("import kit\n\nlocal b: kit.Box? = kit.Box(kit.twice(1))\n");
 }
+
+#[test]
+fn extern_interface_and_async_survive_formatting() {
+    let src = "export extern interface Display\n  fn size() -> (integer, integer)\n  async fn ping(n: integer)\nend\n";
+    let once = format_str(src).unwrap();
+    assert!(once.contains("export extern interface Display"), "{once}");
+    assert!(once.contains("async fn ping(n: integer)"), "{once}");
+    assert_eq!(format_str(&once).unwrap(), once, "formatting is idempotent");
+}

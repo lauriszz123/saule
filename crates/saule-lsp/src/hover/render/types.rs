@@ -319,6 +319,7 @@ pub(crate) fn render_interface_from_registry(name: &str, extends: &[String]) -> 
 /// small renderer to become a hover target in their own right.
 pub(crate) fn render_interface_method(owner: &str, m: &AstMethodSig) -> String {
     let sig = MethodSig {
+        remote: Default::default(),
         type_bounds: Vec::new(),
         is_static: false,
         is_private: false,

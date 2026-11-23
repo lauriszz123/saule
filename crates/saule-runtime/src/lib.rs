@@ -44,6 +44,9 @@ pub mod error;
 pub mod fxhash;
 pub mod gc;
 pub mod itoa;
+#[cfg(any(unix, windows))]
+pub mod ipc;
+pub mod ipc_desc;
 pub mod members;
 pub mod module;
 // The host-callback table exists solely so a dlopen'd package can manipulate

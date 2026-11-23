@@ -280,6 +280,7 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                     hit.user_fn
                         .clone()
                         .map(|(params, ret)| saule_semantic::MethodSig {
+                            remote: Default::default(),
                             type_bounds: Vec::new(),
                             is_static: false,
                             is_private: false,
@@ -289,6 +290,7 @@ fn resolve_hit(hit: CallHit, offset: usize) -> Option<SignatureHelp> {
                         })
                 })?;
             let piped = saule_semantic::MethodSig {
+                remote: Default::default(),
                 params: sig.params.iter().skip(1).cloned().collect(),
                 ..sig
             };

@@ -77,6 +77,17 @@ pub enum CompileError {
         span: Range<usize>,
     },
 
+    /// An `extern interface` the compiler cannot describe to the runtime —
+    /// a type its signatures name is not visible from this module.
+    #[error("{message}")]
+    #[diagnostic(help("{help}"))]
+    ExternInterface {
+        message: String,
+        help: String,
+        #[label("here")]
+        span: Range<usize>,
+    },
+
     /// A program the language rejects but the front end lets through,
     /// reported with the language's own diagnostic — the one the
     /// tree-walking interpreter raised when it reached the construct. Now

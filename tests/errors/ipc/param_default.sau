@@ -1,0 +1,6 @@
+-- A default would be evaluated in the implementing process; extern methods
+-- take every argument from the caller. Should say it cannot have a default.
+
+export extern interface Svc
+	fn work(n: integer = 3)
+end

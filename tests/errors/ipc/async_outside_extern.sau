@@ -1,0 +1,6 @@
+-- `async fn` only means something in an `extern interface`, whose methods run
+-- in another process. Should be a parse error pointing at `async`.
+
+interface Local
+	async fn go()
+end

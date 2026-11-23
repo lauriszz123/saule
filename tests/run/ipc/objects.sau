@@ -1,0 +1,98 @@
+-- Objects pass by reference: a callback object handed to the service is
+-- called back — while its owner waits, and one-way — and an object the
+-- service hands out is the same object every time it comes back.
+
+export extern interface Listener
+	fn ask(question: string) -> string
+	async fn notify(event: string)
+end
+
+export extern interface Window
+	fn id() -> integer
+	async fn rename(title: string)
+	fn title() -> string
+end
+
+export extern interface Manager
+	fn open(listener: Listener) -> Window
+	fn same(w: Window) -> boolean
+	fn last() -> Window
+end
+
+class ManagedWindow implements Window
+	wid: integer
+	name: string = "untitled"
+	fn init(wid: integer)
+		self.wid = wid
+	end
+	fn id() -> integer
+		return self.wid
+	end
+	fn rename(title: string)
+		self.name = title
+	end
+	fn title() -> string
+		return self.name
+	end
+end
+
+class WindowManager implements Manager
+	count: integer = 0
+	newest: ManagedWindow? = nil
+	answer: string = ""
+
+	fn open(listener: Listener) -> Window
+		self.count = self.count + 1
+		-- Calls back into the caller, which is waiting for this very call.
+		self.answer = listener.ask("title?")
+		listener.notify("opened " .. tostring(self.count))
+		local w = ManagedWindow(self.count)
+		self.newest = w
+		return w
+	end
+
+	fn same(w: Window) -> boolean
+		-- The window came back from the caller: it is our own object again.
+		return w == self.newest
+	end
+
+	fn last() -> Window
+		return self.newest!
+	end
+end
+
+class App implements Listener
+	events: table<string> = {}
+	fn ask(question: string) -> string
+		return "answer to " .. question
+	end
+	fn notify(event: string)
+		Table.insert(self.events, event)
+	end
+end
+
+local name = "fixture.objects." .. tostring(Os.pid())
+local wm = WindowManager()
+Manager.publish(name, wm)
+local manager = Manager.connect(name)
+
+local app = App()
+local w = manager.open(app)
+assert(wm.answer == "answer to title?", "the call back ran while the caller waited")
+assert(#app.events == 1 and app.events[1] == "opened 1", "the one-way callback arrived")
+assert(w.id() == 1)
+
+-- One-way, then a waited-for call: it runs after, so it sees the rename.
+w.rename("Terminal")
+assert(w.title() == "Terminal")
+
+-- Handing the window back gives the service its own object.
+assert(manager.same(w))
+-- And getting it again gives this side the same proxy.
+assert(manager.last() == w)
+
+local w2 = manager.open(app)
+assert(w2.id() == 2 and w2 != w)
+assert(#app.events == 2)
+
+println("objects ok")

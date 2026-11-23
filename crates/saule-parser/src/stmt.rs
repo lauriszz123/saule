@@ -55,6 +55,9 @@ impl Parser {
         // `parse` and `parse_block_until`, which skip separators before
         // testing for the end of the block. This function is only ever
         // entered when a statement really does follow.
+        if self.at_contextual("extern", &Token::Interface) {
+            return self.parse_interface_decl(false).map(stmt_decl);
+        }
         let tok = self.peek().clone();
         match tok.value {
             Token::Local => self.parse_local(),

@@ -1,0 +1,6 @@
+-- `async fn` is not waited for, so it has nothing to return yet.
+-- Should say an async method cannot return a value.
+
+export extern interface Svc
+	async fn answer() -> integer
+end

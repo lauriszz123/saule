@@ -249,6 +249,81 @@ fn a_read_only_property_cannot_be_assigned() {
 // ─── Enums, collections, multiple returns ───────────────────────────────────
 
 #[test]
+fn named_arguments_bind_to_a_natives_parameters() {
+    // The compiler took parameter names only from Saule declarations, so a
+    // named argument to a native — `Window.create(800, 600, title: "…")` —
+    // was refused as "a named argument to a callee the compiler cannot
+    // identify", although `saule check` accepted it. The names come from the
+    // package's manifest.
+    //
+    // `mode:` before `x:` is the case that proves the reorder ran: a compiler
+    // that dropped the names and kept the written order would pass
+    // `Rounding.Down` as `x` and fail.
+    let home = fixture_home("named_args");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+println(Util.round(2.1, mode: Rounding.Up))
+println(Util.round(mode: Rounding.Down, x: 2.9))
+println(Util.preferred(nearest: true) == Rounding.Nearest)
+"#,
+    );
+    assert_eq!(out, "3\n2\ntrue\n");
+}
+
+#[test]
+fn named_arguments_bind_on_a_native_objects_methods() {
+    let home = fixture_home("named_args_method");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+local a = Counter(40)
+println(a.absorb(other: Counter(2)))
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn a_misnamed_argument_to_a_native_is_reported() {
+    let home = fixture_home("named_args_unknown");
+    let err = run_err(
+        &home,
+        "from \"fixture\" import *\nprintln(Util.round(2.5, rounding: Rounding.Up))\n",
+    );
+    assert!(
+        err.contains("`Util.round` has no parameter named `rounding`"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn a_native_parameter_given_twice_is_reported() {
+    let home = fixture_home("named_args_twice");
+    let err = run_err(
+        &home,
+        "from \"fixture\" import *\nprintln(Util.round(2.5, Rounding.Up, x: 1.0))\n",
+    );
+    assert!(
+        err.contains("`Util.round` got the parameter `x` twice"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn a_named_argument_to_a_positional_only_native_is_reported() {
+    // Stdlib natives carry no parameter names. The checker used to skip a
+    // named argument to one without a word, and the compiler then refused it
+    // with an error that blamed the callee.
+    let home = fixture_home("named_args_stdlib");
+    let err = run_err(&home, "println(String.len(s: \"abc\"))\n");
+    assert!(
+        err.contains("`String.len` takes its arguments by position"),
+        "got: {err}"
+    );
+}
+
+#[test]
 fn enums_cross_the_boundary_as_themselves() {
     let home = fixture_home("enums");
     let out = run_ok(

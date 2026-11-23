@@ -1,0 +1,10 @@
+-- Enums cannot cross processes yet. Should name the enum and suggest a string.
+
+enum Mode
+	Fast
+	Slow
+end
+
+export extern interface Svc
+	fn set(m: Mode)
+end

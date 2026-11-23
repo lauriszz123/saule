@@ -19,7 +19,7 @@ message when you touch one.
 Both trees are split into the same areas, so a feature's passing and failing
 fixtures sit at mirrored paths: `tests/run/generics/` and
 `tests/errors/generics/`. The areas are `basics` (passing only), `classes`,
-`control`, `coroutines`, `exceptions`, `functions`, `generics`, `modules`,
+`control`, `coroutines`, `exceptions`, `functions`, `generics`, `ipc`, `modules`,
 `nullability`, `stdlib`, `syntax` and `tables`. Put a new fixture in the area its *subject*
 belongs to rather than the one its error message mentions — a bad argument to
 `Table.insert` is a `stdlib` fixture, not a `functions` one.

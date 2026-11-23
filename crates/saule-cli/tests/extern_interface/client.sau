@@ -1,0 +1,44 @@
+from api import *
+
+class Events implements WindowEvents
+  configured: string = ""
+  keys: string = ""
+
+  fn configure(width: integer, height: integer)
+    self.configured = tostring(width) .. "x" .. tostring(height)
+  end
+
+  fn key(event: KeyEvent)
+    self.keys = self.keys .. event.key .. "/" .. tostring(event.pressed)
+  end
+
+  fn title() -> string
+    return "Terminal"
+  end
+end
+
+local display = Display.connect("test.display")
+local w, h = display.screenSize()
+println("client: screen " .. tostring(w) .. "x" .. tostring(h))
+
+local events = Events()
+local win = display.createWindow("Terminal", events)
+println("client: got window " .. tostring(win.id()))
+println("client: callbacks ran: configure " .. events.configured .. ", key " .. events.keys)
+win.setTitle("~/projects")
+
+println("client: echo " .. Table.concat(display.echo({ "a", "b", "c" }), ","))
+
+try
+  display.fail()
+catch e: string
+  println("client: caught: " .. e)
+end
+
+for i = 1, 10 do
+  display.ping(i)
+end
+local s = display.stats()
+println("client: windows " .. tostring(s["windows"]) .. ", pings " .. tostring(s["pings"]))
+display.shutdown()
+println("client: done")

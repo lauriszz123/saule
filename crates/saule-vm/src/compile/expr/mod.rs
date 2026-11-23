@@ -36,6 +36,7 @@
 pub mod args;
 pub mod arith;
 pub mod call;
+pub mod extern_iface;
 pub mod ident;
 pub mod literal;
 pub mod member;

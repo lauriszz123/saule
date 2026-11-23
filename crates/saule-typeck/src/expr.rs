@@ -107,9 +107,22 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
                 );
             }
             // If the callee resolves to a known native signature, check the
-            // argument types positionally. Named arguments are skipped (those
-            // aren't supported on natives anyway, and they error at runtime).
-            if let Some(qname) = native_callee_name(callee, scope) {
+            // arguments against it. Named arguments are bound to the native's
+            // parameter names first, so the rest checks a positional call.
+            if let Some(qname) = native_callee_name(callee, scope)
+                && let Some(args) = if args.iter().any(|a| matches!(a, CallArg::Named { .. }))
+                    // Only a registered native: a bare name here can just as
+                    // well be a Saule class's constructor (`Panel(title: …)`),
+                    // whose named arguments are bound by its declaration.
+                    && crate::sigs::lookup(&qname).is_some()
+                {
+                    calls::bind_native_named_args(&qname, args, &expr.span, errors)
+                        .map(std::borrow::Cow::Owned)
+                } else {
+                    Some(std::borrow::Cow::Borrowed(&args[..]))
+                }
+            {
+                let args = &args[..];
                 if let Some(selected) = calls::select_native_sig(&qname, args, scope) {
                     // An overloaded native that no form's arity accepts is
                     // reported once, against the whole set — checking the

@@ -1,0 +1,6 @@
+-- A `Process` handle belongs to the process that spawned it.
+-- Should say it cannot be handed to another process.
+
+export extern interface Svc
+	fn watch(p: Process)
+end

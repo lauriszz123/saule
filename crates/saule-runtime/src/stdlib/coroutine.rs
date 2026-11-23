@@ -72,6 +72,7 @@ fn coroutine_builtins() -> saule_semantic::builtins::Builtins {
         span: 0..0,
     };
     let method = |is_static: bool, type_params: Vec<&str>, params, ret: Type| MethodSig {
+        remote: Default::default(),
         is_static,
         is_private: false,
         type_params: type_params.into_iter().map(String::from).collect(),

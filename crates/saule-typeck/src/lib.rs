@@ -39,6 +39,7 @@ pub mod casts;
 mod coerce_sites;
 pub mod coverage;
 mod error;
+mod extern_iface;
 pub(crate) mod expr;
 mod funcs;
 mod matches;

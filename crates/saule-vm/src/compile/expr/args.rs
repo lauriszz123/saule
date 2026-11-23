@@ -231,6 +231,55 @@ impl Compiler<'_> {
         }
     }
 
+    /// The parameters of a method on a **native package's** class —
+    /// `Window.create(800, 600, title: "…")` with `Window` imported from a
+    /// package.
+    ///
+    /// A native has no Saule declaration, so `callee_params` never holds it
+    /// and the call used to refuse with `a named argument to a callee the
+    /// compiler cannot identify` — although `saule check` accepted it, and
+    /// `saule run` ran it. The package carries its parameter names in its
+    /// manifest, and discovery registers them with the semantic registry the
+    /// typechecker binds against; reading the same list here is what keeps
+    /// the compiler's reorder and the checker's from disagreeing.
+    ///
+    /// Two shapes: a static call on a class name bound to a package import
+    /// and not shadowed (so a Saule class or local of the same name never
+    /// resolves to the native), and a method call on a value the checker
+    /// proved is an instance of a native class (`counter.setStep(step: 2)`).
+    /// A native class has no compiled layout, which is what tells it apart
+    /// from a Saule class of the same name.
+    pub(crate) fn native_param_list(
+        &self,
+        callee: &Spanned<Expr>,
+    ) -> Option<Vec<saule_ast::Param>> {
+        let (obj, name) = match &callee.value {
+            Expr::Member { obj, name } | Expr::SafeMember { obj, name } => (obj, name),
+            _ => return None,
+        };
+        let class = match &obj.value {
+            Expr::Ident(class)
+                if self.native_imports.contains_key(class) && self.not_shadowed(class) =>
+            {
+                class.clone()
+            }
+            _ => {
+                let mut ty = self.types.get(&obj.id)?;
+                if let saule_ast::Type::Nullable(inner) = ty {
+                    ty = inner;
+                }
+                let saule_ast::Type::Named(class) = ty else {
+                    return None;
+                };
+                if self.layouts.get(class).is_some() {
+                    return None;
+                }
+                class.clone()
+            }
+        };
+        saule_semantic::lookup_method(&class, name).map(|sig| sig.params)
+    }
+
     /// `callee_params` for a method of `class`, **or of an ancestor**.
     ///
     /// `callee_params` is keyed by the class that *declares* a method, so a

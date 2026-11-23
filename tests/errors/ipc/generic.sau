@@ -1,0 +1,6 @@
+-- Both sides must agree on every type without seeing each other's code, so an
+-- extern interface cannot be generic. Should say so.
+
+export extern interface Box<T>
+	fn get() -> T
+end

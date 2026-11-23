@@ -36,6 +36,27 @@ object = { version = "0.37", default-features = false, features = ["read_core", 
 # else in the crate already compiles for wasm; this was the only blocker.
 libloading = { version = "0.8", optional = true }
 
+# Inter-process calls (`src/ipc/`): sockets that carry file descriptors,
+# shared memory, and peer credentials — all plain Unix syscalls. Unix only:
+# the module is compiled out elsewhere, wasm included.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The same transport on Windows (`src/ipc/sys/windows.rs`): named pipes
+# driven through I/O completion ports by mio — the event layer Tokio is
+# built on — and the Win32 calls for handing handles to another process,
+# shared memory, and who is at the other end of a pipe.
+[target.'cfg(windows)'.dependencies]
+mio = { version = "1", features = ["os-poll", "os-ext"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [features]
 default = ["native-packages"]
 # Loading third-party native packages (`~/.saule/native_packages/*.so|dylib|dll`)

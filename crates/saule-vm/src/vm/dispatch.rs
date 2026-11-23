@@ -177,6 +177,26 @@ impl Vm {
         Ok(())
     }
 
+    /// A native call failed: if the native asked for its failure to be a
+    /// `throw` (see `saule_runtime::call::throw_from_native`), unwind to the
+    /// `catch` that takes it, as `THROW` does; otherwise it is the error it
+    /// was. `Ok` means a handler took it and the loop must re-enter.
+    #[cold]
+    #[inline(never)]
+    fn native_throw(
+        &mut self,
+        e: RuntimeError,
+        pc: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> Result<(), RuntimeError> {
+        let Some(value) = saule_runtime::call::take_native_throw() else {
+            return Err(e);
+        };
+        self.frames.last_mut().expect("frame").pc = pc as u32;
+        self.unwind(value, proto, here)
+    }
+
     /// `CALLMX`: a method call on a receiver the compiler could not prove,
     /// handed to the runtime's dynamic method dispatch.
     ///
@@ -1346,7 +1366,10 @@ impl Vm {
                         // layout, the same effect the opcode-splitting item
                         // measured in both directions.
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
-                        self.call_nat(&chunk, k, ins, base, a, &proto, here)?;
+                        if let Err(e) = self.call_nat(&chunk, k, ins, base, a, &proto, here) {
+                            self.native_throw(e, pc, &proto, here)?;
+                            continue 'reentry;
+                        }
                     }
                     // ---- §6.4 tail calls ----------------------------
                     Op::TAILCALL => {
@@ -1906,7 +1929,7 @@ impl Vm {
                     }
                     Op::CALLMX => {
                         let k = self.extra_arg(code.as_ptr(), &mut pc);
-                        self.call_member_by_name(
+                        if let Err(e) = self.call_member_by_name(
                             k,
                             ins,
                             base,
@@ -1914,7 +1937,10 @@ impl Vm {
                             &chunk,
                             &Site::Code(&proto, here),
                             pc,
-                        )?;
+                        ) {
+                            self.native_throw(e, pc, &proto, here)?;
+                            continue 'reentry;
+                        }
                     }
 
                     // ---- §19 variadic parameters -------------------------

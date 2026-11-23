@@ -1,0 +1,5 @@
+-- An extern interface with no methods describes no calls.
+-- Should say it declares no methods.
+
+export extern interface Nothing
+end
