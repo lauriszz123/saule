@@ -370,6 +370,7 @@ pub fn export_names(name: &str) -> Vec<String> {
                 .iter()
                 .map(|c| c.name.clone())
                 .chain(m.enums.iter().map(|e| e.name.clone()))
+                .chain(m.interfaces.iter().map(|i| i.name.clone()))
                 .collect()
         })
         .unwrap_or_default()
@@ -383,7 +384,7 @@ pub fn package_path(name: &str) -> Option<PathBuf> {
 
 /// Every doc comment package `name` carries, as `(qualified name, text)`
 /// pairs keyed the way the editor's doc index keys a Saule module's: `Class`,
-/// `Class.member`, `Enum`, `Enum.Variant`. The text is the author's `///`
+/// `Class.member`, `Enum`, `Enum.Variant`, `Interface`. The text is the author's `///`
 /// comment, Markdown as written. Empty for an unknown package.
 pub fn package_docs(name: &str) -> Vec<(String, String)> {
     let Some(m) = lookup(name) else {
@@ -408,6 +409,11 @@ pub fn package_docs(name: &str) -> Vec<(String, String)> {
             if !d.is_empty() {
                 out.push((format!("{}.{variant}", e.name), d.clone()));
             }
+        }
+    }
+    for i in &m.interfaces {
+        if let Some(d) = &i.doc {
+            out.push((i.name.clone(), d.clone()));
         }
     }
     out

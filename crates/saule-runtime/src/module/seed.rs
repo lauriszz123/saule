@@ -296,6 +296,9 @@ fn collect_seed(
             for (alias, info) in crate::dynamic_packages::seed_enums(path, names) {
                 seed.enums.entry(alias).or_insert(info);
             }
+            for (alias, extends) in crate::dynamic_packages::seed_interfaces(path, names) {
+                seed.interfaces.entry(alias).or_insert(extends);
+            }
             continue;
         }
 
@@ -361,7 +364,7 @@ fn collect_seed(
     }
 
     if !only_exported {
-        seed_package_types(&mut seed, &packages, &declared_names(module));
+        seed_package_types(&mut seed, &packages);
     }
 
     seed
@@ -377,30 +380,29 @@ fn collect_seed(
 /// short of importing a name it never writes.
 ///
 /// Runs after every import and only fills gaps: a name any import actually
-/// binds still means that, and a name the module declares itself is left
-/// alone entirely — a program's own `enum Util` must not meet the package's
-/// static class `Util` in a different table.
-fn seed_package_types(
-    seed: &mut saule_semantic::ModuleSeed,
-    packages: &[&str],
-    declared: &HashSet<&str>,
-) {
+/// binds still means that. A name the module declares itself wins too, but
+/// that is decided where the seed meets the module's own declarations
+/// (`saule_semantic::analyze_inner`): the seed is built from the module's
+/// imports alone, and cached on them.
+fn seed_package_types(seed: &mut saule_semantic::ModuleSeed, packages: &[&str]) {
     let all = ImportNames::All;
     let mut classes = Vec::new();
     let mut enums = Vec::new();
+    let mut interfaces = Vec::new();
     for path in packages {
         if let Some(pkg) = crate::native_packages::lookup(path) {
             let built = (pkg.builtins)();
             classes.extend(built.classes);
             enums.extend(built.enums);
+            interfaces.extend(built.interfaces);
         } else {
             classes.extend(crate::dynamic_packages::seed_classes(path, &all));
             enums.extend(crate::dynamic_packages::seed_enums(path, &all));
+            interfaces.extend(crate::dynamic_packages::seed_interfaces(path, &all));
         }
     }
     let free = |seed: &saule_semantic::ModuleSeed, name: &str| {
-        !declared.contains(name)
-            && !seed.classes.contains_key(name)
+        !seed.classes.contains_key(name)
             && !seed.enums.contains_key(name)
             && !seed.interfaces.contains_key(name)
     };
@@ -414,33 +416,11 @@ fn seed_package_types(
             seed.enums.insert(name, info);
         }
     }
-}
-
-/// Every name `module` declares at its top level, exported or not.
-fn declared_names(module: &Module) -> HashSet<&str> {
-    let mut out = HashSet::new();
-    for stmt in &module.stmts {
-        match &stmt.value {
-            Stmt::Decl(d) => match &d.value {
-                Decl::Function { name, .. }
-                | Decl::Class { name, .. }
-                | Decl::Interface { name, .. }
-                | Decl::Enum { name, .. }
-                | Decl::Variable { name, .. } => {
-                    out.insert(name.as_str());
-                }
-                _ => {}
-            },
-            Stmt::Local { name, .. } => {
-                out.insert(name.as_str());
-            }
-            Stmt::LocalMulti { names, .. } => {
-                out.extend(names.iter().map(|(n, _, _)| n.as_str()));
-            }
-            _ => {}
+    for (name, extends) in interfaces {
+        if free(seed, &name) {
+            seed.interfaces.insert(name, extends);
         }
     }
-    out
 }
 
 /// The names `key`, exported by the imported module, is known by here: a

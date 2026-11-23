@@ -370,6 +370,35 @@ end
 }
 
 #[test]
+fn a_package_interface_takes_every_class_that_implements_it() {
+    // `Util.count` takes a `Countable`, which `Counter` and `Money` declare
+    // with `implements(Countable)`. Either fits, the interface can be named
+    // in an annotation (imported or not), and anything else is refused
+    // before the program runs.
+    let home = fixture_home("package_interface");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Util, Counter, Money
+local c: Countable = Counter(7)
+println(Util.count(c), Util.count(Money(250)))
+"#,
+    );
+    assert_eq!(out, "7\t250\n");
+
+    let out = run_ok(
+        &home,
+        "from \"fixture\" import Countable, Counter\nlocal c: Countable = Counter(3)\nprintln(c != nil)\n",
+    );
+    assert_eq!(out, "true\n");
+
+    let err = run_err(
+        &home,
+        "from \"fixture\" import Util\nprintln(Util.count(5))\n",
+    );
+    assert!(err.contains("Countable"), "got: {err}");
+}
+
+#[test]
 fn a_returned_objects_class_needs_no_import() {
     // `Util.shared()` returns a `Counter`, which this program never names.
     // The checker only knew the members of classes imported by name, so

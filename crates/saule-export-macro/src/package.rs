@@ -16,6 +16,28 @@ pub(crate) struct PackageInput {
     /// class that only ever appears in `#[saule_export(class = …)]` needs no
     /// entry here; listing it is how it gets a doc comment.
     classes: Vec<(Ident, LitStr)>,
+    /// Interfaces the package's classes implement (`implements(…)`) and its
+    /// functions take, so one parameter can accept several classes: Shine's
+    /// `Drawable` for `Graphics.draw`. They have no methods of their own.
+    interfaces: Vec<(Ident, LitStr)>,
+}
+
+/// `{ Name = "doc", … }`, the body of `classes` and `interfaces`.
+fn named_docs(input: ParseStream<'_>) -> syn::Result<Vec<(Ident, LitStr)>> {
+    let body;
+    braced!(body in input);
+    let mut out = Vec::new();
+    while !body.is_empty() {
+        let name: Ident = body.parse()?;
+        body.parse::<Token![=]>()?;
+        let doc: LitStr = body.parse()?;
+        out.push((name, doc));
+        if body.is_empty() {
+            break;
+        }
+        body.parse::<Token![,]>()?;
+    }
+    Ok(out)
 }
 
 impl Parse for PackageInput {
@@ -24,23 +46,24 @@ impl Parse for PackageInput {
         let mut version = None;
         let mut doc = None;
         let mut classes = Vec::new();
+        let mut interfaces = Vec::new();
 
         while !input.is_empty() {
             let key: Ident = input.parse()?;
             match key.to_string().as_str() {
-                "classes" => {
-                    let body;
-                    braced!(body in input);
-                    while !body.is_empty() {
-                        let class: Ident = body.parse()?;
-                        body.parse::<Token![=]>()?;
-                        let doc: LitStr = body.parse()?;
-                        classes.push((class, doc));
-                        if body.is_empty() {
-                            break;
-                        }
-                        body.parse::<Token![,]>()?;
+                // A braced block needs no comma after it, the way a Rust
+                // item doesn't: `classes { … } interfaces { … }`.
+                "classes" | "interfaces" => {
+                    let entries = named_docs(input)?;
+                    if key == "classes" {
+                        classes.extend(entries);
+                    } else {
+                        interfaces.extend(entries);
                     }
+                    if input.peek(Token![,]) {
+                        input.parse::<Token![,]>()?;
+                    }
+                    continue;
                 }
                 "binary" => {
                     return Err(syn::Error::new_spanned(
@@ -62,7 +85,7 @@ impl Parse for PackageInput {
                                 &key,
                                 format!(
                                     "unknown `saule_package!` key `{other}` \
-                                     (expected `name`, `version`, `doc` or `classes`)"
+                                     (expected `name`, `version`, `doc`, `classes` or `interfaces`)"
                                 ),
                             ));
                         }
@@ -89,6 +112,7 @@ impl Parse for PackageInput {
             version,
             doc,
             classes,
+            interfaces,
         })
     }
 }
@@ -113,9 +137,17 @@ pub(crate) fn expand(input: PackageInput) -> TokenStream {
         r.emit(&format!("C_{class}"))
     });
 
+    let interface_metas = input.interfaces.iter().map(|(iface, doc)| {
+        let mut r = Record::new("interface");
+        r.str("name", &iface.to_string())
+            .opt_str("doc", Some(&doc.value()));
+        r.emit(&format!("I_{iface}"))
+    });
+
     quote! {
         #package_meta
         #( #class_metas )*
+        #( #interface_metas )*
 
         // Report the ABI this package was compiled against. The interpreter
         // calls this before it looks up any other symbol and refuses to load
