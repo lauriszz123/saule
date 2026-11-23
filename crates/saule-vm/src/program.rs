@@ -792,7 +792,9 @@ fn load_one(
             saule_runtime::native_packages::name_from_sentinel(&target_path)
                 .and_then(saule_runtime::native_packages::lookup)
         {
-            Target::Native(saule_runtime::native_packages::build_exports(pkg).values)
+            let values = saule_runtime::native_packages::build_exports(pkg).values;
+            crate::bytecode::origin::register_package(pkg.name, &values);
+            Target::Native(values)
         } else if let Some(pkg) = saule_runtime::dynamic_packages::name_from_sentinel(&target_path)
         {
             // A manifest-described shared library. The manifest is the part
@@ -806,10 +808,13 @@ fn load_one(
             // not perform. It is recorded on the chunk instead and performed
             // by `run_program` just before this module's body runs.
             match saule_runtime::dynamic_packages::build_exports_deferred(pkg) {
-                Some(e) => Target::Dynamic {
-                    package: pkg.to_string(),
-                    exports: e.values,
-                },
+                Some(e) => {
+                    crate::bytecode::origin::register_package(pkg, &e.values);
+                    Target::Dynamic {
+                        package: pkg.to_string(),
+                        exports: e.values,
+                    }
+                }
                 // No manifest behind the sentinel, or a build without
                 // dynamic loading at all (wasm). The eager loader says which
                 // — without loading anything, since both cases fail before

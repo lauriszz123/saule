@@ -19,6 +19,14 @@ use crate::value::{ClassObject, SauleStr, TableObject, Value};
 
 /// `from "project" import Project`. Auto-prelude'd so the existing bare
 /// `Project.name` references keep working.
+/// The class this package installs.
+///
+/// Its fields describe where the program is running — `Project.root` above
+/// all — so they are read when the program runs, never folded into the
+/// bytecode as constants: a program built on one machine with `saule build`
+/// and run on another must see the root it was unpacked to.
+pub const CLASS_NAME: &str = "Project";
+
 pub static PROJECT_PACKAGE: NativePackage = NativePackage {
     name: "project",
     version: saule_version::VERSION,
@@ -64,7 +72,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     );
 
     let class = ClassObject {
-        name: "Project".to_string(),
+        name: CLASS_NAME.to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.
         layout: Default::default(),
@@ -74,7 +82,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         static_methods: Default::default(),
     };
     env.borrow_mut()
-        .define("Project".to_string(), Value::Class(Rc::new(class)));
+        .define(CLASS_NAME.to_string(), Value::Class(Rc::new(class)));
 }
 
 /// Register native signatures for the typechecker.

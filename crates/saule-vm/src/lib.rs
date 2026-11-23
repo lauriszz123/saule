@@ -35,6 +35,7 @@
 //!   profile.rs    opt-in bytecode profiling (§16), off in shipped binaries
 //! ```
 
+pub mod bytecode;
 pub mod chunk;
 pub mod compile;
 pub mod disasm;

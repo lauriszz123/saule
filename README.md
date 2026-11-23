@@ -92,6 +92,7 @@ matching, generics, error handling and the module system.
 | Command | What it does |
 |---|---|
 | `saule run <file\|project>` | Run a script or a project |
+| `saule build` | Build a project into one executable |
 | `saule check` | Typecheck without executing |
 | `saule test` | Run every `fn test_*` in `tests/` and `*_test.sau` |
 | `saule fmt` | Format source in place |

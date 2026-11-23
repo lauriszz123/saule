@@ -3768,7 +3768,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 | --- | --- | --- |
 | `Project.name` | `string` | The project's `name:` |
 | `Project.version` | `string` | Its `version:` — the version of *your* code |
-| `Project.root` | `string` | Absolute path of the directory holding `saule.config` |
+| `Project.root` | `string` | Absolute path of the directory holding `saule.config` — in a program built with `saule build`, the directory its bundled files were unpacked to |
 | `Project.srcDirs` | `table<string>` | The `src_dirs:` roots as absolute paths, resolved against `root` — not the relative spellings the config used |
 
 ```saule

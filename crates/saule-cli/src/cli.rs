@@ -70,6 +70,7 @@ pub(crate) struct Cli {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     Run(RunArgs),
+    Build(BuildArgs),
     Check(CheckArgs),
     Fmt(FmtArgs),
     Init(InitArgs),
@@ -79,6 +80,45 @@ pub(crate) enum Command {
     List(ListArgs),
     Disasm(DisasmArgs),
     Test(TestArgs),
+}
+
+/// `saule build [TARGET] [-o OUT] [--keep-source]`
+#[derive(Debug, Args)]
+#[command(
+    about = "Build a project into one executable",
+    long_about = "\
+Build a project into one executable that runs without Saule installed.
+
+  saule build                 the project in the current directory → build/<name>
+  saule build <dir>           the project rooted at <dir>
+  saule build <file.sau>      that file, on its own → build/<file>
+  saule build -o <path>       write the executable to <path>
+
+The program is compiled to bytecode and packed into a copy of this saule
+binary, together with the native packages it imports and the files the
+project lists under `bundle:` in saule.config (default: [\"assets\"]).
+Arguments given to the built program reach it as Os.args().
+
+The first run unpacks the bundled files and native packages into a cache
+directory, and Project.root points there. The bytecode keeps line numbers
+for error messages but not the source text, unless --keep-source is given.
+
+The executable runs on the platform it was built on, with the same Saule
+version inside it."
+)]
+pub(crate) struct BuildArgs {
+    /// Project directory or `.sau` file. Defaults to the current directory.
+    #[arg(value_name = "TARGET", value_parser = path_arg)]
+    pub target: Option<PathBuf>,
+
+    /// Where to write the executable.
+    #[arg(short = 'o', long = "output", value_name = "PATH", value_parser = path_arg)]
+    pub output: Option<PathBuf>,
+
+    /// Keep the source text in the bytecode, so runtime errors show the
+    /// offending line as `saule run` does.
+    #[arg(long)]
+    pub keep_source: bool,
 }
 
 /// `saule test [TARGET] [--filter TEXT]`

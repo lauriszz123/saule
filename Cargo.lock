@@ -946,6 +946,7 @@ dependencies = [
  "saule-runtime",
  "saule-semantic",
  "saule-typeck",
+ "saule-version",
  "thiserror",
 ]
 

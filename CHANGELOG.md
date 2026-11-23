@@ -4,6 +4,31 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## Unreleased
+
+### Added
+
+- **`saule build`: a program as one executable.** `saule build` compiles a
+  project (or a single file) to bytecode and packs it into a copy of the
+  `saule` binary, with the native packages it imports and the files listed
+  under the new `bundle:` config key (default `["assets"]`). The result runs
+  without Saule installed: its files unpack once into a cache directory,
+  which becomes `Project.root`, and its arguments reach `Os.args()`. Errors
+  name file, line and column; `--keep-source` keeps the source text for
+  full snippets. See [Building an executable](./LANGUAGE.md#building-an-executable).
+- **A bytecode file format.** `saule-vm`'s `bytecode` module writes a whole
+  compiled program and reads it back in another process: folded standard
+  library and native-package constants are written as paths and looked up
+  again on load, and every chunk read back goes through the verifier.
+  `scripts/test_bytecode.sh` checks that every `tests/run` fixture prints
+  the same built as run.
+
+### Changed
+
+- **`Project.root`, `Project.name` and `Project.version` are read at run
+  time**, never folded into the bytecode as constants, so a built program
+  sees where it runs rather than where it was compiled.
+
 ## 26.30
 
 ### Changed

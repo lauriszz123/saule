@@ -29,6 +29,11 @@ impl Compiler<'_> {
     /// back instead.
     pub fn prelude_member(&self, id: NodeId, recv: &str, name: &str) -> Option<Value> {
         let v = match self.static_value(id, recv)? {
+            // Where the program runs, not where it was compiled — see
+            // `project::CLASS_NAME`.
+            Value::Class(cls) if cls.name == saule_runtime::stdlib::project::CLASS_NAME => {
+                return None;
+            }
             Value::Class(cls) => cls.lookup_static_field(name)?,
             Value::Enum(e) => Value::EnumVariant(std::rc::Rc::clone(e.variants.get(name)?)),
             _ => return None,
@@ -53,7 +58,9 @@ impl Compiler<'_> {
         let mut slot = self.prelude.borrow_mut();
         if slot.is_none() {
             saule_runtime::init();
-            *slot = Some(saule_runtime::Prelude::with_std());
+            let prelude = saule_runtime::Prelude::with_std();
+            crate::bytecode::origin::register_prelude(&prelude.borrow());
+            *slot = Some(prelude);
         }
         let env = slot.as_ref().expect("just installed");
         env.borrow().get(name)

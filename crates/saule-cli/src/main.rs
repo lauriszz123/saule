@@ -11,6 +11,7 @@ use clap::{CommandFactory, Parser};
 
 use cli::{Cli, Command, RunArgs};
 
+mod bundle;
 mod check;
 mod cli;
 mod disasm;
@@ -93,6 +94,12 @@ fn real_main(stack_size: usize) {
     // function knows the answer: it is the thread `main` just arranged.
     saule_runtime::call::set_stack_budget(stack_size);
 
+    // An executable `saule build` made: run the program packed into it, and
+    // never read the command line as saule's own.
+    if let Some(code) = bundle::run_embedded() {
+        std::process::exit(code);
+    }
+
     let cli = Cli::parse();
 
     if cli.version {
@@ -112,6 +119,7 @@ fn real_main(stack_size: usize) {
 
     match command {
         Command::Run(args) => cmd_run(args),
+        Command::Build(args) => bundle::cmd_build(args),
         Command::Check(args) => check::cmd_check(args.target, args.dump_type_coverage, args.json),
         Command::Fmt(args) => fmt::cmd_fmt(&args),
         Command::Init(args) => init::cmd_init(&args.name, args.lib),
