@@ -152,6 +152,12 @@ fn cmd_run(args: RunArgs) {
     }
     saule_runtime::stdlib::os::set_script_args(args.script_args());
 
+    match args.profile.as_deref() {
+        Some("-") => saule_vm::sampling::start(None),
+        Some(file) => saule_vm::sampling::start(Some(file.into())),
+        None => saule_vm::sampling::start_from_env(),
+    }
+
     match args.target {
         None => project::run_project(Path::new(".")),
         Some(target) if target.is_dir() => project::run_project(&target),
@@ -164,6 +170,7 @@ fn cmd_run(args: RunArgs) {
     if let Some(report) = saule_vm::profile::take() {
         eprint!("\n{}", report.render(PROFILE_ROWS));
     }
+    saule_vm::sampling::finish();
 }
 
 /// Rows per table in a `--profile-bytecode` report. The tail of a bytecode

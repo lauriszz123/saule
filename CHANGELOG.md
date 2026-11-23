@@ -8,6 +8,13 @@ history.
 
 ### Added
 
+- **A profiler: `saule run --profile`.** Samples the running program every
+  millisecond and prints, when it finishes, which Saule functions and
+  natives the time went to: each one's own time and its time anywhere on
+  the stack. `--profile=FILE` writes the table to a file and keeps it up to
+  date while the program runs; `SAULE_PROFILE=1` or `SAULE_PROFILE=FILE`
+  does the same for a built executable or an app a window manager started.
+  Off, it costs one relaxed atomic load per call and return.
 - **`saule build`: a program as one executable.** `saule build` compiles a
   project (or a single file) to bytecode and packs it into a copy of the
   `saule` binary, with the native packages it imports and the files listed

@@ -276,6 +276,36 @@ fn long_call_arguments_wrap() {
     }
 }
 
+/// A match arm whose body doesn't fit on the `case` line moves the body to a
+/// line of its own, instead of breaking the body's arguments under the
+/// pattern; a short arm stays on one line. Both forms round-trip, in a
+/// statement `match` and in a `match` expression.
+#[test]
+fn long_match_arm_bodies_move_to_their_own_line() {
+    let src = "match k\n  case Kind.KeyPressed then Compositor.sendKey(focusedWindow, key, true, shift, ctrl, alt, extra, more)\n  case _ then nil\nend\n";
+    assert!(
+        src.lines().any(|l| l.len() > 100),
+        "test input must actually exceed the width target"
+    );
+    let out = format_str(src).expect("format");
+    assert!(
+        out.contains(
+            "case Kind.KeyPressed then\n    Compositor.sendKey(focusedWindow, key, true, shift, ctrl, alt, extra, more)\n"
+        ),
+        "the body did not move to its own line:\n{out}"
+    );
+    assert!(out.contains("case _ then nil"), "a short arm moved:\n{out}");
+    assert_eq!(format_str(&out).expect("reformat"), out, "not idempotent");
+
+    let src = "local s = match k\n  case 1 then \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" .. \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n  case _ then \"c\"\nend\n";
+    let out = format_str(src).expect("format");
+    assert!(
+        out.contains("case 1 then\n"),
+        "the body did not move:\n{out}"
+    );
+    assert_eq!(format_str(&out).expect("reformat"), out, "not idempotent");
+}
+
 /// Over-long signatures break the same way.
 #[test]
 fn long_parameter_lists_wrap() {

@@ -440,9 +440,11 @@ impl Vm {
         // returns, once the registers they may land in are this file's again.
         match callee {
             Value::Native(nf) => {
-                let v = self
-                    .foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| self.native_failure(m, nf.name, site))?;
+                let running = crate::sampling::enter_native(nf.name);
+                let v = self.foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]));
+                crate::sampling::leave_native(running);
+                self.sample_point();
+                let v = v.map_err(|m| self.native_failure(m, nf.name, site))?;
                 // **Moved**, not cloned. `store_results` takes a slice, so
                 // the one value a `Native` returns went in by reference and
                 // came back out through `cloned()` — a refcount pair per
@@ -452,9 +454,11 @@ impl Vm {
                 Ok(())
             }
             Value::NativeClosure(nc) => {
-                let vs = self
-                    .foreign(|vm| (nc.func)(&vm.stack[args_from..args_from + n_args]))
-                    .map_err(|m| self.native_failure(m, nc.name, site))?;
+                let running = crate::sampling::enter_native(nc.name);
+                let vs = self.foreign(|vm| (nc.func)(&vm.stack[args_from..args_from + n_args]));
+                crate::sampling::leave_native(running);
+                self.sample_point();
+                let vs = vs.map_err(|m| self.native_failure(m, nc.name, site))?;
                 self.store_results(dst, &vs, n_ret);
                 Ok(())
             }
@@ -494,6 +498,7 @@ impl Vm {
         n_args: usize,
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
+        self.sample_point();
         let cl = Closure::from_handle(&handle).ok_or_else(|| RuntimeError::Internal {
             message: "internal: frame handle is not a bytecode closure".into(),
             span: site.span(),
@@ -675,6 +680,7 @@ impl Vm {
         ret_to: u32,
         n_ret: u8,
     ) -> bool {
+        self.sample_point();
         if self.frames.len() >= self.shared.max_frames {
             return true;
         }
@@ -711,6 +717,7 @@ impl Vm {
     /// bytes, so a `Result` return made every `RET` construct and test a
     /// 64-byte value to carry an error this function cannot produce.
     pub(crate) fn pop_frame(&mut self, src: usize, count: usize) -> bool {
+        self.sample_point();
         let frame = self.frames.pop().expect("frame");
         self.close_upvalues(frame.base);
 
@@ -763,6 +770,21 @@ impl Vm {
             self.frames.last_mut().expect("frame").top = (dst + count) as u32;
         }
         false
+    }
+
+    /// Where `--profile` looks at the clock: every call, return and native
+    /// call passes here. Off, or between ticks, it is one relaxed load.
+    #[inline(always)]
+    pub(crate) fn sample_point(&self) {
+        if crate::sampling::due() {
+            self.sample_stack();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn sample_stack(&self) {
+        crate::sampling::record(self.frames.iter().map(|f| (&**f.proto, &**f.chunk)));
     }
 
     /// [`store_results`](Self::store_results) for a caller that owns exactly

@@ -290,9 +290,30 @@ impl<'a> Printer<'a> {
         }
         self.write(" then");
         match &a.body {
+            // On the `case` line when it fits. When it doesn't, the body
+            // moves to a line of its own, one level in — the shape of a
+            // multi-statement arm — rather than staying on the `case` line
+            // and breaking inside its own parentheses, which buried a long
+            // call's arguments under the pattern:
+            //
+            //     case EventKind.KeyPressed then
+            //       Compositor.sendKey(to, e.key, true, e.shift, e.ctrl, e.alt)
+            //
+            // A body still too wide on its own line breaks there as usual.
             MatchBody::Expr(e) => {
-                self.write(" ");
-                self.expr(e, 0);
+                let mut sub = self.sub_printer();
+                sub.expr(e, 0);
+                let inline = sub.out;
+                let first_line = inline.find('\n').unwrap_or(inline.len());
+                if self.force_inline || self.current_column() + 1 + first_line <= self.max_width() {
+                    self.write(" ");
+                    self.expr(e, 0);
+                } else {
+                    self.newline();
+                    self.indent += 1;
+                    self.expr(e, 0);
+                    self.indent -= 1;
+                }
             }
             // Multi-statement arms have no per-arm `end` in Saule — the
             // arm runs until the next `case` or the enclosing `match`'s

@@ -305,6 +305,18 @@ pub(crate) struct RunArgs {
     /// optimisation is aimed at.
     #[arg(long = "profile-bytecode")]
     pub profile_bytecode: bool,
+
+    /// Measure which Saule functions the program spends its time in, and
+    /// print a table of them when it finishes: each function's own time and
+    /// the time with it anywhere on the stack.
+    ///
+    /// `--profile=FILE` writes the table to FILE instead, and keeps it up to
+    /// date while the program runs, so a program that never finishes
+    /// cleanly still leaves one. A program started some other way (a built
+    /// executable, an app a window manager started) is profiled with the
+    /// environment variable `SAULE_PROFILE=1` or `SAULE_PROFILE=FILE`.
+    #[arg(long, value_name = "FILE", num_args = 0..=1, require_equals = true, default_missing_value = "-")]
+    pub profile: Option<String>,
 }
 
 impl RunArgs {

@@ -396,7 +396,12 @@ pub(crate) fn run_embedded() -> Option<i32> {
     };
 
     let source: NamedSource<String> = (*program.entry_chunk().source).clone();
-    match saule_vm::run_program(program) {
+    // `SAULE_PROFILE=1` (or a file): a built app has no command line of
+    // its own to ask for a profile with.
+    saule_vm::sampling::start_from_env();
+    let outcome = saule_vm::run_program(program);
+    saule_vm::sampling::finish();
+    match outcome {
         Ok(true) => Some(0),
         Ok(false) if !manifest.require_main => Some(0),
         Ok(false) => {

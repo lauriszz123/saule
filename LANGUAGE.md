@@ -3668,6 +3668,7 @@ min_saule_version: "26.1"
 bundle: ["assets"]
 indent_style: "space"
 indent_width: 2
+max_width: 100
 ```
 
 Recognised keys:
@@ -3684,6 +3685,7 @@ Recognised keys:
 | `bundle` | Files and directories `saule build` packs into the executable, relative to the project root (default `["assets"]`, when it exists) — see [Building an executable](#building-an-executable) |
 | `indent_style` | Formatting: `"tab"` or `"space"` (default `"space"`) |
 | `indent_width` | Formatting: columns per indent level, 1–16 (default `2`) |
+| `max_width` | Formatting: the column lines are broken to fit, 40–400 (default `100`) |
 
 Unknown keys are ignored.
 
@@ -3840,6 +3842,15 @@ Whether the target is a directory is the *only* thing that picks between the two
 saule run -- input.bf          # project in the cwd, Os.args() = ["input.bf"]
 saule run tool.sau -- -v file  # single file; script args may start with `-`
 ```
+
+**Profiling.** `saule run --profile` prints, when the program finishes, which
+functions the time went to: `self` is time with the function on top (its own
+code, or a native it is in — those are listed as `Graphics.present (native)`
+and so on), `total` is time with it anywhere on the stack. `--profile=FILE`
+writes the table to `FILE` instead and keeps it current while the program
+runs. For a program not started by `saule run` — a built executable, or an
+app started by a window manager — set `SAULE_PROFILE=1` (stderr) or
+`SAULE_PROFILE=FILE`.
 
 ### Execution
 
