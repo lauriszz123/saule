@@ -239,6 +239,9 @@ fn collect_seed(
     only_exported: bool,
 ) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
+    // Native packages this module imports from, for the types-only pass at
+    // the end.
+    let mut packages: Vec<&str> = Vec::new();
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
@@ -253,6 +256,11 @@ fn collect_seed(
         };
         if only_exported && !exported {
             continue;
+        }
+        if crate::native_packages::lookup(path).is_some()
+            || crate::dynamic_packages::is_dynamic_package(path)
+        {
+            packages.push(path);
         }
 
         // Native package seed — fold the package's synthetic
@@ -352,7 +360,87 @@ fn collect_seed(
         }
     }
 
+    if !only_exported {
+        seed_package_types(&mut seed, &packages, &declared_names(module));
+    }
+
     seed
+}
+
+/// Make every class and enum of the native packages a module imports from
+/// known to the checker, imported by name or not.
+///
+/// A package's functions return its own types: `Compositor.poll()` returns
+/// `table<WindowEvent>`. The checker reads a value's members from the seed,
+/// so with only `Compositor` imported, `ev.id` on such a value had no type
+/// at all, and assigning it anywhere was an error the program couldn't fix
+/// short of importing a name it never writes.
+///
+/// Runs after every import and only fills gaps: a name any import actually
+/// binds still means that, and a name the module declares itself is left
+/// alone entirely — a program's own `enum Util` must not meet the package's
+/// static class `Util` in a different table.
+fn seed_package_types(
+    seed: &mut saule_semantic::ModuleSeed,
+    packages: &[&str],
+    declared: &HashSet<&str>,
+) {
+    let all = ImportNames::All;
+    let mut classes = Vec::new();
+    let mut enums = Vec::new();
+    for path in packages {
+        if let Some(pkg) = crate::native_packages::lookup(path) {
+            let built = (pkg.builtins)();
+            classes.extend(built.classes);
+            enums.extend(built.enums);
+        } else {
+            classes.extend(crate::dynamic_packages::seed_classes(path, &all));
+            enums.extend(crate::dynamic_packages::seed_enums(path, &all));
+        }
+    }
+    let free = |seed: &saule_semantic::ModuleSeed, name: &str| {
+        !declared.contains(name)
+            && !seed.classes.contains_key(name)
+            && !seed.enums.contains_key(name)
+            && !seed.interfaces.contains_key(name)
+    };
+    for (name, info) in classes {
+        if free(seed, &name) {
+            seed.classes.insert(name, info);
+        }
+    }
+    for (name, info) in enums {
+        if free(seed, &name) {
+            seed.enums.insert(name, info);
+        }
+    }
+}
+
+/// Every name `module` declares at its top level, exported or not.
+fn declared_names(module: &Module) -> HashSet<&str> {
+    let mut out = HashSet::new();
+    for stmt in &module.stmts {
+        match &stmt.value {
+            Stmt::Decl(d) => match &d.value {
+                Decl::Function { name, .. }
+                | Decl::Class { name, .. }
+                | Decl::Interface { name, .. }
+                | Decl::Enum { name, .. }
+                | Decl::Variable { name, .. } => {
+                    out.insert(name.as_str());
+                }
+                _ => {}
+            },
+            Stmt::Local { name, .. } => {
+                out.insert(name.as_str());
+            }
+            Stmt::LocalMulti { names, .. } => {
+                out.extend(names.iter().map(|(n, _, _)| n.as_str()));
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The names `key`, exported by the imported module, is known by here: a

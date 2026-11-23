@@ -510,11 +510,14 @@ impl Compiler<'_> {
 
     /// The dense tag of `Enum.Variant`, from whichever table knows it.
     ///
-    /// Two sources. A Saule enum is in this module's layout table. A
+    /// Three sources. A Saule enum is in this module's layout table. A
     /// **prelude** enum — `FsKind`, `OsPlatform` — is defined in Rust and is
     /// therefore in no module's table at all, which is why matching on one
     /// used to refuse as `a variant of an unknown enum` and sent
-    /// `examples/fs-info-example` to the tree-walker.
+    /// `examples/fs-info-example` to the tree-walker. A **native package**'s
+    /// enum — shine's `EventKind` — is in neither: its import folded it into
+    /// `native_imports`, the way `static_value` reads it for `EventKind.Quit`
+    /// in an expression, and a pattern has to look there too.
     ///
     /// Reading the prelude's is sound for the reason the stdlib constant fold
     /// is sound: the prelude is fixed before a program runs, and
@@ -540,8 +543,12 @@ impl Compiler<'_> {
                     span: span.clone(),
                 });
         }
+        let folded = match self.native_imports.get(enum_name) {
+            Some(v) => Some(v.clone()),
+            None => self.prelude_value(enum_name),
+        };
         if self.not_shadowed(enum_name)
-            && let Some(saule_runtime::Value::Enum(e)) = self.prelude_value(enum_name)
+            && let Some(saule_runtime::Value::Enum(e)) = folded
         {
             // The enum *is* known; a name it does not declare is a different
             // complaint, and reporting it as an unknown enum sent me looking

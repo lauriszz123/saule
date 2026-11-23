@@ -340,6 +340,62 @@ println(ms[1] == Rounding.Down, ms[3] == Rounding.Nearest)
 }
 
 #[test]
+fn a_packages_enum_can_be_matched() {
+    // The compiler found a pattern's variant tag in the module's own enums
+    // and in the prelude, but not in a package's: `match` on one refused to
+    // compile ("a variant of an unknown enum") while `==` worked. Two arms
+    // and four, because three or more take the switch path.
+    let home = fixture_home("enum_match");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+fn name(m: Rounding) -> string
+  return match m
+    case Rounding.Down then "down"
+    case Rounding.Up then "up"
+    case Rounding.Nearest then "nearest"
+    case _ then "?"
+  end
+end
+for m in Util.modes() do
+  print(name(m) .. " ")
+end
+match Util.preferred(true)!
+  case Rounding.Nearest then println("| nearest")
+  case _ then println("| other")
+end
+"#,
+    );
+    assert_eq!(out, "down up nearest | nearest\n");
+}
+
+#[test]
+fn a_returned_objects_class_needs_no_import() {
+    // `Util.shared()` returns a `Counter`, which this program never names.
+    // The checker only knew the members of classes imported by name, so
+    // `c.value` had no type and assigning it to an `integer` was refused.
+    // Not importing the name still keeps it unbound: using `Counter` as a
+    // value is an error.
+    let home = fixture_home("unimported_class");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Util
+local n: integer = 0
+local c = Util.shared()
+n = c.value
+println(n)
+"#,
+    );
+    assert_eq!(out, "100\n");
+
+    let err = run_err(
+        &home,
+        "from \"fixture\" import Util\nprintln(Counter(1).value)\n",
+    );
+    assert!(err.contains("undefined name `Counter`"), "got: {err}");
+}
+
+#[test]
 fn collections_are_copied_and_tuples_spread() {
     let home = fixture_home("collections");
     let out = run_ok(
