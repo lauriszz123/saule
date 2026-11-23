@@ -902,6 +902,7 @@ version = "26.0.0"
 name = "saule-runtime"
 version = "26.0.0"
 dependencies = [
+ "libc",
  "libloading",
  "miette",
  "object",
@@ -917,6 +918,7 @@ dependencies = [
  "saule-version",
  "thiserror",
  "toml",
+ "windows-sys",
 ]
 
 [[package]]

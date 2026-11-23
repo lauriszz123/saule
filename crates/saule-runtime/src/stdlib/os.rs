@@ -135,6 +135,13 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         native_multi("Os.capture", os_capture),
     );
     static_fields.insert("spawn".to_string(), native_multi("Os.spawn", os_spawn));
+    // `Os.spawn`'s sibling for a program that needs a terminal — see
+    // `stdlib::pty`.
+    #[cfg(any(unix, windows))]
+    static_fields.insert(
+        "spawnPty".to_string(),
+        native_multi("Os.spawnPty", super::pty::spawn),
+    );
     static_fields.insert("pid".to_string(), native_multi("Os.pid", os_pid));
     static_fields.insert(
         "platform".to_string(),
