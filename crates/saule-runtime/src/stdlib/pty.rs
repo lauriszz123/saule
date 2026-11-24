@@ -267,14 +267,16 @@ mod sys {
             let (mut master, mut slave) = (-1, -1);
             let mut ws = winsize(cols, rows);
             // Safety: openpty writes two descriptors; the name and termios
-            // are not asked for.
+            // are not asked for. The size goes as a raw pointer: libc takes
+            // it `*const` on Linux and `*mut` on macOS, and a `*mut` fits
+            // both, where `&mut` is flagged as needless on Linux.
             check(unsafe {
                 libc::openpty(
                     &mut master,
                     &mut slave,
                     std::ptr::null_mut(),
                     std::ptr::null_mut(),
-                    &mut ws,
+                    &raw mut ws,
                 )
             })?;
             // Safety: fresh descriptors, owned by nothing else.
