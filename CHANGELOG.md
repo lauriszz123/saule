@@ -4,10 +4,44 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
-## Unreleased
+## 26.31
 
 ### Added
 
+- **`extern interface`: calls between processes.** An interface declared
+  `extern` can be published by one program and called by another as if the
+  object were its own:
+
+  ```saule
+  export extern interface Echo
+      fn text(v: string) -> string
+      async fn notify(event: string)
+  end
+
+  Echo.publish("demo.echo", EchoService())   -- the server
+  local echo = Echo.connect("demo.echo")     -- the client
+  println(echo.text("hi"))
+  ```
+
+  A call waits for its answer; an `async fn` does not, and returns nothing.
+  Arguments and results may be numbers, booleans, strings, `bytes`, `any`,
+  `T?`, tables of those, several results at once, plain data classes
+  (copied field by field) and other `extern interface` objects (passed by
+  reference, so a server can hand a client an object to call back). The
+  checker refuses what cannot cross — functions, enums, generics, parameter
+  defaults, `Process` — before the program runs. `Looper` answers incoming
+  calls: `Looper.dispatch(timeout)` once a frame for a program with a loop
+  of its own, `Looper.run()` / `Looper.stop()` for a service with nothing
+  else to do, and `Looper.callerPid()` to know who called. Unix sockets on
+  Linux and macOS, named pipes on Windows, with shared memory for large
+  data. This is what Shine's display server and the Saule window manager's
+  settings service are built on.
+- **`Os.spawnPty`: a program behind a pseudo-terminal.** Where `Os.spawn`
+  gives a child plain pipes, this gives it a real terminal: it can ask for
+  its size, use raw mode, get Ctrl-C as a signal and do job control.
+  `read`, `write`, `resize`, `poll`, `kill` and `close`, as a terminal
+  emulator needs. A Unix pseudo-terminal on Linux and macOS, ConPTY on
+  Windows. See [`Os.spawnPty`](./DOCS.md#osspawnptyprogram-string-args-tablestring---pty).
 - **A profiler: `saule run --profile`.** Samples the running program every
   millisecond and prints, when it finishes, which Saule functions and
   natives the time went to: each one's own time and its time anywhere on
@@ -29,12 +63,61 @@ history.
   again on load, and every chunk read back goes through the verifier.
   `scripts/test_bytecode.sh` checks that every `tests/run` fixture prints
   the same built as run.
+- **`max_width` in `saule.config`.** The column `saule fmt` and the language
+  server break lines to fit, from 40 to 400 (default 100).
+- **Native packages can export interfaces.** A class a native package
+  declares with `implements(Countable)` fits a parameter or a local typed
+  `Countable`, whether or not the program imports the interface by name;
+  anything else is refused before the program runs.
 
 ### Changed
 
 - **`Project.root`, `Project.name` and `Project.version` are read at run
   time**, never folded into the bytecode as constants, so a built program
   sees where it runs rather than where it was compiled.
+- **A native package's classes belong to that package.** Two packages may
+  both export a `Graphics`; a program sees only the one it imported, and
+  their static members never clash.
+- **The checker knows every type a program's imports lead to.** A field
+  whose type was imported by the class's own file (`o.inner.weight`), and
+  an inherited method, are now typed without importing those classes too.
+  Before, such a value went unchecked, and a mistake in it passed
+  `saule check` to fail when the program ran.
+- **Smarter completion in the language server.** The variable of a `for`
+  loop over a call, a method or an unannotated local, and an indexed
+  element (`evs[1].`, `Feed.poll()[1].`), now offer their members. A
+  module created or deleted while the server runs is offered, or not, at
+  `import` straight away — even in editors that do not watch files, as
+  Neovim on Linux does not.
+- **The IPC transport is its own crate, `saule-ipc`,** so a native package
+  (Shine's display server) speaks the same wire as `extern interface`
+  without depending on the whole runtime.
+
+### Fixed
+
+- **`x = other ?? x` lost `x`.** Assigning `??`, `or` or `and` back to a
+  local its right side reads computed the left side straight into that
+  local's register, so when it was `nil` the right side read the `nil`, and
+  a typed read after it failed with an internal error
+  (`target = root.find(name) ?? target`, in the Saule window manager).
+- **Two imports of one name disagreed.** When two imports bring in the same
+  name (`from shine import Image` and then `from uikit import *`), the
+  checker used the first and the compiler the last, so a call checked
+  against one class ran against the other. The first wins in both now.
+- **`match` on a native package's enum** refused to compile ("a variant of
+  an unknown enum") while `==` on the same values worked.
+- **An object of a native package's class the program never names**, such
+  as the result of `Util.shared()`, had no members as far as the checker
+  knew.
+- **`Os.fsInfo` and `Os.platform` values were never `==` to `FsKind.Dir` or
+  `OsPlatform.Linux`**; they matched in a `match` but compared unequal.
+- **Programs on a Linux machine with little memory lost their deep stack.**
+  Saule reserves a 1 GiB stack, which the kernel refuses outright on a
+  machine with 1 GB of memory, so programs there fell back to 8 MiB. It now
+  reserves at most half the machine's memory.
+- **`saule install` found no library** when cargo was told to build
+  elsewhere (`CARGO_TARGET_DIR` or a `.cargo/config.toml`), which made
+  every native package fail to install inside a build container.
 
 ## 26.30
 
