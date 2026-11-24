@@ -383,3 +383,27 @@ pub fn call_static(
     }
     Err(crate::members::no_static_member(&class.name, name, span))
 }
+
+thread_local! {
+    /// A value a native asked to be *thrown* rather than reported, waiting
+    /// for the VM to collect it — see [`throw_from_native`].
+    static NATIVE_THROW: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Make the failure a native is about to return a `throw` of `value`, which
+/// a `try … catch` in the calling Saule code can handle.
+///
+/// A native fails with a `String`, which the VM turns into an error that
+/// ends the program — right for a bug, wrong for a failure the program is
+/// expected to handle. A call to another process is the case in point: the
+/// other side may fail, or be gone, and a display server must survive an app
+/// that crashes in the middle of a call. So the native leaves the value here
+/// as it fails, and the VM, finding it, unwinds as `throw` would.
+pub fn throw_from_native(value: Value) {
+    NATIVE_THROW.with(|t| *t.borrow_mut() = Some(value));
+}
+
+/// The value [`throw_from_native`] left, if any. Taking it clears it.
+pub fn take_native_throw() -> Option<Value> {
+    NATIVE_THROW.with(|t| t.borrow_mut().take())
+}

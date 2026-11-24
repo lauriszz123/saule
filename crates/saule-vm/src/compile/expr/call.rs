@@ -75,7 +75,10 @@ impl Compiler<'_> {
             .iter()
             .any(|a| matches!(a, saule_ast::CallArg::Named { .. }));
         let declared = if has_named || args.last().is_some_and(|a| a.is_trailing_block()) {
-            let params = self.callee_param_list(callee).cloned();
+            let params = self
+                .callee_param_list(callee)
+                .cloned()
+                .or_else(|| self.native_param_list(callee));
             if params.is_none() {
                 self.check_unbound_trailing_block(callee, args, has_named, span)?;
             }
@@ -312,8 +315,9 @@ impl Compiler<'_> {
     }
 
     /// A call with a trailing block or a named argument, to a callee with
-    /// no declared parameter list: a native, a stdlib member, a local
-    /// holding a function value. `Ok` means the arguments bind positionally.
+    /// no parameter list the compiler can read: a stdlib member, a local
+    /// holding a function value. (A native package's class method has one —
+    /// see `native_param_list`.) `Ok` means the arguments bind positionally.
     ///
     /// A named argument needs the parameter *names*, which only a
     /// declaration has. A trailing block alone needs no names — only which
@@ -389,6 +393,12 @@ impl Compiler<'_> {
         {
             self.variant_ctor_to(e_idx, tag, args, dst, span)?;
             return self.one_result(dst, want, span);
+        }
+
+        // `Display.connect(name)` / `Display.publish(name, service)` on an
+        // `extern interface`.
+        if let Some(r) = self.extern_static_call(obj, name, args, dst, want, span) {
+            return r;
         }
 
         // `self.super(args)` — the parent's `init`, dispatched **statically**.
@@ -515,8 +525,14 @@ impl Compiler<'_> {
         // An interface-typed receiver: the concrete class is not known, but
         // the *interface's* method numbering is, so the call names a slot
         // and the itable translates it at run time (§8.4).
+        //
+        // Not for an `extern interface`: its value is usually a proxy for an
+        // object in another process, which has no itable. Those calls go by
+        // name (`CALLMX`, below), which reaches proxies and local objects
+        // alike.
         if let Some(iface) = self
             .ty_name(obj.id)
+            .filter(|t| !saule_semantic::is_extern_interface(t))
             .and_then(|t| self.layouts.interface_of(t))
             && let Some(&slot) = self.chunk.interfaces[iface as usize].index.get(name)
         {

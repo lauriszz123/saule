@@ -120,6 +120,17 @@ pub(crate) struct Manifest {
     pub(crate) exports: Vec<ClassSpec>,
     /// Sorted by name.
     pub(crate) enums: Vec<EnumSpec>,
+    /// Sorted by name.
+    pub(crate) interfaces: Vec<InterfaceSpec>,
+}
+
+/// An interface a package declares: a name its classes implement and its
+/// functions take, so one parameter can accept several of its classes. It
+/// has no methods of its own.
+#[derive(Clone, Debug)]
+pub(crate) struct InterfaceSpec {
+    pub(crate) name: String,
+    pub(crate) doc: Option<String>,
 }
 
 /// Assemble and check a package from the records read out of `path`.
@@ -134,6 +145,7 @@ pub(crate) fn manifest_from_records(
     let mut package: Option<(String, String, Option<String>)> = None;
     let mut classes: BTreeMap<String, ClassSpec> = BTreeMap::new();
     let mut enums: BTreeMap<String, EnumSpec> = BTreeMap::new();
+    let mut interfaces: BTreeMap<String, InterfaceSpec> = BTreeMap::new();
     let mut methods: Vec<(String, MethodSpec)> = Vec::new();
 
     for rec in records {
@@ -214,6 +226,19 @@ pub(crate) fn manifest_from_records(
                     },
                 );
             }
+            "interface" => {
+                let name = required("name")?;
+                if interfaces.contains_key(&name) {
+                    return Err(format!("declares interface `{name}` twice"));
+                }
+                interfaces.insert(
+                    name.clone(),
+                    InterfaceSpec {
+                        name,
+                        doc: field("doc"),
+                    },
+                );
+            }
             "method" => {
                 let class = required("class")?;
                 let name = required("name")?;
@@ -286,6 +311,14 @@ pub(crate) fn manifest_from_records(
         }
     }
 
+    for name in interfaces.keys() {
+        if classes.contains_key(name) || enums.contains_key(name) {
+            return Err(format!(
+                "declares `{name}` as an interface and as a class or enum"
+            ));
+        }
+    }
+
     Ok(Manifest {
         name,
         version,
@@ -293,6 +326,7 @@ pub(crate) fn manifest_from_records(
         path: path.to_path_buf(),
         exports: classes.into_values().collect(),
         enums: enums.into_values().collect(),
+        interfaces: interfaces.into_values().collect(),
     })
 }
 

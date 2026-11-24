@@ -1,0 +1,66 @@
+from api import *
+
+class ServerWindow implements AppWindow
+  wid: integer
+  title: string
+
+  fn init(wid: integer, title: string)
+    self.wid = wid
+    self.title = title
+  end
+
+  fn id() -> integer
+    return self.wid
+  end
+
+  fn setTitle(title: string)
+    self.title = title
+    println("server: window " .. tostring(self.wid) .. " is now titled " .. title)
+  end
+end
+
+class Server implements Display
+  windows: integer = 0
+  pings: integer = 0
+
+  fn createWindow(title: string, events: WindowEvents) -> AppWindow
+    self.windows = self.windows + 1
+    events.configure(640, 480)
+    local e = KeyEvent()
+    e.key = "a"
+    e.pressed = true
+    events.key(e)
+    println("server: the client calls its window " .. events.title() .. " (asked while it waits)")
+    println("server: caller pid known: " .. tostring(Looper.callerPid() != nil))
+    return ServerWindow(self.windows, title)
+  end
+
+  fn screenSize() -> (integer, integer)
+    return 1024, 600
+  end
+
+  fn echo(items: table<string>) -> table<string>
+    return items
+  end
+
+  fn fail()
+    throw "the server refused"
+  end
+
+  fn ping(n: integer)
+    self.pings = self.pings + n
+  end
+
+  fn stats() -> table<string, integer>
+    return { windows: self.windows, pings: self.pings }
+  end
+
+  fn shutdown()
+    Looper.stop()
+  end
+end
+
+Display.publish("test.display", Server())
+println("server: ready")
+Looper.run()
+println("server: stopped")

@@ -1,0 +1,46 @@
+-- `Looper`: answering calls a program did not make itself.
+--
+-- `dispatch` answers what has arrived, waiting at most the timeout;
+-- `callerPid` names the calling process inside a call.
+
+export extern interface Counter
+	async fn add(n: integer)
+	fn total() -> integer
+	fn pid() -> integer?
+end
+
+class Count implements Counter
+	sum: integer = 0
+	fn add(n: integer)
+		self.sum = self.sum + n
+	end
+	fn total() -> integer
+		return self.sum
+	end
+	fn pid() -> integer?
+		return Looper.callerPid()
+	end
+end
+
+-- Nothing has arrived: returns after the timeout with nothing handled.
+local start = Os.clock()
+assert(Looper.dispatch(20) == 0)
+assert(Looper.callerPid() == nil, "no call is being answered")
+
+local name = "fixture.looper." .. tostring(Os.pid())
+local count = Count()
+Counter.publish(name, count)
+local c = Counter.connect(name)
+
+-- One-way calls are queued; nobody has answered them yet.
+for i = 1, 100 do
+	c.add(i)
+end
+-- A waited-for call is answered after every one sent before it.
+assert(c.total() == 5050)
+assert(count.sum == 5050)
+
+-- The caller here is this very process.
+assert(c.pid() == Os.pid())
+
+println("looper ok")

@@ -19,8 +19,23 @@
 //! and `saule-cli` writes them.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::spec::{Host, PackageSpec};
+
+/// A home set by the program itself, which wins over `SAULE_HOME`.
+static OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Make `dir` the Saule home for the rest of this process.
+///
+/// For an app built with `saule build`: its native packages are unpacked
+/// next to its assets, and that directory has to answer for `SAULE_HOME`
+/// without the environment variable being set — a variable would leak into
+/// every process the app starts, which would then look for *their* packages
+/// in the app's cache. The first call wins.
+pub fn set_override(dir: PathBuf) {
+    let _ = OVERRIDE.set(dir);
+}
 
 /// The Saule home directory — the root of everything the toolchain installs
 /// per user.
@@ -30,6 +45,9 @@ use crate::spec::{Host, PackageSpec};
 /// scripts interpret the variable. Unset, it defaults to `.saule` under the
 /// user's home.
 pub fn saule_home() -> PathBuf {
+    if let Some(dir) = OVERRIDE.get() {
+        return dir.clone();
+    }
     if let Some(explicit) = std::env::var_os("SAULE_HOME") {
         return PathBuf::from(explicit);
     }

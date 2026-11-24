@@ -225,8 +225,11 @@ pub(crate) fn saule_type(
             let inner = first_generic(seg).ok_or_else(|| unsupported(ty))?;
             saule_type(inner, ctx, None)
         }
-        // A dynamically-typed value crossing the ABI.
-        "SValue" => plain("any"),
+        // A dynamically-typed value crossing the ABI: `any`, unless
+        // `sig(...)` names what Saule should check instead — a package
+        // interface (`sig(drawable = "Drawable")`) for a parameter that takes
+        // several of the package's classes.
+        "SValue" => plain(fn_sig.unwrap_or("any")),
         // Type-variable markers render as their own name and become the
         // signature's type parameters.
         "T" | "U" | "V" | "W" => {

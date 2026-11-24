@@ -26,6 +26,22 @@
 //! functions over [`Type`]. `saule_typeck::sigs` re-exports all of this, so
 //! the paths callers already spell keep resolving.
 //!
+//! ## Native packages' classes are scoped
+//!
+//! The stdlib's modules are global: `Math` is the same `Math` in every
+//! program. An installed native package's classes are not — two packages
+//! may both export a `Graphics`, and a program sees only the one it
+//! imported. So a package's static members are registered under the
+//! package's name as well as the class's ([`package_module`]:
+//! `shine::Graphics.setFont`), which no Saule source can spell, and every
+//! lookup here first asks the embedder's [module resolver]
+//! (`set_module_resolver`) what the name in front of the dot is bound to
+//! where it is being checked. `Graphics.setFont` in a module that imported
+//! `Graphics` from `shine` is looked up as `shine::Graphics.setFont`; in
+//! one that declares its own `Graphics`, it finds nothing here at all.
+//!
+//! [module resolver]: set_module_resolver
+//!
 //! ## Embedder responsibility
 //!
 //! Because this crate doesn't link the stdlib, embedders must install an
@@ -34,6 +50,7 @@
 //! runs when actually needed. If no initializer is set, [`lookup`] returns
 //! `None` and the typechecker conservatively skips the call site.
 
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -77,6 +94,10 @@ pub struct NativeSig {
 
 /// Process-global initializer slot. Set once by the embedder.
 static INITIALIZER: OnceLock<fn()> = OnceLock::new();
+
+/// Process-global module resolver slot. Set once by the embedder; see
+/// [`set_module_resolver`].
+static MODULE_RESOLVER: OnceLock<fn(&str) -> Option<String>> = OnceLock::new();
 
 thread_local! {
     /// `name -> overload set`. Almost every native has exactly one entry.
@@ -407,6 +428,52 @@ pub fn set_initializer(f: fn()) {
     let _ = INITIALIZER.set(f);
 }
 
+/// Install the embedder's answer to "what does the name `local` stand for
+/// here?": the key a native package's class is registered under (see
+/// [`package_module`]) when `local` is bound to one in the code being
+/// checked, or `None` to look `local` up as it is spelled.
+///
+/// Every lookup in this table goes through it — [`lookup`],
+/// [`lookup_all`], [`lookup_const`], [`is_module`], [`has_member`],
+/// [`is_value_type`], [`module_members`] — so the checker, return-type
+/// inference and the language server all see the class the code imported,
+/// under whatever local name it was imported as.
+///
+/// Subsequent calls are silently ignored (`OnceLock` semantics).
+pub fn set_module_resolver(f: fn(&str) -> Option<String>) {
+    let _ = MODULE_RESOLVER.set(f);
+}
+
+/// The key a native package's class is registered under: `package::Class`.
+///
+/// A package name and a class name are both identifiers, so `::` can
+/// neither occur inside one nor be written in Saule source: the key cannot
+/// collide with a stdlib module, a program's own class, or another
+/// package's class of the same name.
+pub fn package_module(package: &str, class: &str) -> String {
+    format!("{package}::{class}")
+}
+
+/// `module` as it is registered: what the resolver says it is bound to,
+/// else as spelled.
+fn resolve_module(module: &str) -> Cow<'_, str> {
+    match MODULE_RESOLVER.get().and_then(|resolve| resolve(module)) {
+        Some(key) => Cow::Owned(key),
+        None => Cow::Borrowed(module),
+    }
+}
+
+/// `Module.member` with its module resolved; a bare name (`assert`) as is.
+fn resolve_qname(qname: &str) -> Cow<'_, str> {
+    let Some((module, member)) = qname.split_once('.') else {
+        return Cow::Borrowed(qname);
+    };
+    match resolve_module(module) {
+        Cow::Owned(key) => Cow::Owned(format!("{key}.{member}")),
+        Cow::Borrowed(_) => Cow::Borrowed(qname),
+    }
+}
+
 /// Look up by qualified (`"String.byte"`) or bare (`"assert"`) name.
 ///
 /// Returns `None` when the name isn't registered — the typechecker treats
@@ -414,7 +481,8 @@ pub fn set_initializer(f: fn()) {
 /// emitting a false positive.
 pub fn lookup(name: &str) -> Option<NativeSig> {
     ensure_registered();
-    SIGS.with(|s| s.borrow().get(name).and_then(|v| v.first().cloned()))
+    let name = resolve_qname(name);
+    SIGS.with(|s| s.borrow().get(&*name).and_then(|v| v.first().cloned()))
 }
 
 /// Every registered form of `name`, in registration order.
@@ -425,14 +493,16 @@ pub fn lookup(name: &str) -> Option<NativeSig> {
 /// answers with the first — the canonical — form.
 pub fn lookup_all(name: &str) -> Option<Vec<NativeSig>> {
     ensure_registered();
-    SIGS.with(|s| s.borrow().get(name).cloned())
+    let name = resolve_qname(name);
+    SIGS.with(|s| s.borrow().get(&*name).cloned())
 }
 
 /// Look up the declared type of a stdlib constant by qualified name
 /// (`"Math.pi"`). Returns `None` for callables and unknown names.
 pub fn lookup_const(qname: &str) -> Option<Type> {
     ensure_registered();
-    CONSTS.with(|c| c.borrow().get(qname).cloned())
+    let qname = resolve_qname(qname);
+    CONSTS.with(|c| c.borrow().get(&*qname).cloned())
 }
 
 /// Bind a generic native sig's type parameters from the inferred types of
@@ -533,15 +603,17 @@ pub fn mentions_unbound_param(ty: &Type, type_params: &[String]) -> bool {
 /// decide whether `Foo.bar` deserves an "unknown member" diagnostic.
 pub fn is_module(name: &str) -> bool {
     ensure_registered();
-    MEMBERS.with(|m| m.borrow().contains_key(name))
+    let name = resolve_module(name);
+    MEMBERS.with(|m| m.borrow().contains_key(&*name))
 }
 
 /// Is `member` a known public member of stdlib `module`?
 pub fn has_member(module: &str, member: &str) -> bool {
     ensure_registered();
+    let module = resolve_module(module);
     MEMBERS.with(|m| {
         m.borrow()
-            .get(module)
+            .get(&*module)
             .is_some_and(|set| set.contains(member))
     })
 }
@@ -552,16 +624,18 @@ pub fn has_member(module: &str, member: &str) -> bool {
 /// regardless of the contents of [`MEMBERS`].
 pub fn is_value_type(name: &str) -> bool {
     ensure_registered();
-    VALUE_TYPES.with(|v| v.borrow().contains(name))
+    let name = resolve_module(name);
+    VALUE_TYPES.with(|v| v.borrow().contains(&*name))
 }
 
 /// Collect every recorded member of `module`. Used to power
 /// "did-you-mean" hints on unknown-member diagnostics.
 pub fn module_members(module: &str) -> Vec<String> {
     ensure_registered();
+    let module = resolve_module(module);
     MEMBERS.with(|m| {
         m.borrow()
-            .get(module)
+            .get(&*module)
             .map(|set| set.iter().cloned().collect())
             .unwrap_or_default()
     })

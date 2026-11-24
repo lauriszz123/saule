@@ -23,6 +23,9 @@ use saule_ast::{
 pub struct MethodSig {
     pub is_static: bool,
     pub is_private: bool,
+    /// Whether this is a method of an `extern interface` — run in another
+    /// process — and if so whether the caller waits for it.
+    pub remote: Remote,
     /// Generic type parameters declared with `<T, U>` after the method
     /// name. Erased at runtime; the typechecker treats these as universal
     /// inside the body and uses them to enforce caller-side unification.
@@ -32,6 +35,18 @@ pub struct MethodSig {
     pub type_bounds: Vec<TypeBound>,
     pub params: Vec<Param>,
     pub return_ty: Option<Type>,
+}
+
+/// Where a method runs, for an interface's methods.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Remote {
+    /// An ordinary method, run in this process.
+    #[default]
+    No,
+    /// `fn` of an `extern interface`: a call to another process, waited for.
+    Call,
+    /// `async fn` of an `extern interface`: sent, not waited for.
+    Async,
 }
 
 /// Class info collected so member-access checks can consult member
@@ -66,10 +81,25 @@ pub struct ClassInfo {
     /// the typechecker can infer `self.foo` / `instance.foo` and enforce
     /// assignment compatibility for indexed writes through fields.
     pub field_types: HashMap<String, Type>,
+    /// The fields declared `static`. A static field is read through the class
+    /// (`Player.maxHealth`) and an instance field through an object, so
+    /// tooling that lists one kind of access must be able to tell them apart.
+    pub static_fields: HashSet<String>,
     /// Method-name -> full signature. Populated for every `fn` declared
     /// on the class so the typechecker can answer "what does
     /// `Foo.bar(...)` return?".
     pub methods: HashMap<String, MethodSig>,
+    /// For a class a native package exports: the key its static members are
+    /// registered under in the native signature table,
+    /// `saule_sigs::package_module(package, class)`. `None` for every other
+    /// class.
+    ///
+    /// The class registry holds each class under the name the code being
+    /// checked knows it by, so this is how `Graphics.setFont` — or
+    /// `G.setFont` after `import Graphics as G` — finds the signature of the
+    /// package it was imported from, and not one from another installed
+    /// package with a `Graphics` of its own.
+    pub native_module: Option<String>,
 }
 
 pub type ClassRegistry = HashMap<String, ClassInfo>;
@@ -240,6 +270,16 @@ pub fn with_variables<R>(f: impl FnOnce(&VariableRegistry) -> R) -> R {
 /// alias an `import ... as ...` bound it to, when there is one.
 pub fn lookup_function(name: &str) -> Option<FunctionSig> {
     with_functions(|reg| reg.get(name).cloned())
+}
+
+/// Whether `iface` is an `extern interface` — implemented in another
+/// process. Read off its methods, which is what travels with an import.
+pub fn is_extern_interface(iface: &str) -> bool {
+    INTERFACE_METHODS.with(|c| {
+        c.borrow()
+            .get(iface)
+            .is_some_and(|m| m.values().any(|s| s.remote != Remote::No))
+    })
 }
 
 /// Is `iface` a known interface name?
@@ -474,18 +514,25 @@ pub fn build_registry(
                         implements_args: implements.iter().map(|i| i.args.clone()).collect(),
                         members: HashMap::new(),
                         field_types: HashMap::new(),
+                        static_fields: HashSet::new(),
                         methods: HashMap::new(),
+                        // A class declared in Saule source is no package's.
+                        native_module: None,
                     };
                     for m in members {
                         match &m.value {
                             ClassMember::Field {
                                 name,
                                 is_private,
+                                is_static,
                                 ty,
                                 ..
                             } => {
                                 info.members.insert(name.clone(), *is_private);
                                 info.field_types.insert(name.clone(), ty.clone());
+                                if *is_static {
+                                    info.static_fields.insert(name.clone());
+                                }
                             }
                             ClassMember::Method(meth) => {
                                 info.members.insert(meth.name.clone(), meth.is_private);
@@ -494,6 +541,7 @@ pub fn build_registry(
                                     MethodSig {
                                         is_static: meth.is_static,
                                         is_private: meth.is_private,
+                                        remote: Remote::No,
                                         type_params: meth.type_params.clone(),
                                         type_bounds: meth.type_bounds.clone(),
                                         params: meth.params.clone(),
@@ -507,6 +555,7 @@ pub fn build_registry(
                 }
                 Decl::Interface {
                     name,
+                    is_extern,
                     type_params,
                     extends,
                     methods,
@@ -528,6 +577,11 @@ pub fn build_registry(
                                     // both flags are fixed rather than read.
                                     is_static: false,
                                     is_private: false,
+                                    remote: match (is_extern, m.is_async) {
+                                        (false, _) => Remote::No,
+                                        (true, false) => Remote::Call,
+                                        (true, true) => Remote::Async,
+                                    },
                                     type_params: m.type_params.clone(),
                                     type_bounds: m.type_bounds.clone(),
                                     params: m.params.clone(),

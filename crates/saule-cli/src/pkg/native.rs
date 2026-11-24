@@ -18,9 +18,18 @@ pub(crate) struct Built {
 /// Output is streamed rather than captured: a release build of a real
 /// package takes minutes, and a progress bar that appears only at the end
 /// is indistinguishable from a hang.
+///
+/// The target directory is named rather than left to cargo, which takes it
+/// from `CARGO_TARGET_DIR` or a `.cargo/config.toml` when one says so. A
+/// build that went there was not found here; and a target directory shared
+/// with other crates holds their libraries too, so which one was the
+/// package could not be told. The package's own `target/` holds only its
+/// build.
 pub(crate) fn build(dir: &Path) -> Result<Built, String> {
+    let target = dir.join("target");
     let status = Command::new("cargo")
-        .args(["build", "--release"])
+        .args(["build", "--release", "--target-dir"])
+        .arg(&target)
         .current_dir(dir)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -45,7 +54,7 @@ pub(crate) fn build(dir: &Path) -> Result<Built, String> {
         return Err(msg);
     }
 
-    let release = dir.join("target").join("release");
+    let release = target.join("release");
     let mut found = library_files(&release);
     match found.len() {
         0 => Err(format!(
@@ -198,6 +207,50 @@ pub(crate) fn install(built: &Built) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A package whose cargo setup sends builds to another target directory
+    /// still installs: what `CARGO_TARGET_DIR` did inside the Saule Linux
+    /// build container, where every install failed with "the build produced
+    /// no loadable library". Set through the package's own
+    /// `.cargo/config.toml`, which cargo honours the same way, so the test
+    /// changes no environment that other tests share.
+    #[test]
+    fn a_build_sent_elsewhere_by_cargo_config_is_still_found() {
+        let dir = std::env::temp_dir().join(format!("saule-native-build-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("make the package");
+        std::fs::create_dir_all(dir.join(".cargo")).expect("make .cargo");
+        // `[workspace]`: its own root, not taken for a member of whatever
+        // workspace the temporary directory happens to sit in.
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [lib]\ncrate-type = [\"cdylib\"]\n\n[workspace]\n",
+        )
+        .expect("write Cargo.toml");
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "#[no_mangle]\npub extern \"C\" fn probe() -> i32 { 1 }\n",
+        )
+        .expect("write lib.rs");
+        let elsewhere = dir.join("elsewhere");
+        std::fs::write(
+            dir.join(".cargo/config.toml"),
+            format!(
+                "[build]\ntarget-dir = {:?}\n",
+                elsewhere.display().to_string()
+            ),
+        )
+        .expect("write the cargo config");
+
+        let built = build(&dir).expect("the package should build and be found");
+        assert!(
+            built.path.starts_with(dir.join("target")),
+            "found at {}",
+            built.path.display()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The case that prompted this: a Windows host on the GNU target with no
     /// mingw installed. `saule install` reported only "the package failed to

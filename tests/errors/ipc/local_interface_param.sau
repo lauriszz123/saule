@@ -1,0 +1,10 @@
+-- A plain interface is local to its process; to pass one by reference it must
+-- be `extern`. Should say it is a local interface.
+
+interface Shape
+	fn area() -> float
+end
+
+export extern interface Svc
+	fn draw(s: Shape)
+end

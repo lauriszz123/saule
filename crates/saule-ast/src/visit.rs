@@ -50,6 +50,11 @@ pub fn visit(module: &Module, v: &mut impl Visitor) {
     walk_stmts(&module.stmts, v);
 }
 
+/// Walk one expression and everything inside it with a full [`Visitor`].
+pub fn visit_expr(e: &Spanned<Expr>, v: &mut impl Visitor) {
+    walk_expr(e, v);
+}
+
 /// Walk a statement list with a full [`Visitor`].
 ///
 /// The same traversal [`visit`] performs, exposed for the passes that hold a

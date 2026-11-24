@@ -335,6 +335,15 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             {
                 return Some(enum_variant_type(enum_name, name, args, scope));
             }
+            // `Display.connect(name)` / `Display.publish(name, service)` on
+            // an `extern interface` — statics it has without declaring them.
+            if let Expr::Member { obj, name } = &callee.value
+                && let Expr::Ident(iface) = &obj.value
+                && scope.lookup(iface).is_none()
+                && let Some(sig) = crate::extern_iface::extern_static(iface, name)
+            {
+                return semantic_method_return(&sig, args, scope);
+            }
             // `Class.method(args)` — receiver is the class itself.
             if let Expr::Member { obj, name } = &callee.value
                 && let Expr::Ident(class_name) = &obj.value
@@ -647,6 +656,12 @@ pub(crate) fn receiver_method(
     name: &str,
     scope: &Scope,
 ) -> Option<(String, saule_semantic::MethodSig)> {
+    if let Expr::Ident(iface) = &obj.value
+        && scope.lookup(iface).is_none()
+        && let Some(sig) = crate::extern_iface::extern_static(iface, name)
+    {
+        return Some((iface.clone(), sig));
+    }
     let (class, type_args) = match &obj.value {
         Expr::Ident(n) if with_classes(|r| r.contains_key(n)) => (n.clone(), Vec::new()),
         Expr::Self_ => (current_class()?, Vec::new()),

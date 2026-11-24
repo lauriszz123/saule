@@ -329,9 +329,100 @@ fn select_overload(
     }
 }
 
+/// A native call with named arguments, rewritten into plain parameter
+/// order — `Window.create(800, 600, title: "x")` becomes
+/// `Window.create(800, 600, "x")` — so everything after (overload selection,
+/// arity, argument types) checks it exactly like a positional call. `None`
+/// when the call cannot be bound; the reason is in `errors`.
+///
+/// The names come from the class registry, where a native package's classes
+/// are registered with the parameter names its manifest carries. Slots are
+/// assigned by `saule_ast::resolve_arg_slots`, the function the compiler
+/// reorders with, so the checker and the compiled call agree on which
+/// parameter each argument fills. A parameter skipped below the last one
+/// given becomes `nil`, which is what an omitted native argument is.
+///
+/// Stdlib natives carry no parameter names, so a named argument to one is
+/// reported rather than silently dropped.
+pub(crate) fn bind_native_named_args(
+    callee: &str,
+    args: &[CallArg],
+    call_span: &std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) -> Option<Vec<CallArg>> {
+    let params = callee
+        .rsplit_once('.')
+        .and_then(|(class, method)| saule_semantic::lookup_method(class, method))
+        .map(|sig| sig.params)
+        .filter(|params| !params.is_empty());
+    let Some(params) = params else {
+        for arg in args {
+            if let CallArg::Named { name, value } = arg {
+                errors.push(TypeCheckError::NativeNamedArg {
+                    callee: callee.to_string(),
+                    name: name.clone(),
+                    span: to_source_span(value.span.clone()),
+                });
+            }
+        }
+        return None;
+    };
+
+    let slots: Vec<saule_ast::ParamSlot<'_>> = params
+        .iter()
+        .map(|p| saule_ast::ParamSlot::new(&p.name, &p.ty))
+        .collect();
+    let assigned = saule_ast::resolve_arg_slots(args, &slots);
+
+    let mut filled: Vec<Option<&Spanned<Expr>>> = vec![None; params.len()];
+    // Positionals past the last parameter: a variadic tail, or too many
+    // arguments, which the arity check reports as it would for any call.
+    let mut extra = Vec::new();
+    let mut ok = true;
+    for (arg, slot) in args.iter().zip(&assigned) {
+        let value = match arg {
+            CallArg::Positional(v) => v,
+            CallArg::Named { value, .. } => value,
+        };
+        match (slot, arg) {
+            (Some(i), _) if filled[*i].is_none() => filled[*i] = Some(value),
+            (Some(i), _) => {
+                errors.push(TypeCheckError::NativeArgGivenTwice {
+                    callee: callee.to_string(),
+                    name: params[*i].name.clone(),
+                    span: to_source_span(value.span.clone()),
+                });
+                ok = false;
+            }
+            (None, CallArg::Named { name, .. }) => {
+                errors.push(TypeCheckError::UnknownNamedArg {
+                    callee: callee.to_string(),
+                    name: name.clone(),
+                    span: to_source_span(value.span.clone()),
+                });
+                ok = false;
+            }
+            (None, CallArg::Positional(_)) => extra.push(value),
+        }
+    }
+    if !ok {
+        return None;
+    }
+
+    let given = filled.iter().rposition(Option::is_some).map_or(0, |i| i + 1);
+    let nil = || Spanned::new(Expr::Nil, call_span.clone());
+    Some(
+        filled[..given]
+            .iter()
+            .map(|v| CallArg::Positional(v.map_or_else(nil, Spanned::clone)))
+            .chain(extra.into_iter().map(|v| CallArg::Positional(v.clone())))
+            .collect(),
+    )
+}
+
 /// Check positional arguments of a native call against the registered
-/// signature. Skips named arguments (natives don't support them; the runtime
-/// will surface that as an error).
+/// signature. Named arguments have already been bound by
+/// [`bind_native_named_args`].
 ///
 /// Heuristics intentionally lenient:
 ///   * `any` and `T?` parameters accept anything (incl. nil) — they're the

@@ -21,6 +21,14 @@ impl Backend {
         // graph, not here.
         if let Some(abs) = uri.to_file_path().ok().and_then(|p| canonical(&p)) {
             self.with_db(|db| db.set_overlay(&abs, source.clone()));
+            // A file made after startup is only ever *announced* by file
+            // watching, which some clients never offer — Neovim on Linux
+            // leaves it off by default. Opening it is proof it exists, so
+            // it joins the workspace here rather than staying invisible to
+            // import completion until the server restarts.
+            if self.in_workspace(&abs).await {
+                self.workspace_files.insert(abs.clone(), ());
+            }
             self.open_uris.insert(abs, uri.clone());
         }
         self.docs
@@ -299,6 +307,42 @@ impl Backend {
     /// One-shot scan invoked from `initialized`: locate `saule.config`,
     /// install the project info, then walk every workspace root and
     /// publish diagnostics for every `.sau` file found.
+    /// Is `abs` a Saule source file under one of the workspace roots?
+    /// Files opened from elsewhere — an installed package, a stray script —
+    /// are analysed when open but never become part of the workspace.
+    pub(super) async fn in_workspace(&self, abs: &Path) -> bool {
+        let is_source = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == "sau" || e == "saule");
+        if !is_source {
+            return false;
+        }
+        let roots = self.workspace_roots.lock().await;
+        roots.iter().any(|root| {
+            let root = canonical(root).unwrap_or_else(|| root.clone());
+            abs.starts_with(&root)
+        })
+    }
+
+    /// Bring `workspace_files` back in line with the disk: add files that
+    /// appeared since the startup scan and drop ones that are gone.
+    ///
+    /// Without file watching nothing else notices either change, so import
+    /// completion — the one feature that lists files rather than reading
+    /// them — would offer a deleted module and miss a new one. A project's
+    /// sources are a short walk, and this runs only at an import path.
+    pub(super) async fn rescan_workspace_files(&self) {
+        let roots: Vec<PathBuf> = self.workspace_roots.lock().await.clone();
+        self.workspace_files.retain(|path, _| path.is_file());
+        for root in &roots {
+            for file in saule_project::scan_sources(root) {
+                let canon = canonical(&file).unwrap_or(file);
+                self.workspace_files.insert(canon, ());
+            }
+        }
+    }
+
     pub(super) async fn initial_workspace_scan(&self) {
         let roots: Vec<PathBuf> = self.workspace_roots.lock().await.clone();
         if roots.is_empty() {

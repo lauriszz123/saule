@@ -109,6 +109,10 @@ platform_skip() {
     # userland. `crates/saule-cli/tests/spawn.rs` pins the same behaviour
     # on every platform, Windows included, with `saule` as the child.
     tests/run/stdlib/spawn.sau) return 0 ;;
+    # Runs `sh` and `stty` behind the pseudo-terminal — the same Unix
+    # userland. `Pty` itself runs on Windows (ConPTY): `stdlib::pty`'s
+    # Windows tests pin it there with `cmd.exe`.
+    tests/run/stdlib/pty.sau) return 0 ;;
     *) return 1 ;;
   esac
 }

@@ -39,6 +39,10 @@ pub struct Config {
     /// Paths to other Saule projects: absolute, `~`-prefixed, or relative
     /// to this project's root. Resolved by [`crate::resolve_dependencies`].
     pub dependencies: Vec<String>,
+    /// Files and directories `saule build` packs into the executable beside
+    /// the compiled code, relative to the project root. `None` when the
+    /// config doesn't say, which `saule build` reads as `["assets"]`.
+    pub bundle: Option<Vec<String>>,
 }
 
 /// What a project *is*, which decides whether it can be run at all.
@@ -73,6 +77,7 @@ impl Config {
                 "src_dirs" => out.src_dirs = parse_list(value),
                 "min_saule_version" => out.min_saule_version = Some(unquote(value)),
                 "dependencies" => out.dependencies = parse_list(value),
+                "bundle" => out.bundle = Some(parse_list(value)),
                 _ => {}
             }
         }
@@ -145,6 +150,7 @@ kind: "library"
 src_dirs: ["src", "vendor/src"]
 min_saule_version: "26.4"
 dependencies: ["../json", "~/libs/http"]
+bundle: ["assets", "levels/one.txt"]
 "#,
         );
         assert_eq!(cfg.name.as_deref(), Some("demo"));
@@ -154,6 +160,18 @@ dependencies: ["../json", "~/libs/http"]
         assert_eq!(cfg.src_dirs, ["src", "vendor/src"]);
         assert_eq!(cfg.min_saule_version.as_deref(), Some("26.4"));
         assert_eq!(cfg.dependencies, ["../json", "~/libs/http"]);
+        assert_eq!(
+            cfg.bundle.as_deref(),
+            Some(&["assets".to_string(), "levels/one.txt".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn an_absent_bundle_is_not_an_empty_one() {
+        // `saule build` reads absent as `["assets"]`, and `bundle: []` as
+        // "nothing", so the two must stay apart.
+        assert_eq!(Config::parse("name: \"x\"").bundle, None);
+        assert_eq!(Config::parse("bundle: []").bundle, Some(vec![]));
     }
 
     #[test]

@@ -28,6 +28,8 @@ pub mod bytes;
 pub mod core;
 pub mod coroutine;
 pub mod io;
+#[cfg(any(unix, windows))]
+pub mod ipc;
 pub mod iter;
 pub mod math;
 pub mod ops;
@@ -37,6 +39,8 @@ pub mod os;
 pub mod pattern;
 pub mod process;
 pub mod project;
+#[cfg(any(unix, windows))]
+pub mod pty;
 pub mod sigs;
 pub mod string;
 pub mod table;
@@ -69,6 +73,10 @@ pub fn register_builtin_packages() {
     register(&project::PROJECT_PACKAGE);
     register(&version::VERSION_PACKAGE);
     register(&coroutine::COROUTINE_PACKAGE);
+    #[cfg(any(unix, windows))]
+    register(&ipc::IPC_PACKAGE);
+    #[cfg(any(unix, windows))]
+    register(&pty::PTY_PACKAGE);
 }
 
 /// Walk every registered package and let it register its native

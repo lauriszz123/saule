@@ -1380,3 +1380,67 @@ fn a_from_line_being_typed_does_not_break_the_import_above_it() {
         ));
     }
 }
+
+// ── extern interface ─────────────────────────────────────────────────────────
+
+#[test]
+fn parses_extern_interface_with_async_methods() {
+    let m = parse_src(
+        "export extern interface Display\n  fn size() -> (integer, integer)\n  async fn ping(n: integer)\nend\n",
+    );
+    let Stmt::Decl(d) = &m.stmts[0].value else {
+        panic!("expected a declaration");
+    };
+    let Decl::Interface {
+        exported,
+        is_extern,
+        name,
+        methods,
+        ..
+    } = &d.value
+    else {
+        panic!("expected an interface, got {:?}", d.value);
+    };
+    assert!(*exported && *is_extern);
+    assert_eq!(name, "Display");
+    assert_eq!(
+        methods.iter().map(|m| (m.name.as_str(), m.is_async)).collect::<Vec<_>>(),
+        [("size", false), ("ping", true)]
+    );
+    // The declaration's span starts at `extern`, not at `interface`.
+    assert_eq!(d.span.start, "export ".len());
+}
+
+#[test]
+fn a_local_extern_interface_and_a_plain_one_parse() {
+    let m = parse_src("extern interface A\n  fn x()\nend\ninterface B\n  fn y()\nend\n");
+    let flags: Vec<bool> = m
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.value {
+            Stmt::Decl(d) => match &d.value {
+                Decl::Interface { is_extern, .. } => Some(*is_extern),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(flags, [true, false]);
+}
+
+#[test]
+fn extern_and_async_are_still_ordinary_names_elsewhere() {
+    // Contextual keywords: only `extern interface` and `async fn` (inside
+    // one) mean anything, so existing programs using the words keep working.
+    let m = parse_src("local async = 1\nlocal extern = async + 1\nprintln(extern)\n");
+    assert_eq!(m.stmts.len(), 3);
+}
+
+#[test]
+fn async_fn_outside_an_extern_interface_is_refused() {
+    let tokens = Lexer::new("interface A\n  async fn x()\nend\n")
+        .tokenize()
+        .unwrap();
+    let err = format!("{:?}", parse(tokens).unwrap_err());
+    assert!(err.contains("extern interface"), "{err}");
+}

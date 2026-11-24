@@ -1,0 +1,56 @@
+-- What can go wrong with a call to another process is something a program
+-- can `catch`: a service that does not exist, a name that cannot be one, a
+-- name already taken, and a `throw` in the service's method.
+
+export extern interface Svc
+	fn work(n: integer) -> integer
+end
+
+class Worker implements Svc
+	fn work(n: integer) -> integer
+		if n < 0 then
+			throw "negative work: " .. tostring(n)
+		end
+		return n * 2
+	end
+end
+
+local caught = 0
+
+try
+	local s = Svc.connect("fixture.nobody.home")
+catch e: string
+	assert(String.find(e, "no service `fixture.nobody.home` is published") != nil, e)
+	caught = caught + 1
+end
+
+try
+	local s = Svc.connect("Not A Name")
+catch e: string
+	assert(String.find(e, "is not a service name") != nil, e)
+	caught = caught + 1
+end
+
+local name = "fixture.failures." .. tostring(Os.pid())
+Svc.publish(name, Worker())
+
+try
+	Svc.publish(name, Worker())
+catch e: string
+	assert(String.find(e, "already published") != nil, e)
+	caught = caught + 1
+end
+
+local svc = Svc.connect(name)
+assert(svc.work(21) == 42)
+try
+	svc.work(-1)
+catch e: string
+	assert(e == "negative work: -1", e)
+	caught = caught + 1
+end
+-- The connection is still good after a failed call.
+assert(svc.work(1) == 2)
+
+assert(caught == 4)
+println("failures ok")

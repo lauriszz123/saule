@@ -18,7 +18,10 @@ impl Parser {
 
     pub(crate) fn parse_export(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let kw = self.advance(); // consume `export`
-        let decl = match self.peek().value {
+        let decl = if self.at_contextual("extern", &Token::Interface) {
+            self.parse_interface_decl(true)?
+        } else {
+            match self.peek().value {
             Token::Fn => self.parse_fn_decl(true, false)?,
             Token::Class => self.parse_class_decl(true)?,
             Token::Interface => self.parse_interface_decl(true)?,
@@ -43,6 +46,7 @@ impl Parser {
             Token::Identifier(_) => self.parse_variable_decl(true, kw.span.start)?,
             _ => {
                 return Err(self.expected_here("a declaration or `name: T = value` after `export`"));
+            }
             }
         };
         Ok(stmt_decl(decl))
@@ -291,6 +295,12 @@ impl Parser {
         &mut self,
         exported: bool,
     ) -> Result<Spanned<Decl>, ParseError> {
+        // `extern interface`: implemented in another process.
+        let is_extern = self.at_contextual("extern", &Token::Interface);
+        let start = self.peek().span.start;
+        if is_extern {
+            self.advance();
+        }
         let kw = self.advance(); // `interface`
         let (name, _) = self.expect_ident("interface name")?;
         let generics = if self.check(&Token::Lt) {
@@ -319,7 +329,7 @@ impl Parser {
             let before = self.pos;
             let began_line = self.at_line_start();
             let col = self.line_col();
-            match self.parse_interface_method() {
+            match self.parse_interface_method(is_extern) {
                 Ok(m) => methods.push(m),
                 Err(e) if self.recovering() => {
                     self.record(e);
@@ -340,19 +350,39 @@ impl Parser {
         Ok(Spanned::new(
             Decl::Interface {
                 exported,
+                is_extern,
                 name,
                 type_params,
                 type_bounds,
                 extends,
                 methods,
             },
-            kw.span.start..end.max(kw.span.end),
+            start..end.max(kw.span.end),
         ))
     }
 
-    /// One `fn name(params) [-> T]` signature line in an interface body.
-    fn parse_interface_method(&mut self) -> Result<MethodSig, ParseError> {
+    /// One `[async] fn name(params) [-> T]` signature line in an interface
+    /// body. `async` only in an `extern interface`, where it means the
+    /// caller does not wait.
+    fn parse_interface_method(&mut self, is_extern: bool) -> Result<MethodSig, ParseError> {
         let m_start = self.peek().span.start;
+        let is_async = self.at_contextual("async", &Token::Fn);
+        if is_async {
+            let tok = self.advance();
+            if !is_extern {
+                return Err(ParseError::Expected {
+                    expected: "`fn` in interface body".into(),
+                    found: "`async`".into(),
+                    help: Some(
+                        "`async fn` belongs in an `extern interface`, whose methods run in \
+                         another process; a local call has nothing to wait for"
+                            .to_string(),
+                    ),
+                    span: tok.span,
+                    label: "here".into(),
+                });
+            }
+        }
         self.expect(&Token::Fn, "`fn` in interface body")?;
         let (name, _) = self.expect_ident("method name")?;
         let generics = if self.check(&Token::Lt) {
@@ -366,6 +396,7 @@ impl Parser {
         let m_end = self.last_consumed_end();
         Ok(MethodSig {
             name,
+            is_async,
             type_params,
             type_bounds,
             params,

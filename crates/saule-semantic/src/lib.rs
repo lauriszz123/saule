@@ -46,7 +46,8 @@ pub use registry::{
     VariableRegistry, VariantInfo, build_function_registry, build_registry,
     build_variable_registry, class_implements, class_implements_iterable, clear_registries,
     install_functions, install_registries, install_variables, interface_extends,
-    interface_required_methods, interface_type_params, is_interface, is_subtype_named,
+    Remote, interface_required_methods, interface_type_params, is_extern_interface, is_interface,
+    is_subtype_named,
     lookup_field_type, lookup_function, lookup_interface_method, lookup_member, lookup_method,
     substitute_type_params, super_init_target, with_classes, with_enums, with_functions,
     with_interfaces, with_variables,
@@ -227,17 +228,37 @@ fn analyze_inner(
 ) -> (Vec<SemanticError>, Option<Bindings>) {
     let wildcard_names = seed.wildcard_names;
     let (mut reg, mut ifaces, mut enums, mut iface_methods, iface_params) = build_registry(module);
+    // A type this module declares wins over an imported one of the same
+    // name *whatever kind either is*. Each registry already keeps its own
+    // entry over the seed's; this is the cross-kind half. Without it a
+    // module's own `enum Event` lost to the class `Event` a package brings
+    // in (`seed_package_types` adds a package's types even when they were
+    // not imported by name), and `Event.Other` was looked up on the class.
+    let own: std::collections::HashSet<String> = reg
+        .keys()
+        .chain(ifaces.keys())
+        .chain(enums.keys())
+        .cloned()
+        .collect();
     for (name, info) in seed.classes {
-        reg.entry(name).or_insert(info);
+        if !own.contains(&name) {
+            reg.entry(name).or_insert(info);
+        }
     }
     for (name, ext) in seed.interfaces {
-        ifaces.entry(name).or_insert(ext);
+        if !own.contains(&name) {
+            ifaces.entry(name).or_insert(ext);
+        }
     }
     for (name, sigs) in seed.interface_methods {
-        iface_methods.entry(name).or_insert(sigs);
+        if !own.contains(&name) {
+            iface_methods.entry(name).or_insert(sigs);
+        }
     }
     for (name, info) in seed.enums {
-        enums.entry(name).or_insert(info);
+        if !own.contains(&name) {
+            enums.entry(name).or_insert(info);
+        }
     }
     // Embedder-provided builtins (e.g. stdlib value types). User
     // declarations and seed entries take precedence.

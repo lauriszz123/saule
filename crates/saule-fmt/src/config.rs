@@ -1,16 +1,18 @@
-//! Indentation declared by a project's `saule.config`.
+//! Layout declared by a project's `saule.config`: indentation and line
+//! width.
 //!
 //! A project that writes
 //!
 //! ```text
 //! indent_style: "tab"
 //! indent_width: 4
+//! max_width: 80
 //! ```
 //!
 //! gets the same layout from `saule fmt` and from the language server, so a
 //! CLI run and a Reformat-on-save can't disagree about the file.
 //!
-//! Both keys are optional and anything malformed is reported through
+//! Every key is optional and anything malformed is reported through
 //! [`ConfigIndent::warnings`] rather than silently changing the layout — a
 //! typo'd `indent_style` reverting a whole project to the default is exactly
 //! the failure this file exists to prevent.
@@ -54,6 +56,8 @@ pub struct ConfigIndent {
     pub indent_width: Option<usize>,
     /// `indent_style: "tab"` → `Some(true)`, `"space"` → `Some(false)`.
     pub use_tabs: Option<bool>,
+    /// `max_width: <n>`: the column lines are broken to fit, 100 by default.
+    pub max_width: Option<usize>,
     /// Values that were present but unusable, phrased for a CLI to print.
     /// The corresponding field is left `None` so the layout falls back
     /// instead of guessing.
@@ -88,15 +92,21 @@ impl ConfigIndent {
                         "ignoring `indent_width: {value}` — expected a number from 1 to 16"
                     )),
                 },
+                "max_width" => match value.parse::<usize>() {
+                    Ok(n) if (40..=400).contains(&n) => out.max_width = Some(n),
+                    _ => out.warnings.push(format!(
+                        "ignoring `max_width: {value}` — expected a number from 40 to 400"
+                    )),
+                },
                 _ => {}
             }
         }
         out
     }
 
-    /// True when the config declared neither key.
+    /// True when the config declared none of the keys.
     pub fn is_empty(&self) -> bool {
-        self.indent_width.is_none() && self.use_tabs.is_none()
+        self.indent_width.is_none() && self.use_tabs.is_none() && self.max_width.is_none()
     }
 
     /// Layer these settings over `base`, leaving fields the config didn't
@@ -116,7 +126,7 @@ impl ConfigIndent {
         FmtOptions {
             indent_width: self.indent_width.unwrap_or(fallback_width),
             use_tabs,
-            ..base
+            max_width: self.max_width.unwrap_or(base.max_width),
         }
     }
 }
@@ -197,6 +207,19 @@ mod tests {
         };
         let cfg = ConfigIndent::parse("indent_style: \"tab\"\n");
         assert_eq!(cfg.apply_to(editor).indent_width, 8);
+    }
+
+    #[test]
+    fn max_width_sets_where_lines_break() {
+        let cfg = ConfigIndent::parse("max_width: 80\n");
+        assert!(!cfg.is_empty());
+        let opts = cfg.apply_to(FmtOptions::default());
+        assert_eq!(opts.max_width, 80);
+        assert_eq!(opts.indent_width, FmtOptions::default().indent_width);
+
+        let cfg = ConfigIndent::parse("max_width: 5\n");
+        assert_eq!(cfg.max_width, None);
+        assert_eq!(cfg.warnings.len(), 1);
     }
 
     #[test]

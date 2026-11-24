@@ -40,4 +40,9 @@ impl Prelude {
     pub fn get(&self, name: &str) -> Option<Value> {
         self.values.get(name).cloned()
     }
+
+    /// Every binding, in no particular order.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &Value)> {
+        self.values.iter().map(|(k, v)| (k.as_ref(), v))
+    }
 }

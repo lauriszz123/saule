@@ -16,6 +16,9 @@ saule_package! {
     classes {
         Util = "Free functions over every mapped type.",
     }
+    interfaces {
+        Countable = "Something with a count: a `Counter` or `Money`.",
+    }
 }
 
 thread_local! {
@@ -27,7 +30,7 @@ thread_local! {
 }
 
 /// A counter that starts somewhere and counts in steps.
-#[saule_class]
+#[saule_class(implements(Countable))]
 pub struct Counter {
     value: i64,
     step: i64,
@@ -147,6 +150,23 @@ fn round(x: f64, mode: Rounding) -> i64 {
 #[saule_export(class = "Util")]
 fn modes() -> Vec<Rounding> {
     vec![Rounding::Down, Rounding::Up, Rounding::Nearest]
+}
+
+/// The count of anything `Countable`: a parameter typed by a package
+/// interface, so one slot takes either class and the checker refuses the
+/// rest.
+#[saule_export(class = "Util", sig(c = "Countable"))]
+fn count(c: SValue) -> Result<i64, String> {
+    let obj = c
+        .as_object()
+        .ok_or("Util.count: expected a Counter or Money")?;
+    if let Some(counter) = obj.downcast::<Counter>() {
+        return Ok(counter.borrow()?.value);
+    }
+    if let Some(money) = obj.downcast::<Money>() {
+        return Ok(money.borrow()?.cents);
+    }
+    Err("Util.count: expected a Counter or Money".into())
 }
 
 /// An enum or nothing.
@@ -296,7 +316,8 @@ fn apply(counter: SObject<Counter>, f: SFunction) -> Result<i64, String> {
     OpToString,
     OpIndex<integer, integer>,
     OpNewIndex<integer, integer>,
-    Assignable<integer>
+    Assignable<integer>,
+    Countable
 ))]
 pub struct Money {
     cents: i64,

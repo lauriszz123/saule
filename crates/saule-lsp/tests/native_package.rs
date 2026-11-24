@@ -31,45 +31,55 @@ fn workspace_root() -> PathBuf {
 /// while the first is copying it, and the copy finds no file.
 fn fixture_library() -> &'static Path {
     static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
-    LIBRARY.get_or_init(|| {
-        // A target directory of its own: this runs while `cargo test` may
-        // still hold the workspace's.
-        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
-        let status = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "--quiet",
-                "-p",
-                "saule-native-fixture",
-                "--target-dir",
-            ])
-            .arg(&target)
-            .current_dir(workspace_root())
-            .status()
-            .expect("run cargo to build the fixture package");
-        assert!(status.success(), "building saule-native-fixture failed");
-        target.join("debug").join(format!(
-            "{}saule_fixture{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX
-        ))
-    })
+    LIBRARY.get_or_init(|| build_library("saule-native-fixture", "saule_fixture"))
 }
 
-/// Install the fixture library as the only file in a fresh `SAULE_HOME`
-/// named for `test`. Returns the home.
-fn fixture_home(test: &str) -> PathBuf {
-    let library = fixture_library();
-    let file = library.file_name().expect("a library file name");
+/// Build the rival package — a second package with a `Util` class of its
+/// own — once per test process, and return its library.
+fn rival_library() -> &'static Path {
+    static LIBRARY: OnceLock<PathBuf> = OnceLock::new();
+    LIBRARY.get_or_init(|| build_library("saule-native-rival", "saule_rival"))
+}
 
+/// Build the workspace crate `package` and return the path of `lib`, the
+/// library file cargo makes of it.
+fn build_library(package: &str, lib: &str) -> PathBuf {
+    // A target directory of its own: this runs while `cargo test` may
+    // still hold the workspace's.
+    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "--quiet", "-p", package, "--target-dir"])
+        .arg(&target)
+        .current_dir(workspace_root())
+        .status()
+        .expect("run cargo to build a test package");
+    assert!(status.success(), "building {package} failed");
+    target.join("debug").join(format!(
+        "{}{lib}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    ))
+}
+
+/// Install `libraries` as the only files in a fresh `SAULE_HOME` named for
+/// `test`. Returns the home.
+fn home(test: &str, libraries: &[&Path]) -> PathBuf {
     let home = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
         .join("lsp-native-homes")
         .join(test);
     let _ = std::fs::remove_dir_all(&home);
     let packages = home.join("native_packages");
     std::fs::create_dir_all(&packages).expect("create the packages directory");
-    std::fs::copy(library, packages.join(file)).expect("install the fixture library");
+    for library in libraries {
+        let file = library.file_name().expect("a library file name");
+        std::fs::copy(library, packages.join(file)).expect("install a library");
+    }
     home
+}
+
+/// A home with only the fixture installed.
+fn fixture_home(test: &str) -> PathBuf {
+    home(test, &[fixture_library()])
 }
 
 /// A running `saule-lsp` and the messages it has sent.
@@ -334,4 +344,52 @@ fn a_misused_native_class_is_flagged_in_the_editor() {
             .any(|m| m.contains("`Counter.bump` expects 0 argument(s), got 1")),
         "{messages:?}"
     );
+}
+
+/// With two installed packages that each export a `Util`, the editor knows
+/// the one the file imported: its calls are clean, and `Util.` completes
+/// its members and not the other package's.
+#[test]
+fn the_editor_knows_the_class_the_file_imported() {
+    let home = home("rivals", &[fixture_library(), rival_library()]);
+    // The rival's `greet` takes nothing; the fixture's needs a name.
+    let source = "from \"rival\" import *\nlocal s: string = Util.greet()\n";
+    let (mut server, uri, diags) = open(&home, source);
+    assert!(
+        diags.is_empty(),
+        "the rival's own call is clean: {diags:#?}"
+    );
+
+    let typed = format!("{source}Util.");
+    server.notify(
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": typed }],
+        }),
+    );
+    let items = server.request(
+        "textDocument/completion",
+        json!({
+            "textDocument": { "uri": uri },
+            "position": position(&typed, "Util.", 1, 5),
+        }),
+    );
+    let items = items
+        .get("items")
+        .or(Some(&items))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).collect();
+    assert!(
+        labels.contains(&"greet"),
+        "`Util.` offers `greet`: {labels:?}"
+    );
+    for theirs in ["round", "modes", "sum"] {
+        assert!(
+            !labels.contains(&theirs),
+            "`{theirs}` is the fixture's, not the rival's: {labels:?}"
+        );
+    }
 }

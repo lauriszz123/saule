@@ -33,13 +33,16 @@
 //!   program.rs    resolving an import graph into a runnable set of chunks
 //!   disasm.rs     reading a chunk back as text
 //!   profile.rs    opt-in bytecode profiling (§16), off in shipped binaries
+//!   sampling.rs   `--profile`: which Saule functions the time goes to
 //! ```
 
+pub mod bytecode;
 pub mod chunk;
 pub mod compile;
 pub mod disasm;
 pub mod op;
 pub mod profile;
+pub mod sampling;
 pub mod program;
 pub mod vm;
 

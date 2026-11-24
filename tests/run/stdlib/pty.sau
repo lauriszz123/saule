@@ -1,0 +1,56 @@
+-- `Pty`: a program run behind a pseudo-terminal, as a terminal emulator runs
+-- a shell. The program sees a real terminal — its size, line echo, Ctrl-C —
+-- and everything it writes, escape codes and all, comes back through `read`.
+--
+-- Unix commands (`sh`, `stty`), like spawn.sau: the Windows half is ConPTY,
+-- pinned in `saule-runtime`'s own tests.
+
+class Main
+	-- Everything the program writes, until `want` appears or 5 seconds pass.
+	static fn readUntil(p: Pty, want: string) -> string
+		local all = ""
+		local deadline = Os.clock() + 5.0
+		while not String.contains(all, want) and Os.clock() < deadline do
+			all = all .. (Bytes.toString(p.read()) ?? "")
+			Os.sleep(0.01)
+		end
+		return all
+	end
+
+	static fn main()
+		-- The program sees a terminal, at the size it was given.
+		local sh: Pty = Os.spawnPty("/bin/sh", {"-c", "[ -t 0 ] && echo tty; read x; stty size; echo done"})!
+		assert(sh.pid() > 0 and sh.running())
+		sh.resize(100, 30)
+		sh.write(Bytes.fromString("go\n"))
+		local out = Main.readUntil(sh, "done")
+		assert(String.contains(out, "tty"), out)
+		assert(String.contains(out, "30 100"), out)
+
+		-- Ctrl-C is a signal, as at a real terminal.
+		local sleeper: Pty = Os.spawnPty("/bin/sh", {"-c", "trap 'echo caught; exit 3' INT; echo ready; sleep 10"})!
+		Main.readUntil(sleeper, "ready")
+		sleeper.write(Bytes.of(3))
+		assert(String.contains(Main.readUntil(sleeper, "caught"), "caught"))
+		local deadline = Os.clock() + 5.0
+		while sleeper.poll() == nil and Os.clock() < deadline do
+			Os.sleep(0.01)
+		end
+		assert(sleeper.poll() == 3)
+
+		-- The end: the program is gone and everything it wrote was read.
+		local quick: Pty = Os.spawnPty("/bin/sh", {"-c", "echo bye"})!
+		assert(String.contains(Main.readUntil(quick, "bye"), "bye"))
+		deadline = Os.clock() + 5.0
+		while not quick.atEof() and Os.clock() < deadline do
+			quick.read()
+			Os.sleep(0.01)
+		end
+		assert(quick.atEof() and quick.poll() == 0)
+
+		-- A program that cannot start is `nil`, as with `Os.spawn`.
+		assert(Os.spawnPty("/no/such/program") == nil)
+
+		println("pty ok")
+	end
+end

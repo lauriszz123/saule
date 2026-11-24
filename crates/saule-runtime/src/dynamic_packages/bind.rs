@@ -136,6 +136,18 @@ fn build_runtime(manifest: Arc<Manifest>, weak: &Weak<PackageRt>) -> PackageRt {
     for (name, e) in &enums {
         exports.insert(name.clone(), Value::Enum(e.clone()));
     }
+    // An interface is only a name to the checker, but importing it by name
+    // still has to find something.
+    for spec in &manifest.interfaces {
+        exports.insert(
+            spec.name.clone(),
+            Value::Interface(Rc::new(crate::value::InterfaceObject {
+                name: spec.name.clone(),
+                extends: Vec::new(),
+                methods: Default::default(),
+            })),
+        );
+    }
 
     PackageRt {
         ctx: Rc::new(PackageCtx {
@@ -321,7 +333,7 @@ pub fn seed_classes(
         .flat_map(|class| {
             local_names(&class.name, names)
                 .into_iter()
-                .map(|local| (local, class_info(class)))
+                .map(|local| (local, class_info(&manifest.name, class)))
         })
         .collect()
 }
@@ -347,6 +359,25 @@ pub fn seed_enums(
             local_names(&e.name, names)
                 .into_iter()
                 .map(move |local| (local, info.clone()))
+        })
+        .collect()
+}
+
+/// The interfaces a dynamic package declares, for the same seed as
+/// [`seed_classes`]: what makes `drawable: Drawable` a type the checker
+/// knows, and an `Image` (which declares `implements(Drawable)`) a value
+/// that fits it. Each extends nothing.
+pub fn seed_interfaces(name: &str, names: &saule_ast::ImportNames) -> Vec<(String, Vec<String>)> {
+    let Some(manifest) = lookup(name) else {
+        return Vec::new();
+    };
+    manifest
+        .interfaces
+        .iter()
+        .flat_map(|i| {
+            local_names(&i.name, names)
+                .into_iter()
+                .map(|local| (local, Vec::new()))
         })
         .collect()
 }
@@ -393,8 +424,14 @@ fn split_interface(spelled: &str) -> (String, Vec<saule_ast::Type>) {
     }
 }
 
-pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
-    let mut info = saule_semantic::ClassInfo::default();
+pub(crate) fn class_info(package: &str, class: &ClassSpec) -> saule_semantic::ClassInfo {
+    let mut info = saule_semantic::ClassInfo {
+        // Where `register_sigs` put this class's static members: under the
+        // package's name, so another package's class of the same name
+        // cannot answer for it.
+        native_module: Some(saule_typeck::sigs::package_module(package, &class.name)),
+        ..saule_semantic::ClassInfo::default()
+    };
 
     // `implements` and `implements_args` are positional, so they are pushed
     // together. Populating them is what makes `a + b` on a native object
@@ -457,6 +494,7 @@ pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
         info.methods.insert(
             m.name.clone(),
             saule_semantic::MethodSig {
+                remote: Default::default(),
                 // A native declaration has no generic parameters to bound.
                 type_bounds: Vec::new(),
                 is_static: m.receiver == Receiver::Static,

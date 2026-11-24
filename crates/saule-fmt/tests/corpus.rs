@@ -276,6 +276,36 @@ fn long_call_arguments_wrap() {
     }
 }
 
+/// A match arm whose body doesn't fit on the `case` line moves the body to a
+/// line of its own, instead of breaking the body's arguments under the
+/// pattern; a short arm stays on one line. Both forms round-trip, in a
+/// statement `match` and in a `match` expression.
+#[test]
+fn long_match_arm_bodies_move_to_their_own_line() {
+    let src = "match k\n  case Kind.KeyPressed then Compositor.sendKey(focusedWindow, key, true, shift, ctrl, alt, extra, more)\n  case _ then nil\nend\n";
+    assert!(
+        src.lines().any(|l| l.len() > 100),
+        "test input must actually exceed the width target"
+    );
+    let out = format_str(src).expect("format");
+    assert!(
+        out.contains(
+            "case Kind.KeyPressed then\n    Compositor.sendKey(focusedWindow, key, true, shift, ctrl, alt, extra, more)\n"
+        ),
+        "the body did not move to its own line:\n{out}"
+    );
+    assert!(out.contains("case _ then nil"), "a short arm moved:\n{out}");
+    assert_eq!(format_str(&out).expect("reformat"), out, "not idempotent");
+
+    let src = "local s = match k\n  case 1 then \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" .. \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n  case _ then \"c\"\nend\n";
+    let out = format_str(src).expect("format");
+    assert!(
+        out.contains("case 1 then\n"),
+        "the body did not move:\n{out}"
+    );
+    assert_eq!(format_str(&out).expect("reformat"), out, "not idempotent");
+}
+
 /// Over-long signatures break the same way.
 #[test]
 fn long_parameter_lists_wrap() {
@@ -1212,4 +1242,13 @@ fn every_import_form_keeps_its_spelling() {
 #[test]
 fn a_namespace_member_keeps_its_namespace() {
     stays_as_written("import kit\n\nlocal b: kit.Box? = kit.Box(kit.twice(1))\n");
+}
+
+#[test]
+fn extern_interface_and_async_survive_formatting() {
+    let src = "export extern interface Display\n  fn size() -> (integer, integer)\n  async fn ping(n: integer)\nend\n";
+    let once = format_str(src).unwrap();
+    assert!(once.contains("export extern interface Display"), "{once}");
+    assert!(once.contains("async fn ping(n: integer)"), "{once}");
+    assert_eq!(format_str(&once).unwrap(), once, "formatting is idempotent");
 }

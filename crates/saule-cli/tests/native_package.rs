@@ -23,30 +23,35 @@ fn workspace_root() -> PathBuf {
 /// Build the fixture package once per test run and return its library.
 fn fixture_library() -> &'static Path {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        // A target directory of its own: this runs while `cargo test` may
-        // still hold the workspace's.
-        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
-        let status = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "--quiet",
-                "-p",
-                "saule-native-fixture",
-                "--target-dir",
-            ])
-            .arg(&target)
-            .current_dir(workspace_root())
-            .status()
-            .expect("run cargo to build the fixture package");
-        assert!(status.success(), "building saule-native-fixture failed");
-        let file = format!(
-            "{}saule_fixture{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX
-        );
-        target.join("debug").join(file)
-    })
+    BUILT.get_or_init(|| build_library("saule-native-fixture", "saule_fixture"))
+}
+
+/// Build the rival package — a second package with a `Util` class of its
+/// own — once per test run and return its library.
+fn rival_library() -> &'static Path {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| build_library("saule-native-rival", "saule_rival"))
+}
+
+/// Build the workspace crate `package` as a shared library and return the
+/// path of `lib`, the library file cargo makes of it.
+fn build_library(package: &str, lib: &str) -> PathBuf {
+    // A target directory of its own: this runs while `cargo test` may
+    // still hold the workspace's.
+    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "--quiet", "-p", package, "--target-dir"])
+        .arg(&target)
+        .current_dir(workspace_root())
+        .status()
+        .expect("run cargo to build a test package");
+    assert!(status.success(), "building {package} failed");
+    let file = format!(
+        "{}{lib}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    target.join("debug").join(file)
 }
 
 /// A fresh `SAULE_HOME` for one test, with `libraries` installed into its
@@ -249,6 +254,81 @@ fn a_read_only_property_cannot_be_assigned() {
 // ─── Enums, collections, multiple returns ───────────────────────────────────
 
 #[test]
+fn named_arguments_bind_to_a_natives_parameters() {
+    // The compiler took parameter names only from Saule declarations, so a
+    // named argument to a native — `Window.create(800, 600, title: "…")` —
+    // was refused as "a named argument to a callee the compiler cannot
+    // identify", although `saule check` accepted it. The names come from the
+    // package's manifest.
+    //
+    // `mode:` before `x:` is the case that proves the reorder ran: a compiler
+    // that dropped the names and kept the written order would pass
+    // `Rounding.Down` as `x` and fail.
+    let home = fixture_home("named_args");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+println(Util.round(2.1, mode: Rounding.Up))
+println(Util.round(mode: Rounding.Down, x: 2.9))
+println(Util.preferred(nearest: true) == Rounding.Nearest)
+"#,
+    );
+    assert_eq!(out, "3\n2\ntrue\n");
+}
+
+#[test]
+fn named_arguments_bind_on_a_native_objects_methods() {
+    let home = fixture_home("named_args_method");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+local a = Counter(40)
+println(a.absorb(other: Counter(2)))
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
+
+#[test]
+fn a_misnamed_argument_to_a_native_is_reported() {
+    let home = fixture_home("named_args_unknown");
+    let err = run_err(
+        &home,
+        "from \"fixture\" import *\nprintln(Util.round(2.5, rounding: Rounding.Up))\n",
+    );
+    assert!(
+        err.contains("`Util.round` has no parameter named `rounding`"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn a_native_parameter_given_twice_is_reported() {
+    let home = fixture_home("named_args_twice");
+    let err = run_err(
+        &home,
+        "from \"fixture\" import *\nprintln(Util.round(2.5, Rounding.Up, x: 1.0))\n",
+    );
+    assert!(
+        err.contains("`Util.round` got the parameter `x` twice"),
+        "got: {err}"
+    );
+}
+
+#[test]
+fn a_named_argument_to_a_positional_only_native_is_reported() {
+    // Stdlib natives carry no parameter names. The checker used to skip a
+    // named argument to one without a word, and the compiler then refused it
+    // with an error that blamed the callee.
+    let home = fixture_home("named_args_stdlib");
+    let err = run_err(&home, "println(String.len(s: \"abc\"))\n");
+    assert!(
+        err.contains("`String.len` takes its arguments by position"),
+        "got: {err}"
+    );
+}
+
+#[test]
 fn enums_cross_the_boundary_as_themselves() {
     let home = fixture_home("enums");
     let out = run_ok(
@@ -262,6 +342,91 @@ println(ms[1] == Rounding.Down, ms[3] == Rounding.Nearest)
 "#,
     );
     assert_eq!(out, "3\t2\ntrue\ttrue\ntrue\ttrue\n");
+}
+
+#[test]
+fn a_packages_enum_can_be_matched() {
+    // The compiler found a pattern's variant tag in the module's own enums
+    // and in the prelude, but not in a package's: `match` on one refused to
+    // compile ("a variant of an unknown enum") while `==` worked. Two arms
+    // and four, because three or more take the switch path.
+    let home = fixture_home("enum_match");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import *
+fn name(m: Rounding) -> string
+  return match m
+    case Rounding.Down then "down"
+    case Rounding.Up then "up"
+    case Rounding.Nearest then "nearest"
+    case _ then "?"
+  end
+end
+for m in Util.modes() do
+  print(name(m) .. " ")
+end
+match Util.preferred(true)!
+  case Rounding.Nearest then println("| nearest")
+  case _ then println("| other")
+end
+"#,
+    );
+    assert_eq!(out, "down up nearest | nearest\n");
+}
+
+#[test]
+fn a_package_interface_takes_every_class_that_implements_it() {
+    // `Util.count` takes a `Countable`, which `Counter` and `Money` declare
+    // with `implements(Countable)`. Either fits, the interface can be named
+    // in an annotation (imported or not), and anything else is refused
+    // before the program runs.
+    let home = fixture_home("package_interface");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Util, Counter, Money
+local c: Countable = Counter(7)
+println(Util.count(c), Util.count(Money(250)))
+"#,
+    );
+    assert_eq!(out, "7\t250\n");
+
+    let out = run_ok(
+        &home,
+        "from \"fixture\" import Countable, Counter\nlocal c: Countable = Counter(3)\nprintln(c != nil)\n",
+    );
+    assert_eq!(out, "true\n");
+
+    let err = run_err(
+        &home,
+        "from \"fixture\" import Util\nprintln(Util.count(5))\n",
+    );
+    assert!(err.contains("Countable"), "got: {err}");
+}
+
+#[test]
+fn a_returned_objects_class_needs_no_import() {
+    // `Util.shared()` returns a `Counter`, which this program never names.
+    // The checker only knew the members of classes imported by name, so
+    // `c.value` had no type and assigning it to an `integer` was refused.
+    // Not importing the name still keeps it unbound: using `Counter` as a
+    // value is an error.
+    let home = fixture_home("unimported_class");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Util
+local n: integer = 0
+local c = Util.shared()
+n = c.value
+println(n)
+"#,
+    );
+    assert_eq!(out, "100\n");
+
+    let err = run_err(
+        &home,
+        "from \"fixture\" import Util\nprintln(Counter(1).value)\n",
+    );
+    assert!(err.contains("undefined name `Counter`"), "got: {err}");
 }
 
 #[test]
@@ -484,6 +649,117 @@ fn two_libraries_claiming_one_package_are_both_refused() {
     let out = saule(&home, "check", "from \"fixture\" import *\n");
     let err = stderr(&out);
     assert!(err.contains("is installed more than once"), "{err}");
+}
+
+// ─── Two packages, one class name ──────────────────────────────────────────
+
+/// A home with both the fixture and the rival installed: two packages that
+/// each export a class called `Util`.
+fn rivals_home(test: &str) -> PathBuf {
+    let fixture = fixture_library();
+    let rival = rival_library();
+    let name = |p: &Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .expect("file name")
+            .to_string()
+    };
+    home(test, &[(fixture, &name(fixture)), (rival, &name(rival))])
+}
+
+/// How many times each check below runs. Static signatures used to share
+/// one table keyed by class name, filled from the installed packages in
+/// hash order, so which `Util.greet` a program was checked against changed
+/// from one run to the next: once is not enough to see it.
+const RUNS: usize = 8;
+
+/// A program is checked against the `Util` of the package it imported,
+/// whichever other package also has one.
+#[test]
+fn a_class_is_checked_against_the_package_it_was_imported_from() {
+    let home = rivals_home("rivals-checked");
+    for _ in 0..RUNS {
+        // Each package's own call is clean...
+        for (package, call) in [
+            ("fixture", "Util.greet(\"ada\")"),
+            ("rival", "Util.greet()"),
+        ] {
+            let out = saule(
+                &home,
+                "check",
+                &format!("from \"{package}\" import *\n{call}\n"),
+            );
+            assert!(
+                out.status.success(),
+                "`{call}` is right for `{package}`: {}",
+                stderr(&out)
+            );
+        }
+
+        // ...and the other's is not. The fixture's `greet` needs a name;
+        // the rival's takes nothing.
+        let fixture = saule(&home, "check", "from \"fixture\" import *\nUtil.greet()\n");
+        let err = stderr(&fixture);
+        assert!(
+            err.contains("`Util.greet` expects 1 argument(s), got 0"),
+            "the fixture's `Util.greet` takes a name: {err}"
+        );
+
+        let rival = saule(
+            &home,
+            "check",
+            "from \"rival\" import *\nUtil.greet(\"ada\")\n",
+        );
+        let err = stderr(&rival);
+        assert!(
+            err.contains("`Util.greet` expects 0 argument(s), got 1"),
+            "the rival's `Util.greet` takes nothing: {err}"
+        );
+    }
+}
+
+/// And it runs against that package too, every time.
+#[test]
+fn a_class_runs_against_the_package_it_was_imported_from() {
+    let home = rivals_home("rivals-run");
+    for _ in 0..RUNS {
+        let out = run_ok(
+            &home,
+            "from \"fixture\" import *\nprintln(Util.greet(\"ada\"))\n",
+        );
+        assert_eq!(out, "hello, ada.\n");
+        let out = run_ok(&home, "from \"rival\" import *\nprintln(Util.greet())\n");
+        assert_eq!(out, "hello from rival\n");
+    }
+}
+
+/// A package imported under another name keeps its signatures.
+#[test]
+fn an_aliased_native_class_keeps_its_signatures() {
+    let home = rivals_home("rivals-alias");
+    let out = saule(
+        &home,
+        "check",
+        "from \"rival\" import Util as Rival\nRival.greet(\"ada\")\n",
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("`Rival.greet` expects 0 argument(s), got 1"),
+        "{err}"
+    );
+}
+
+/// An installed package's class says nothing about a program's own class
+/// that happens to share its name — even in a program that imports
+/// something else from that package.
+#[test]
+fn a_programs_own_class_is_not_mistaken_for_an_installed_one() {
+    let home = rivals_home("rivals-own-class");
+    let out = run_ok(
+        &home,
+        "from \"fixture\" import Counter\n\nclass Util\n    fn init()\n    end\n\n    static fn greet(a: integer, b: integer) -> integer\n        return a + b\n    end\nend\n\nprintln(Util.greet(2, 3))\n",
+    );
+    assert_eq!(out, "5\n");
 }
 
 // ─── operator overloading on a native class ────────────────────────────────
@@ -873,4 +1149,55 @@ println(Util.nosuchthing())
 "#,
     );
     assert!(err.contains("no member `nosuchthing` on `Util`"), "{err}");
+}
+
+// ─── Two imports binding one name ──────────────────────────────────────────
+
+/// The first import of a name wins, for the checker and the compiler alike.
+///
+/// The checker's seed has always kept the first binding (`entry().or_insert`),
+/// but the compiler's import table took the last. A module exporting a class
+/// with the same name as a package's, imported second, then won in codegen
+/// only: `c.bump()` checked against the package's `Counter` and compiled
+/// against the module's layout, which has no `bump` — "cannot compile a
+/// method the class does not declare". This is `from shine import Image`
+/// followed by `from uikit import *`, which exports a view called `Image`.
+#[test]
+fn the_first_import_of_a_name_wins_in_the_compiler_too() {
+    let home = fixture_home("first_import_wins");
+    std::fs::write(
+        home.join("shadow.sau"),
+        "export class Counter\n    fn other() -> integer\n        return 7\n    end\nend\n",
+    )
+    .expect("write the shadowing module");
+    let out = run_ok(
+        &home,
+        r#"from "fixture" import Counter
+from shadow import *
+local c: Counter = Counter(1)
+println(c.bump())
+"#,
+    );
+    assert_eq!(out, "2\n");
+}
+
+/// The other order: the module's class is the one in scope, and the
+/// package's is not, so `other()` is what both stages see.
+#[test]
+fn a_later_package_import_does_not_replace_an_earlier_module_class() {
+    let home = fixture_home("first_import_wins_module_first");
+    std::fs::write(
+        home.join("shadow.sau"),
+        "export class Counter\n    fn other() -> integer\n        return 7\n    end\nend\n",
+    )
+    .expect("write the shadowing module");
+    let out = run_ok(
+        &home,
+        r#"from shadow import *
+from "fixture" import Counter
+local c: Counter = Counter()
+println(c.other())
+"#,
+    );
+    assert_eq!(out, "7\n");
 }

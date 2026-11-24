@@ -1,0 +1,7 @@
+-- `connect` takes a service name. Should be an argument type error.
+
+export extern interface Svc
+	fn n() -> integer
+end
+
+local s = Svc.connect(42)

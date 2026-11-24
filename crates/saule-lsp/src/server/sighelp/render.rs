@@ -121,6 +121,7 @@ pub(crate) fn build_help_user_fn(
 ) -> Option<SignatureHelp> {
     use saule_semantic::MethodSig;
     let sig = MethodSig {
+        remote: Default::default(),
         type_bounds: Vec::new(),
         is_static: false,
         is_private: false,

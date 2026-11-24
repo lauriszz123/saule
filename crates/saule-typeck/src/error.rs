@@ -278,6 +278,36 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    /// A rule of `extern interface` broken — see `extern_iface.rs`.
+    #[error("{message}")]
+    #[diagnostic(help("{help}"))]
+    ExternInterface {
+        message: String,
+        help: String,
+        #[label("here")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{callee}` takes its arguments by position")]
+    #[diagnostic(help(
+        "its parameters have no names to bind `{name}:` to — pass the arguments in order"
+    ))]
+    NativeNamedArg {
+        callee: String,
+        name: String,
+        #[label("named argument")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{callee}` got the parameter `{name}` twice")]
+    #[diagnostic(help("give each parameter one argument, by position or by name"))]
+    NativeArgGivenTwice {
+        callee: String,
+        name: String,
+        #[label("already given")]
+        span: miette::SourceSpan,
+    },
+
     #[error("`{callee}` has no parameter named `{name}`")]
     #[diagnostic(help(
         "remove the named argument or use one of the parameter names declared on `{callee}`"

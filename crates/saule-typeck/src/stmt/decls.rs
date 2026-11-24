@@ -234,11 +234,24 @@ pub(crate) fn check_decl(
             }
         }
         Decl::Interface {
+            name,
+            is_extern,
             type_params,
             type_bounds,
+            extends,
             methods,
             ..
         } => {
+            if *is_extern {
+                crate::extern_iface::check_extern_interface(
+                    name,
+                    type_params,
+                    extends,
+                    methods,
+                    decl_span.clone(),
+                    errors,
+                );
+            }
             // `<T>` is in scope for every signature: `fn get() -> T` on
             // `interface Box<T>` must read `T` as the interface's parameter,
             // not as an undeclared class. A method's own `<U>` nests inside.

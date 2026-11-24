@@ -272,6 +272,9 @@ impl Vm {
         // which does not exist until the `Rc` does.
         let shared = Rc::new_cyclic(|weak: &std::rc::Weak<VmShared>| {
             let (classes, class_of, statics) = build_classes(&chunks, weak);
+            // Data classes arriving from another process are rebuilt as these.
+            #[cfg(any(unix, windows))]
+            saule_runtime::ipc::lang::register_classes(&classes);
             let enums = build_enums(&chunks, weak);
             let variant_names = build_variant_names(&chunks);
             // A class or enum named as a value reads its module slot, which

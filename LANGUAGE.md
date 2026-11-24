@@ -3665,8 +3665,10 @@ entry: "main.sau"
 src_dirs: ["src"]
 dependencies: ["../shared-lib", "~/code/json", "lauriszz123@saule-uikit:main"]
 min_saule_version: "26.1"
+bundle: ["assets"]
 indent_style: "space"
 indent_width: 2
+max_width: 100
 ```
 
 Recognised keys:
@@ -3680,8 +3682,10 @@ Recognised keys:
 | `src_dirs` | List of directories to search when resolving imports |
 | `dependencies` | Packages (`owner@repo`, pinned with `:version`) and paths to other Saule projects (each must itself contain a `saule.config`); `~/` expands to the home directory. Managed with `saule install` / `update` / `remove` — see [Packages](#packages) |
 | `min_saule_version` | Refuses to run if the toolchain reports a lower version |
+| `bundle` | Files and directories `saule build` packs into the executable, relative to the project root (default `["assets"]`, when it exists) — see [Building an executable](#building-an-executable) |
 | `indent_style` | Formatting: `"tab"` or `"space"` (default `"space"`) |
 | `indent_width` | Formatting: columns per indent level, 1–16 (default `2`) |
+| `max_width` | Formatting: the column lines are broken to fit, 40–400 (default `100`) |
 
 Unknown keys are ignored.
 
@@ -3729,6 +3733,36 @@ branch to different commits will replace each other's copy when each runs
 
 Installing a package can run code: a native package is built with `cargo build`.
 See [SECURITY.md](https://github.com/lauriszz123/saule/blob/main/SECURITY.md).
+
+### Building an executable
+
+`saule build` turns a project into one file that runs without Saule
+installed:
+
+```sh
+saule build                 # the project here → build/<name>
+saule build ../game         # another project
+saule build tool.sau        # a single file → build/tool
+saule build -o ~/bin/game   # choose where it goes
+```
+
+The program is compiled to bytecode and packed into a copy of the `saule`
+binary, together with the native packages it imports and the files listed
+under `bundle:`. Running the result runs the program; every argument reaches
+it as `Os.args()`.
+
+On its first run the executable unpacks the bundled files and native
+packages into a cache directory (`~/.cache/saule/apps/<name>-<hash>/` on
+Linux), and `Project.root` points there, so `Project.root .. "/assets/…"`
+finds the same files it does under `saule run`. Later runs reuse it.
+
+The bytecode keeps line numbers but not the source text, so an error in a
+built program names the file, line and column with an empty snippet.
+`--keep-source` keeps the text, and errors read as they do under
+`saule run`.
+
+The executable runs on the operating system and processor it was built on,
+and carries the Saule version that built it.
 
 ### Tests
 
@@ -3808,6 +3842,15 @@ Whether the target is a directory is the *only* thing that picks between the two
 saule run -- input.bf          # project in the cwd, Os.args() = ["input.bf"]
 saule run tool.sau -- -v file  # single file; script args may start with `-`
 ```
+
+**Profiling.** `saule run --profile` prints, when the program finishes, which
+functions the time went to: `self` is time with the function on top (its own
+code, or a native it is in — those are listed as `Graphics.present (native)`
+and so on), `total` is time with it anywhere on the stack. `--profile=FILE`
+writes the table to `FILE` instead and keeps it current while the program
+runs. For a program not started by `saule run` — a built executable, or an
+app started by a window manager — set `SAULE_PROFILE=1` (stderr) or
+`SAULE_PROFILE=FILE`.
 
 ### Execution
 

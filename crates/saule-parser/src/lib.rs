@@ -420,6 +420,15 @@ impl Parser {
         &self.tokens[i]
     }
 
+    /// Whether the cursor is on the contextual keyword `word` followed by
+    /// `then` — `extern` before `interface`, `async` before `fn`. These are
+    /// keywords only in that position, so a program that names a variable
+    /// `async` or `extern` keeps working.
+    pub(crate) fn at_contextual(&self, word: &str, then: &Token) -> bool {
+        matches!(&self.peek().value, Token::Identifier(w) if w == word)
+            && &self.peek_at(1).value == then
+    }
+
     pub(crate) fn is_eof(&self) -> bool {
         matches!(self.peek().value, Token::Eof)
     }

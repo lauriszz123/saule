@@ -54,6 +54,29 @@ thread_local! {
     /// Phantom class object reused as the type tag for every `FsInfo`
     /// instance produced by `Os.fsInfo`. Populated by `install`.
     static FSINFO_CLASS: RefCell<Option<Rc<ClassObject>>> = const { RefCell::new(None) };
+
+    /// The installed `FsKind` and `OsPlatform` enums. Enum variants compare
+    /// by identity (`Rc::ptr_eq`), so the variants `Os.fsInfo` and
+    /// `Os.platform` hand out have to *be* the prelude's singletons — a
+    /// freshly built `Dir` matched `FsKind.Dir` in a `match` (which goes by
+    /// tag) but was never `==` to it. Populated by `install`.
+    static FS_KIND_ENUM: RefCell<Option<Rc<EnumObject>>> = const { RefCell::new(None) };
+    static OS_PLATFORM_ENUM: RefCell<Option<Rc<EnumObject>>> = const { RefCell::new(None) };
+}
+
+/// The prelude's own variant `name` of an installed enum, so it is `==` to
+/// what `FsKind.Dir` / `OsPlatform.Linux` evaluate to. `None` only when the
+/// stdlib was never installed.
+fn installed_variant(
+    slot: &'static std::thread::LocalKey<RefCell<Option<Rc<EnumObject>>>>,
+    name: &str,
+) -> Option<Value> {
+    slot.with(|e| {
+        e.borrow()
+            .as_ref()
+            .and_then(|en| en.variants.get(name).cloned())
+            .map(Value::EnumVariant)
+    })
 }
 
 // ─── installation ──────────────────────────────────────────────────────────
@@ -112,6 +135,13 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
         native_multi("Os.capture", os_capture),
     );
     static_fields.insert("spawn".to_string(), native_multi("Os.spawn", os_spawn));
+    // `Os.spawn`'s sibling for a program that needs a terminal — see
+    // `stdlib::pty`.
+    #[cfg(any(unix, windows))]
+    static_fields.insert(
+        "spawnPty".to_string(),
+        native_multi("Os.spawnPty", super::pty::spawn),
+    );
     static_fields.insert("pid".to_string(), native_multi("Os.pid", os_pid));
     static_fields.insert(
         "platform".to_string(),
@@ -294,6 +324,7 @@ fn install_platform_enum(env: &Rc<RefCell<Prelude>>) {
     for v in variant_dict.values() {
         *v.enum_obj.borrow_mut() = Some(final_enum.clone());
     }
+    OS_PLATFORM_ENUM.with(|slot| *slot.borrow_mut() = Some(final_enum.clone()));
     env.borrow_mut()
         .define(name.to_string(), Value::Enum(final_enum));
 }
@@ -778,6 +809,9 @@ fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
         "windows" => "Windows",
         _ => "Other",
     };
+    if let Some(v) = installed_variant(&OS_PLATFORM_ENUM, variant_name) {
+        return Ok(vec![v]);
+    }
     let variant = EnumVariantObject {
         enum_name: "OsPlatform".to_string().into(),
         variant_name: variant_name.to_string().into(),
@@ -1031,6 +1065,7 @@ fn install_fskind_enum(env: &Rc<RefCell<Prelude>>) {
     for v in variant_dict.values() {
         *v.enum_obj.borrow_mut() = Some(final_enum.clone());
     }
+    FS_KIND_ENUM.with(|slot| *slot.borrow_mut() = Some(final_enum.clone()));
     env.borrow_mut()
         .define(name.to_string(), Value::Enum(final_enum));
 }
@@ -1069,11 +1104,13 @@ fn install_fsinfo_class(env: &Rc<RefCell<Prelude>>) {
 }
 
 fn fskind_variant(kind: &str) -> Value {
-    // Reach into the global registry through the prelude `FsKind` name —
-    // we re-look up rather than caching so unit tests that rebuild the
-    // environment can't dangle a stale Rc.
-    // Falls back to a freshly-constructed variant if the enum isn't
-    // installed (which would only happen if the stdlib wasn't loaded).
+    // The installed prelude variant, so `info.kind == FsKind.Dir` holds.
+    // `install` refreshes the slot, so a rebuilt environment never sees a
+    // stale enum. Falls back to a freshly-constructed variant if the enum
+    // isn't installed (which would only happen if the stdlib wasn't loaded).
+    if let Some(v) = installed_variant(&FS_KIND_ENUM, kind) {
+        return v;
+    }
     Value::EnumVariant(Rc::new(EnumVariantObject {
         enum_name: "FsKind".to_string().into(),
         variant_name: kind.to_string().into(),
@@ -1188,7 +1225,9 @@ pub fn builtin_registries() -> (
         implements: Vec::new(),
         members: Default::default(),
         field_types: Default::default(),
+        static_fields: Default::default(),
         methods: Default::default(),
+        native_module: None,
     };
     let fields: [(&str, Type); 5] = [
         ("path", Type::Named("string".to_string())),

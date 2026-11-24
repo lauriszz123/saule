@@ -3447,6 +3447,40 @@ println(String.trim(Bytes.toString(inDir.read()) ?? ""))    -- /
 println(Os.spawn("saule-no-such-program") == nil)           -- true
 ```
 
+#### `Os.spawnPty(program: string, args: table<string>?) -> Pty?`
+
+Starts `program` behind a **pseudo-terminal**, the way a terminal emulator
+runs a shell. Where `Os.spawn` gives the child plain pipes, this gives it a
+real terminal: it can ask for its size, switch to raw mode, get Ctrl-C as a
+signal and do job control. Everything it writes comes back through `read` —
+escape codes included, for a terminal emulator to interpret — and `write`
+sends it keystrokes. `nil` when it cannot be started.
+
+The terminal starts at 80×24; `resize` changes it, and the program is told.
+The environment is inherited, so set `TERM` (with `Os.setenv`) to what your
+emulator understands before starting the shell.
+
+| Method | |
+|---|---|
+| `p.read(max: integer?) -> bytes` | what has arrived, never blocking; empty when nothing has |
+| `p.write(data: bytes) -> integer` | keystrokes; how many bytes were taken |
+| `p.resize(cols: integer, rows: integer)` | the terminal's new size |
+| `p.poll() -> integer?` | the exit code, `nil` while it runs |
+| `p.running() -> boolean`, `p.pid() -> integer` | |
+| `p.kill() -> boolean` | ends it at once |
+| `p.close()` | hangs up, as closing a terminal window does |
+| `p.atEof() -> boolean` | it has exited and everything it wrote has been read |
+
+On Linux and macOS it is a Unix pseudo-terminal, the program's controlling
+terminal in a session of its own; on Windows it is ConPTY.
+
+```saule
+local sh: Pty = Os.spawnPty("sh")!
+sh.resize(100, 30)
+sh.write(Bytes.fromString("echo hello; exit\n"))
+-- … each frame: draw what `sh.read()` returns, send what the user types …
+```
+
 #### `Os.exit(code: integer?) -> nil`
 
 Ends the process immediately with `code`, which defaults to 0. Nothing after
@@ -3768,7 +3802,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 | --- | --- | --- |
 | `Project.name` | `string` | The project's `name:` |
 | `Project.version` | `string` | Its `version:` — the version of *your* code |
-| `Project.root` | `string` | Absolute path of the directory holding `saule.config` |
+| `Project.root` | `string` | Absolute path of the directory holding `saule.config` — in a program built with `saule build`, the directory its bundled files were unpacked to |
 | `Project.srcDirs` | `table<string>` | The `src_dirs:` roots as absolute paths, resolved against `root` — not the relative spellings the config used |
 
 ```saule

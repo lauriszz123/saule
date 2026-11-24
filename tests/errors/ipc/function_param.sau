@@ -1,0 +1,6 @@
+-- A function cannot cross processes; a callback is an object implementing an
+-- `extern interface`. Should say the parameter cannot be sent.
+
+export extern interface Svc
+	fn each(f: fn(integer) -> nil)
+end

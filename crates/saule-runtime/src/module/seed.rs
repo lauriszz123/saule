@@ -3,8 +3,9 @@
 //! not-yet-run import still resolves.
 
 use saule_ast::{Decl, ImportNames, Module, Stmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::*;
 
@@ -104,8 +105,33 @@ fn parsed_module(abs: &Path, io: SeedIo<'_>) -> Option<std::sync::Arc<Module>> {
         Some(text) => text,
         None => std::fs::read_to_string(abs).ok()?,
     };
+    // The same text parses to the same tree, so the last tree read from it
+    // is handed back. Every file's seed reaches the same modules, and
+    // without this a run parsed each of them once per file that imports
+    // anything leading to it. Keyed on the text itself, so an edit is a
+    // miss.
+    let cached = PARSED.with(|c| {
+        c.borrow()
+            .get(abs)
+            .filter(|(text, _)| *text == source)
+            .map(|(_, tree)| tree.clone())
+    });
+    if let Some(tree) = cached {
+        return Some(tree);
+    }
     let tokens = saule_lexer::Lexer::new(&source).tokenize().ok()?;
-    saule_parser::parse(tokens).ok().map(std::sync::Arc::new)
+    let tree = std::sync::Arc::new(saule_parser::parse(tokens).ok()?);
+    PARSED.with(|c| {
+        c.borrow_mut()
+            .insert(abs.to_path_buf(), (source, tree.clone()))
+    });
+    Some(tree)
+}
+
+thread_local! {
+    /// Trees [`parsed_module`] parsed itself, with the text they came from.
+    static PARSED: std::cell::RefCell<HashMap<PathBuf, (String, Arc<Module>)>> =
+        std::cell::RefCell::new(HashMap::new());
 }
 
 /// Union of the local names every `from "..." import *` in `module` binds.
@@ -239,6 +265,11 @@ fn collect_seed(
     only_exported: bool,
 ) -> saule_semantic::ModuleSeed {
     let mut seed = saule_semantic::ModuleSeed::default();
+    // Native packages this module imports from, for the types-only pass at
+    // the end.
+    let mut packages: Vec<&str> = Vec::new();
+    // Saule modules it imports from, for the same pass.
+    let mut imported_modules: Vec<PathBuf> = Vec::new();
 
     for stmt in &module.stmts {
         let Stmt::Decl(d) = &stmt.value else { continue };
@@ -253,6 +284,11 @@ fn collect_seed(
         };
         if only_exported && !exported {
             continue;
+        }
+        if crate::native_packages::lookup(path).is_some()
+            || crate::dynamic_packages::is_dynamic_package(path)
+        {
+            packages.push(path);
         }
 
         // Native package seed — fold the package's synthetic
@@ -288,6 +324,9 @@ fn collect_seed(
             for (alias, info) in crate::dynamic_packages::seed_enums(path, names) {
                 seed.enums.entry(alias).or_insert(info);
             }
+            for (alias, extends) in crate::dynamic_packages::seed_interfaces(path, names) {
+                seed.interfaces.entry(alias).or_insert(extends);
+            }
             continue;
         }
 
@@ -297,6 +336,7 @@ fn collect_seed(
         let Some(imported) = parsed_module(&abs, io) else {
             continue;
         };
+        imported_modules.push(abs.clone());
 
         let (mut reg, ifaces, enums, iface_methods, _iface_params) =
             saule_semantic::build_registry(&imported);
@@ -352,7 +392,351 @@ fn collect_seed(
         }
     }
 
+    if !only_exported {
+        seed_package_types(&mut seed, &packages);
+        seed_reachable_types(&mut seed, &imported_modules, io);
+    }
+
     seed
+}
+
+/// The types one module declares itself — not those it imports. See
+/// [`seed_reachable_types`].
+#[derive(Default)]
+struct DeclaredTypes {
+    classes: saule_semantic::ClassRegistry,
+    enums: saule_semantic::EnumRegistry,
+    interfaces: saule_semantic::InterfaceRegistry,
+    interface_methods: saule_semantic::InterfaceMethodRegistry,
+    /// The modules and native packages it imports from, in the order
+    /// written.
+    imports: Vec<Reached>,
+}
+
+/// Where one `import` leads.
+enum Reached {
+    Module(PathBuf),
+    Package(String),
+}
+
+/// A module's tree, and what it declares.
+type DeclaredEntry = (Arc<Module>, Arc<DeclaredTypes>);
+
+thread_local! {
+    /// Each module's [`DeclaredTypes`], with the tree they were read from.
+    /// Every file's seed walks the same modules, so without this a project
+    /// of a hundred files built each module's registry a hundred times. An
+    /// entry is used only while the module's tree is the very same one
+    /// (`Arc::ptr_eq`): an edited module is parsed into a new tree, which
+    /// misses and is read again.
+    static DECLARED: std::cell::RefCell<HashMap<PathBuf, DeclaredEntry>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Make the types a module's imports lead to known to the checker,
+/// imported by name or not: the Saule counterpart of
+/// [`seed_package_types`].
+///
+/// A class's fields and methods name the types of *its* module: `Outer`
+/// has an `inner: Inner`, and `Inner` is imported in `Outer.sau`. A module
+/// that imports only `Outer` used to know nothing about `Inner`, so
+/// `o.inner.weight` had no type at all — and an untyped value goes
+/// unchecked, so `1.0 * o.inner.weight` passed `saule check` and failed at
+/// run time with "cannot mix an integer and a float". The fix the language
+/// asked of the program was to import a name it never writes.
+///
+/// So the types the seed holds are followed: every class, enum or
+/// interface one of them mentions — a field's type, a method's parameter
+/// or result, a parent — is looked up in the modules the imports reach,
+/// added, and followed in turn. Only what is mentioned is added, so a seed
+/// grows by what its types use rather than by the whole program.
+///
+/// Only types, and only gaps: a name the module's imports bind keeps its
+/// meaning, as does one it declares (decided where the seed meets the
+/// module's own declarations), and its functions and variables are not
+/// touched — so nothing becomes *callable* by a name the module didn't
+/// import. A name several modules declare means the nearest: modules are
+/// searched breadth first, imports in the order written, then the native
+/// packages they use.
+fn seed_reachable_types(
+    seed: &mut saule_semantic::ModuleSeed,
+    imported: &[PathBuf],
+    io: SeedIo<'_>,
+) {
+    let (modules, packages) = reachable(imported, io);
+    let mut from_packages = saule_semantic::ModuleSeed::default();
+    let packages: Vec<&str> = packages.iter().map(String::as_str).collect();
+    seed_package_types(&mut from_packages, &packages);
+
+    let mut pending: Vec<String> = Vec::new();
+    mentions_of_seed(seed, &mut pending);
+    let mut tried: HashSet<String> = HashSet::new();
+
+    while let Some(name) = pending.pop() {
+        let known = seed.classes.contains_key(&name)
+            || seed.enums.contains_key(&name)
+            || seed.interfaces.contains_key(&name);
+        if known || !tried.insert(name.clone()) {
+            continue;
+        }
+
+        let sources = modules
+            .iter()
+            .map(|m| (&m.classes, &m.enums, &m.interfaces, &m.interface_methods))
+            .chain(std::iter::once((
+                &from_packages.classes,
+                &from_packages.enums,
+                &from_packages.interfaces,
+                &from_packages.interface_methods,
+            )));
+        for (classes, enums, interfaces, interface_methods) in sources {
+            if let Some(info) = classes.get(&name) {
+                class_mentions(info, &mut pending);
+                seed.classes.insert(name.clone(), info.clone());
+                break;
+            }
+            if let Some(info) = enums.get(&name) {
+                enum_mentions(info, &mut pending);
+                seed.enums.insert(name.clone(), info.clone());
+                break;
+            }
+            if let Some(extends) = interfaces.get(&name) {
+                pending.extend(extends.iter().cloned());
+                seed.interfaces.insert(name.clone(), extends.clone());
+                if let Some(sigs) = interface_methods.get(&name) {
+                    for sig in sigs.values() {
+                        method_mentions(sig, &mut pending);
+                    }
+                    seed.interface_methods
+                        .entry(name.clone())
+                        .or_insert_with(|| sigs.clone());
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Every module `imported` leads to, nearest first (breadth first, imports
+/// in the order written), and the native packages they import from.
+fn reachable(imported: &[PathBuf], io: SeedIo<'_>) -> (Vec<Arc<DeclaredTypes>>, Vec<String>) {
+    let mut queue: std::collections::VecDeque<PathBuf> = imported.iter().cloned().collect();
+    let mut seen: HashSet<PathBuf> = imported.iter().cloned().collect();
+    let mut modules = Vec::new();
+    let mut packages: Vec<String> = Vec::new();
+
+    while let Some(abs) = queue.pop_front() {
+        let Some(declared) = declared_types(&abs, io) else {
+            continue;
+        };
+        for reached in &declared.imports {
+            match reached {
+                Reached::Module(next) => {
+                    if seen.insert(next.clone()) {
+                        queue.push_back(next.clone());
+                    }
+                }
+                Reached::Package(name) => {
+                    if !packages.contains(name) {
+                        packages.push(name.clone());
+                    }
+                }
+            }
+        }
+        modules.push(declared);
+    }
+    (modules, packages)
+}
+
+/// The type names everything in `seed` mentions.
+fn mentions_of_seed(seed: &saule_semantic::ModuleSeed, out: &mut Vec<String>) {
+    for info in seed.classes.values() {
+        class_mentions(info, out);
+    }
+    for info in seed.enums.values() {
+        enum_mentions(info, out);
+    }
+    for extends in seed.interfaces.values() {
+        out.extend(extends.iter().cloned());
+    }
+    for sigs in seed.interface_methods.values() {
+        for sig in sigs.values() {
+            method_mentions(sig, out);
+        }
+    }
+    for sig in seed.functions.values() {
+        for param in &sig.params {
+            type_mentions(&param.ty, out);
+        }
+        if let Some(ty) = &sig.return_ty {
+            type_mentions(ty, out);
+        }
+    }
+    for ty in seed.variables.values() {
+        type_mentions(ty, out);
+    }
+}
+
+fn class_mentions(info: &saule_semantic::ClassInfo, out: &mut Vec<String>) {
+    out.extend(info.parent.iter().cloned());
+    out.extend(info.implements.iter().cloned());
+    for ty in info
+        .parent_args
+        .iter()
+        .chain(info.implements_args.iter().flatten())
+    {
+        type_mentions(ty, out);
+    }
+    for ty in info.field_types.values() {
+        type_mentions(ty, out);
+    }
+    for sig in info.methods.values() {
+        method_mentions(sig, out);
+    }
+}
+
+fn enum_mentions(info: &saule_semantic::EnumInfo, out: &mut Vec<String>) {
+    for variant in info.variants.values() {
+        for field in &variant.fields {
+            type_mentions(&field.ty, out);
+        }
+    }
+}
+
+fn method_mentions(sig: &saule_semantic::MethodSig, out: &mut Vec<String>) {
+    for param in &sig.params {
+        type_mentions(&param.ty, out);
+    }
+    if let Some(ty) = &sig.return_ty {
+        type_mentions(ty, out);
+    }
+}
+
+fn type_mentions(ty: &saule_ast::Type, out: &mut Vec<String>) {
+    use saule_ast::Type;
+    match ty {
+        Type::Named(name) => out.push(name.clone()),
+        Type::Nullable(inner) => type_mentions(inner, out),
+        Type::Table { key, value } => {
+            if let Some(key) = key {
+                type_mentions(key, out);
+            }
+            type_mentions(value, out);
+        }
+        Type::Tuple(items) => items.iter().for_each(|t| type_mentions(t, out)),
+        Type::Function { params, ret } => {
+            params.iter().for_each(|t| type_mentions(t, out));
+            type_mentions(ret, out);
+        }
+        Type::Generic(g) => {
+            out.push(g.name.clone());
+            g.args.iter().for_each(|t| type_mentions(t, out));
+        }
+    }
+}
+
+/// What the module at `abs` declares, from [`DECLARED`] when its tree has
+/// not changed.
+fn declared_types(abs: &Path, io: SeedIo<'_>) -> Option<Arc<DeclaredTypes>> {
+    let module = parsed_module(abs, io)?;
+    let cached = DECLARED.with(|c| {
+        c.borrow()
+            .get(abs)
+            .filter(|(tree, _)| Arc::ptr_eq(tree, &module))
+            .map(|(_, declared)| declared.clone())
+    });
+    if let Some(declared) = cached {
+        return Some(declared);
+    }
+
+    // With accessors' return types inferred, as they are for a direct
+    // import.
+    let (mut classes, interfaces, enums, interface_methods, _params) =
+        saule_semantic::build_registry(&module);
+    let mut funcs = saule_semantic::build_function_registry(&module);
+    saule_semantic::infer_missing_returns(&module, &mut classes, &interfaces, &enums, &mut funcs);
+
+    let dir = abs.parent().map(Path::to_path_buf).unwrap_or_default();
+    let mut imports = Vec::new();
+    for stmt in &module.stmts {
+        let Stmt::Decl(d) = &stmt.value else { continue };
+        let Decl::Import { path, .. } = &d.value else {
+            continue;
+        };
+        if crate::native_packages::lookup(path).is_some()
+            || crate::dynamic_packages::is_dynamic_package(path)
+        {
+            imports.push(Reached::Package(path.clone()));
+        } else if let Some(next) = resolve_import_path(&dir, path) {
+            imports.push(Reached::Module(next));
+        }
+    }
+
+    let declared = Arc::new(DeclaredTypes {
+        classes,
+        enums,
+        interfaces,
+        interface_methods,
+        imports,
+    });
+    DECLARED.with(|c| {
+        c.borrow_mut()
+            .insert(abs.to_path_buf(), (module, declared.clone()))
+    });
+    Some(declared)
+}
+
+/// Make every class and enum of the native packages a module imports from
+/// known to the checker, imported by name or not.
+///
+/// A package's functions return its own types: `Compositor.poll()` returns
+/// `table<WindowEvent>`. The checker reads a value's members from the seed,
+/// so with only `Compositor` imported, `ev.id` on such a value had no type
+/// at all, and assigning it anywhere was an error the program couldn't fix
+/// short of importing a name it never writes.
+///
+/// Runs after every import and only fills gaps: a name any import actually
+/// binds still means that. A name the module declares itself wins too, but
+/// that is decided where the seed meets the module's own declarations
+/// (`saule_semantic::analyze_inner`): the seed is built from the module's
+/// imports alone, and cached on them.
+fn seed_package_types(seed: &mut saule_semantic::ModuleSeed, packages: &[&str]) {
+    let all = ImportNames::All;
+    let mut classes = Vec::new();
+    let mut enums = Vec::new();
+    let mut interfaces = Vec::new();
+    for path in packages {
+        if let Some(pkg) = crate::native_packages::lookup(path) {
+            let built = (pkg.builtins)();
+            classes.extend(built.classes);
+            enums.extend(built.enums);
+            interfaces.extend(built.interfaces);
+        } else {
+            classes.extend(crate::dynamic_packages::seed_classes(path, &all));
+            enums.extend(crate::dynamic_packages::seed_enums(path, &all));
+            interfaces.extend(crate::dynamic_packages::seed_interfaces(path, &all));
+        }
+    }
+    let free = |seed: &saule_semantic::ModuleSeed, name: &str| {
+        !seed.classes.contains_key(name)
+            && !seed.enums.contains_key(name)
+            && !seed.interfaces.contains_key(name)
+    };
+    for (name, info) in classes {
+        if free(seed, &name) {
+            seed.classes.insert(name, info);
+        }
+    }
+    for (name, info) in enums {
+        if free(seed, &name) {
+            seed.enums.insert(name, info);
+        }
+    }
+    for (name, extends) in interfaces {
+        if free(seed, &name) {
+            seed.interfaces.insert(name, extends);
+        }
+    }
 }
 
 /// The names `key`, exported by the imported module, is known by here: a

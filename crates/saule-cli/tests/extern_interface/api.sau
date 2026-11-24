@@ -1,0 +1,25 @@
+export class KeyEvent
+  key: string = ""
+  pressed: boolean = false
+end
+
+export extern interface WindowEvents
+  async fn configure(width: integer, height: integer)
+  async fn key(event: KeyEvent)
+  fn title() -> string
+end
+
+export extern interface AppWindow
+  fn id() -> integer
+  async fn setTitle(title: string)
+end
+
+export extern interface Display
+  fn createWindow(title: string, events: WindowEvents) -> AppWindow
+  fn screenSize() -> (integer, integer)
+  fn echo(items: table<string>) -> table<string>
+  fn fail()
+  async fn ping(n: integer)
+  fn stats() -> table<string, integer>
+  fn shutdown()
+end

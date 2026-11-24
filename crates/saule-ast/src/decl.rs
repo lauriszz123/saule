@@ -43,6 +43,9 @@ pub enum Decl {
     },
     Interface {
         exported: bool,
+        /// `extern interface`: implemented in another process. Calling one
+        /// of its methods is a call over IPC; values of it are proxies.
+        is_extern: bool,
         name: String,
         /// Generic type parameters declared with `<T, U>` after the name.
         type_params: Vec<String>,
@@ -221,6 +224,8 @@ pub struct Method {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MethodSig {
     pub name: String,
+    /// `async fn` in an `extern interface`: the caller does not wait for it.
+    pub is_async: bool,
     /// Generic type parameters declared with `<T, U>` after the method name.
     /// A method's own parameters, distinct from the interface's — in
     /// `interface Seq<T> … fn mapTo<U>(f: fn(T) -> U) -> Seq<U>`, `T` belongs

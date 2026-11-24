@@ -1,0 +1,128 @@
+-- Every kind of value an `extern interface` call can carry, there and back.
+--
+-- The program publishes a service and connects to it itself: one process,
+-- but the call still goes through a real socket, the full encoding, and a
+-- caller that serves its own incoming call while it waits. That keeps the
+-- fixture a single file that runs the same everywhere the suite does.
+
+export class Point
+	x: float = 0.0
+	y: float = 0.0
+	label: string? = nil
+end
+
+export class Shape
+	name: string = ""
+	corners: table<Point> = {}
+end
+
+export extern interface Echo
+	fn int(v: integer) -> integer
+	fn float(v: float) -> float
+	fn bool(v: boolean) -> boolean
+	fn text(v: string) -> string
+	fn bytes(v: bytes) -> bytes
+	fn maybe(v: string?) -> string?
+	fn list(v: table<integer>) -> table<integer>
+	fn map(v: table<string, integer>) -> table<string, integer>
+	fn point(p: Point) -> Point
+	fn shape(s: Shape) -> Shape
+	fn anything(v: any) -> any
+	fn pair() -> (integer, string)
+	fn nothing()
+end
+
+class EchoService implements Echo
+	fn int(v: integer) -> integer
+		return v
+	end
+	fn float(v: float) -> float
+		return v
+	end
+	fn bool(v: boolean) -> boolean
+		return v
+	end
+	fn text(v: string) -> string
+		return v
+	end
+	fn bytes(v: bytes) -> bytes
+		return v
+	end
+	fn maybe(v: string?) -> string?
+		return v
+	end
+	fn list(v: table<integer>) -> table<integer>
+		return v
+	end
+	fn map(v: table<string, integer>) -> table<string, integer>
+		return v
+	end
+	fn point(p: Point) -> Point
+		return p
+	end
+	fn shape(s: Shape) -> Shape
+		return s
+	end
+	fn anything(v: any) -> any
+		return v
+	end
+	fn pair() -> (integer, string)
+		return 7, "seven"
+	end
+	fn nothing()
+	end
+end
+
+local name = "fixture.values." .. tostring(Os.pid())
+Echo.publish(name, EchoService())
+local echo = Echo.connect(name)
+
+assert(echo.int(-42) == -42)
+assert(echo.int(9007199254740993) == 9007199254740993)
+assert(echo.float(1.5) == 1.5)
+assert(echo.bool(true) == true and echo.bool(false) == false)
+assert(echo.text("héllo, wörld") == "héllo, wörld")
+assert(echo.text("") == "")
+assert(Bytes.toString(echo.bytes(Bytes.fromString("raw\n"))) == "raw\n")
+assert(echo.maybe("x") == "x")
+assert(echo.maybe(nil) == nil)
+
+local l = echo.list({ 3, 1, 2 })
+assert(#l == 3 and l[1] == 3 and l[3] == 2)
+assert(#echo.list({}) == 0)
+
+local m = echo.map({ a: 1, b: 2 })
+assert(m["a"] == 1 and m["b"] == 2)
+
+-- A data class arrives as an instance of the same class, copied.
+local p = Point()
+p.x = 1.0
+p.y = 2.0
+p.label = "origin-ish"
+local q = echo.point(p)
+assert(q.x == 1.0 and q.y == 2.0 and q.label == "origin-ish")
+q.x = 99.0
+assert(p.x == 1.0, "a copy, not the same object")
+
+-- Nested: a data class holding a table of data classes.
+local s = Shape()
+s.name = "triangle"
+for i = 1, 3 do
+	local c = Point()
+	c.x = i as float
+	s.corners[i] = c
+end
+local s2 = echo.shape(s)
+assert(s2.name == "triangle" and #s2.corners == 3 and s2.corners[3].x == 3.0)
+
+-- `any` carries what it holds.
+assert(echo.anything(5) == 5)
+assert(echo.anything("s") == "s")
+local t: any = echo.anything({ 1, 2 })
+assert(t != nil)
+
+local n, word = echo.pair()
+assert(n == 7 and word == "seven")
+echo.nothing()
+
+println("values ok")

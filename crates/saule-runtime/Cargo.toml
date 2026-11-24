@@ -36,6 +36,28 @@ object = { version = "0.37", default-features = false, features = ["read_core", 
 # else in the crate already compiles for wasm; this was the only blocker.
 libloading = { version = "0.8", optional = true }
 
+# Inter-process calls: the transport is its own crate (also used by Shine);
+# `src/ipc/lang.rs` binds it to Saule values. Unix and Windows; compiled out
+# elsewhere, wasm included.
+[target.'cfg(any(unix, windows))'.dependencies]
+saule-ipc = { path = "../saule-ipc" }
+
+# `Pty` (`src/stdlib/pty.rs`): a pseudo-terminal through `openpty` on Unix,
+# and through ConPTY on Windows.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [features]
 default = ["native-packages"]
 # Loading third-party native packages (`~/.saule/native_packages/*.so|dylib|dll`)

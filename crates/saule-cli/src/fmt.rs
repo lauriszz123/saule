@@ -75,6 +75,7 @@ impl FmtArgs {
                 (_, true) => Some(false),
                 _ => None,
             },
+            max_width: None,
             warnings: Vec::new(),
         }
     }

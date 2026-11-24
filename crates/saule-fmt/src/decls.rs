@@ -108,6 +108,7 @@ impl<'a> Printer<'a> {
             }
             Decl::Interface {
                 exported,
+                is_extern,
                 name,
                 type_params,
                 type_bounds,
@@ -116,6 +117,9 @@ impl<'a> Printer<'a> {
             } => {
                 if *exported {
                     self.write("export ");
+                }
+                if *is_extern {
+                    self.write("extern ");
                 }
                 self.write("interface ");
                 self.write(name);
@@ -334,6 +338,9 @@ impl<'a> Printer<'a> {
     }
 
     pub(crate) fn method_sig(&mut self, m: &MethodSig) {
+        if m.is_async {
+            self.write("async ");
+        }
         self.write("fn ");
         self.write(&m.name);
         self.type_params(&m.type_params, &m.type_bounds);

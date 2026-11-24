@@ -24,11 +24,26 @@ pub(crate) fn member_items(recv: &Spanned<Expr>, found: &Found) -> Vec<Completio
         // from the native signature registry instead. A user class of the
         // same name still wins, so shadowing behaves as it reads.
         Some(Recv::Instance(c)) if !with_classes(|r| r.contains_key(&c)) => module_members(&c),
-        Some(Recv::Instance(c)) => class_members(&c, Visibility::PublicOnly, MemberSet::Instance),
-        Some(Recv::Static(c)) => class_members(&c, Visibility::PublicOnly, MemberSet::Static),
+        Some(Recv::Instance(c)) => {
+            class_members(&c, visibility_from(&c, found), MemberSet::Instance)
+        }
+        Some(Recv::Static(c)) => class_members(&c, visibility_from(&c, found), MemberSet::Static),
         Some(Recv::Module(m)) => module_members(&m),
         Some(Recv::Enum(e)) => enum_variants(&e),
         None => Vec::new(),
+    }
+}
+
+/// What of `class` the caret may see. A `local` member is reachable from
+/// anywhere inside the class that declares it — through `self`, through the
+/// class name (`Object.nextId` in `Object`'s own `init`) and through another
+/// instance of it — and from nowhere else, a subclass included. The checker
+/// enforces exactly that, so completion offers exactly that.
+fn visibility_from(class: &str, found: &Found) -> Visibility {
+    if found.class.as_deref() == Some(class) {
+        Visibility::IncludePrivate
+    } else {
+        Visibility::PublicOnly
     }
 }
 
@@ -53,14 +68,16 @@ pub(crate) fn class_members(class: &str, vis: Visibility, set: MemberSet) -> Vec
     let mut current = Some(class.to_string());
 
     while let Some(cls) = current {
-        let (members, parent) = with_classes(|r| {
+        let (members, parent, static_fields) = with_classes(|r| {
             r.get(&cls)
-                .map(|i| (i.members.clone(), i.parent.clone()))
+                .map(|i| (i.members.clone(), i.parent.clone(), i.static_fields.clone()))
                 .unwrap_or_default()
         });
 
         for (name, is_private) in members {
-            if is_private && vis == Visibility::PublicOnly {
+            // A parent's `local` members are not the child's to use, so even
+            // `self.` inside a subclass stops at the class it starts from.
+            if is_private && (vis == Visibility::PublicOnly || cls != class) {
                 continue;
             }
             if seen.contains(&name) {
@@ -72,15 +89,20 @@ pub(crate) fn class_members(class: &str, vis: Visibility, set: MemberSet) -> Vec
             if name == "init" {
                 continue;
             }
-            if let Some(sig) = &method {
-                let wanted = match set {
-                    MemberSet::All => true,
-                    MemberSet::Instance => !sig.is_static,
-                    MemberSet::Static => sig.is_static,
-                };
-                if !wanted {
-                    continue;
-                }
+            // Fields as well as methods: `Thing.shown` on an instance field
+            // is a runtime error, so the class name offers statics only and
+            // an object offers everything else.
+            let is_static = match &method {
+                Some(sig) => sig.is_static,
+                None => static_fields.contains(&name),
+            };
+            let wanted = match set {
+                MemberSet::All => true,
+                MemberSet::Instance => !is_static,
+                MemberSet::Static => is_static,
+            };
+            if !wanted {
+                continue;
             }
             seen.push(name.clone());
 

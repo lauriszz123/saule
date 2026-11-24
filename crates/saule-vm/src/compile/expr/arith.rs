@@ -415,6 +415,21 @@ impl Compiler<'_> {
         dst: u16,
     ) -> Result<(), CompileError> {
         let span = &lhs.span;
+
+        // `x = found ?? x`: the left side is computed into the destination,
+        // and here that is `x`'s own register, so by the time the right side
+        // read `x` it would read the left side's nil (or false) instead. A
+        // right side that reads the destination is given the answer in a
+        // temporary, moved into place once both sides are done.
+        if self.reads_register(rhs, dst) {
+            let m = self.mark();
+            let tmp = self.alloc(span)?;
+            self.short_circuit_to(op, lhs, rhs, tmp)?;
+            self.move_result(tmp, dst, span)?;
+            self.free_to(m);
+            return Ok(());
+        }
+
         self.expr_to(lhs, dst)?;
         let a = self.reg8(dst, span)?;
 
@@ -460,6 +475,36 @@ impl Compiler<'_> {
         self.expr_to(rhs, dst)?;
         self.patch_here(keep_left)?;
         Ok(())
+    }
+}
+
+impl Compiler<'_> {
+    /// Whether evaluating `e` reads register `reg` through a local's name:
+    /// whether writing `reg` before `e` runs would change what it computes.
+    /// A name shadowed inside a lambda in `e` still counts, which only costs
+    /// a temporary.
+    fn reads_register(&self, e: &Spanned<Expr>, reg: u16) -> bool {
+        struct Reads<'a> {
+            f: &'a crate::compile::ctx::func::FuncCtx,
+            reg: u16,
+            found: bool,
+        }
+        impl saule_ast::Visitor for Reads<'_> {
+            fn expr(&mut self, e: &Spanned<Expr>) {
+                if let Expr::Ident(name) = &e.value
+                    && self.f.lookup(name) == Some(self.reg)
+                {
+                    self.found = true;
+                }
+            }
+        }
+        let mut reads = Reads {
+            f: &self.f,
+            reg,
+            found: false,
+        };
+        saule_ast::visit_expr(e, &mut reads);
+        reads.found
     }
 }
 

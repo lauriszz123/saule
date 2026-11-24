@@ -601,7 +601,9 @@ impl Compiler<'_> {
 
 /// `(variant, value)`: give a valued variant the value its declaration
 /// computed. See [`Compiler::enum_values`].
-fn set_variant_value(args: &[saule_runtime::Value]) -> Result<saule_runtime::Value, String> {
+pub(crate) fn set_variant_value(
+    args: &[saule_runtime::Value],
+) -> Result<saule_runtime::Value, String> {
     if let [saule_runtime::Value::EnumVariant(v), value] = args {
         // Set once, and a module body runs once — a second call has nothing
         // to change.
