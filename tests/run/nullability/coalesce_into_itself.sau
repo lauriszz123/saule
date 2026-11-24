@@ -1,0 +1,37 @@
+-- `x = other ?? x` (and `or`, `and`) assigning back to a local the right side
+-- reads. The left side used to be computed straight into `x`'s register, so
+-- when it was nil the right side read that nil instead of `x`, and a typed
+-- read after it failed as an internal error.
+class Node
+	name: string
+
+	fn init(name: string)
+		self.name = name
+	end
+
+	fn find(wanted: string) -> Node?
+		if wanted == self.name then
+			return self
+		end
+		return nil
+	end
+end
+
+class Main
+	static fn main()
+		local root: Node = Node("root")
+		local target: Node = root
+		target = root.find("missing") ?? target
+		println(target.name)  -- "root"
+
+		local none: string? = nil
+		local word: string? = "kept"
+		word = none ?? word
+		println(word!)  -- "kept"
+
+		local flag: boolean = true
+		local off: boolean = false
+		flag = off or flag
+		println(tostring(flag))  -- "true"
+	end
+end
