@@ -37,10 +37,50 @@ mod test;
 /// Reserving a large stack here is what makes
 /// [`saule_runtime::call::MAX_CALL_DEPTH`] the binding limit instead of
 /// the OS, so deep-but-bounded nesting runs and unbounded nesting gets a
-/// real diagnostic. This is address space, not committed memory — pages are
-/// faulted in only as the stack actually grows. rustc does the same thing for
-/// the same reason.
+/// real diagnostic. Its pages are faulted in only as the stack actually
+/// grows. rustc does the same thing for the same reason.
+///
+/// The most it reserves, that is: see [`run_stack_size`].
 const RUN_STACK_SIZE: usize = 1024 * 1024 * 1024;
+
+/// The stack to reserve here: [`RUN_STACK_SIZE`], or half of the machine's
+/// memory where that is less.
+///
+/// Linux does not treat a thread's stack as address space only. The C
+/// library maps it as ordinary private memory, and under the kernel's
+/// default overcommit rules a single mapping larger than the machine's
+/// memory is refused outright. On a 1 GB netbook every Saule program asked
+/// for 1 GiB, the kernel logged `__vm_enough_memory: … not enough memory`,
+/// the spawn failed, and the program fell back to the main thread's 8 MiB
+/// — losing the very headroom the large stack is there for. Half the
+/// memory is granted, and still carries deep nesting comfortably.
+fn run_stack_size() -> usize {
+    stack_for_memory(physical_memory())
+}
+
+/// [`run_stack_size`] for a machine with `memory` bytes, or with an
+/// unknown amount, which keeps the full reservation.
+fn stack_for_memory(memory: Option<u64>) -> usize {
+    match memory {
+        Some(bytes) => {
+            let half = usize::try_from(bytes / 2).unwrap_or(usize::MAX);
+            RUN_STACK_SIZE.min(half).max(DEFAULT_MAIN_STACK_SIZE)
+        }
+        None => RUN_STACK_SIZE,
+    }
+}
+
+/// The machine's memory in bytes: `MemTotal` from `/proc/meminfo` on Linux,
+/// where it matters (see [`run_stack_size`]); unknown elsewhere.
+fn physical_memory() -> Option<u64> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let info = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = info.lines().find(|l| l.starts_with("MemTotal:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    kb.checked_mul(1024)
+}
 
 fn main() {
     // macOS: stay on the process's first thread. AppKit refuses window and
@@ -58,10 +98,11 @@ fn main() {
     // Everything runs on the big-stack thread; `main` only joins it and
     // forwards the exit code. Nothing below should call `std::process::exit`
     // expecting to bypass this.
+    let stack = run_stack_size();
     let spawned = std::thread::Builder::new()
         .name("saule-main".into())
-        .stack_size(RUN_STACK_SIZE)
-        .spawn(|| real_main(RUN_STACK_SIZE));
+        .stack_size(stack)
+        .spawn(move || real_main(stack));
 
     match spawned {
         // A panic in the child has already printed its message; propagate it
@@ -181,6 +222,37 @@ const PROFILE_ROWS: usize = 20;
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// The HP Mini 210: 1 GB, of which the kernel reports a little less. A
+    /// 1 GiB stack was refused there; half of what it has is granted.
+    #[test]
+    fn a_small_machine_reserves_half_its_memory() {
+        let netbook = 1_013_000 * 1024;
+        assert_eq!(stack_for_memory(Some(netbook)), (netbook / 2) as usize);
+    }
+
+    #[test]
+    fn a_machine_with_room_reserves_the_full_stack() {
+        assert_eq!(stack_for_memory(Some(16 * GIB)), RUN_STACK_SIZE);
+        assert_eq!(stack_for_memory(Some(2 * GIB)), RUN_STACK_SIZE);
+    }
+
+    #[test]
+    fn unknown_memory_reserves_the_full_stack() {
+        assert_eq!(stack_for_memory(None), RUN_STACK_SIZE);
+    }
+
+    /// However little there is, never less than a main thread would have:
+    /// the spawned thread is no worse than falling back.
+    #[test]
+    fn a_tiny_machine_still_gets_the_default_stack() {
+        assert_eq!(
+            stack_for_memory(Some(4 * 1024 * 1024)),
+            DEFAULT_MAIN_STACK_SIZE
+        );
+    }
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("args should parse")
