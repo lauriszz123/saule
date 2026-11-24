@@ -283,9 +283,16 @@ pub fn rejection(name: &str) -> Option<String> {
 /// `saule-typeck`. Wired into the typeck initializer so it runs once per
 /// thread that type-checks — see [`crate::stdlib::register_all_sigs`].
 ///
-/// Only *static* members go into this table: it is keyed `Class.member`,
-/// and a class listed in it counts as a module whose members may be called
-/// statically. An object's methods and properties are typed through the
+/// Only *static* members go into this table: it is keyed
+/// `package::Class.member` ([`saule_typeck::sigs::package_module`]), and a
+/// class listed in it counts as a module whose members may be called
+/// statically. The package is part of the key because the table is shared
+/// by every installed package and two of them may export a class of the
+/// same name: keyed by class alone, whichever registered last answered for
+/// both, and that was decided by hash order, so it changed between runs.
+/// The checker reaches a key through the class registry, which knows what
+/// each name in the code was imported from (see
+/// `saule_semantic::ClassInfo::native_module`). An object's methods and properties are typed through the
 /// class metadata [`seed_classes`] gives the checker instead, the same way
 /// a Saule class's are, which is what keeps `Image.width()` — an instance
 /// method called on the class — an error.
@@ -309,7 +316,8 @@ pub fn register_sigs() {
     for manifest in map.values() {
         for class in &manifest.exports {
             for method in class.members(Receiver::Static) {
-                let qname = format!("{}.{}", class.name, method.name);
+                let module = saule_typeck::sigs::package_module(&manifest.name, &class.name);
+                let qname = format!("{module}.{}", method.name);
                 if method.type_params.is_empty() {
                     saule_typeck::sigs::register(
                         &qname,

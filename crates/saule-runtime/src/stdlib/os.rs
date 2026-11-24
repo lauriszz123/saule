@@ -1227,6 +1227,7 @@ pub fn builtin_registries() -> (
         field_types: Default::default(),
         static_fields: Default::default(),
         methods: Default::default(),
+        native_module: None,
     };
     let fields: [(&str, Type); 5] = [
         ("path", Type::Named("string".to_string())),

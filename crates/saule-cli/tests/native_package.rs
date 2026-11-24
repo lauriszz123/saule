@@ -23,30 +23,35 @@ fn workspace_root() -> PathBuf {
 /// Build the fixture package once per test run and return its library.
 fn fixture_library() -> &'static Path {
     static BUILT: OnceLock<PathBuf> = OnceLock::new();
-    BUILT.get_or_init(|| {
-        // A target directory of its own: this runs while `cargo test` may
-        // still hold the workspace's.
-        let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
-        let status = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "--quiet",
-                "-p",
-                "saule-native-fixture",
-                "--target-dir",
-            ])
-            .arg(&target)
-            .current_dir(workspace_root())
-            .status()
-            .expect("run cargo to build the fixture package");
-        assert!(status.success(), "building saule-native-fixture failed");
-        let file = format!(
-            "{}saule_fixture{}",
-            std::env::consts::DLL_PREFIX,
-            std::env::consts::DLL_SUFFIX
-        );
-        target.join("debug").join(file)
-    })
+    BUILT.get_or_init(|| build_library("saule-native-fixture", "saule_fixture"))
+}
+
+/// Build the rival package — a second package with a `Util` class of its
+/// own — once per test run and return its library.
+fn rival_library() -> &'static Path {
+    static BUILT: OnceLock<PathBuf> = OnceLock::new();
+    BUILT.get_or_init(|| build_library("saule-native-rival", "saule_rival"))
+}
+
+/// Build the workspace crate `package` as a shared library and return the
+/// path of `lib`, the library file cargo makes of it.
+fn build_library(package: &str, lib: &str) -> PathBuf {
+    // A target directory of its own: this runs while `cargo test` may
+    // still hold the workspace's.
+    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("native-fixture-target");
+    let status = Command::new(env!("CARGO"))
+        .args(["build", "--quiet", "-p", package, "--target-dir"])
+        .arg(&target)
+        .current_dir(workspace_root())
+        .status()
+        .expect("run cargo to build a test package");
+    assert!(status.success(), "building {package} failed");
+    let file = format!(
+        "{}{lib}{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    );
+    target.join("debug").join(file)
 }
 
 /// A fresh `SAULE_HOME` for one test, with `libraries` installed into its
@@ -644,6 +649,117 @@ fn two_libraries_claiming_one_package_are_both_refused() {
     let out = saule(&home, "check", "from \"fixture\" import *\n");
     let err = stderr(&out);
     assert!(err.contains("is installed more than once"), "{err}");
+}
+
+// ─── Two packages, one class name ──────────────────────────────────────────
+
+/// A home with both the fixture and the rival installed: two packages that
+/// each export a class called `Util`.
+fn rivals_home(test: &str) -> PathBuf {
+    let fixture = fixture_library();
+    let rival = rival_library();
+    let name = |p: &Path| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .expect("file name")
+            .to_string()
+    };
+    home(test, &[(fixture, &name(fixture)), (rival, &name(rival))])
+}
+
+/// How many times each check below runs. Static signatures used to share
+/// one table keyed by class name, filled from the installed packages in
+/// hash order, so which `Util.greet` a program was checked against changed
+/// from one run to the next: once is not enough to see it.
+const RUNS: usize = 8;
+
+/// A program is checked against the `Util` of the package it imported,
+/// whichever other package also has one.
+#[test]
+fn a_class_is_checked_against_the_package_it_was_imported_from() {
+    let home = rivals_home("rivals-checked");
+    for _ in 0..RUNS {
+        // Each package's own call is clean...
+        for (package, call) in [
+            ("fixture", "Util.greet(\"ada\")"),
+            ("rival", "Util.greet()"),
+        ] {
+            let out = saule(
+                &home,
+                "check",
+                &format!("from \"{package}\" import *\n{call}\n"),
+            );
+            assert!(
+                out.status.success(),
+                "`{call}` is right for `{package}`: {}",
+                stderr(&out)
+            );
+        }
+
+        // ...and the other's is not. The fixture's `greet` needs a name;
+        // the rival's takes nothing.
+        let fixture = saule(&home, "check", "from \"fixture\" import *\nUtil.greet()\n");
+        let err = stderr(&fixture);
+        assert!(
+            err.contains("`Util.greet` expects 1 argument(s), got 0"),
+            "the fixture's `Util.greet` takes a name: {err}"
+        );
+
+        let rival = saule(
+            &home,
+            "check",
+            "from \"rival\" import *\nUtil.greet(\"ada\")\n",
+        );
+        let err = stderr(&rival);
+        assert!(
+            err.contains("`Util.greet` expects 0 argument(s), got 1"),
+            "the rival's `Util.greet` takes nothing: {err}"
+        );
+    }
+}
+
+/// And it runs against that package too, every time.
+#[test]
+fn a_class_runs_against_the_package_it_was_imported_from() {
+    let home = rivals_home("rivals-run");
+    for _ in 0..RUNS {
+        let out = run_ok(
+            &home,
+            "from \"fixture\" import *\nprintln(Util.greet(\"ada\"))\n",
+        );
+        assert_eq!(out, "hello, ada.\n");
+        let out = run_ok(&home, "from \"rival\" import *\nprintln(Util.greet())\n");
+        assert_eq!(out, "hello from rival\n");
+    }
+}
+
+/// A package imported under another name keeps its signatures.
+#[test]
+fn an_aliased_native_class_keeps_its_signatures() {
+    let home = rivals_home("rivals-alias");
+    let out = saule(
+        &home,
+        "check",
+        "from \"rival\" import Util as Rival\nRival.greet(\"ada\")\n",
+    );
+    let err = stderr(&out);
+    assert!(
+        err.contains("`Rival.greet` expects 0 argument(s), got 1"),
+        "{err}"
+    );
+}
+
+/// An installed package's class says nothing about a program's own class
+/// that happens to share its name — even in a program that imports
+/// something else from that package.
+#[test]
+fn a_programs_own_class_is_not_mistaken_for_an_installed_one() {
+    let home = rivals_home("rivals-own-class");
+    let out = run_ok(
+        &home,
+        "from \"fixture\" import Counter\n\nclass Util\n    fn init()\n    end\n\n    static fn greet(a: integer, b: integer) -> integer\n        return a + b\n    end\nend\n\nprintln(Util.greet(2, 3))\n",
+    );
+    assert_eq!(out, "5\n");
 }
 
 // ─── operator overloading on a native class ────────────────────────────────

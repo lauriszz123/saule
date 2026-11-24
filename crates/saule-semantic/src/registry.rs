@@ -89,6 +89,17 @@ pub struct ClassInfo {
     /// on the class so the typechecker can answer "what does
     /// `Foo.bar(...)` return?".
     pub methods: HashMap<String, MethodSig>,
+    /// For a class a native package exports: the key its static members are
+    /// registered under in the native signature table,
+    /// `saule_sigs::package_module(package, class)`. `None` for every other
+    /// class.
+    ///
+    /// The class registry holds each class under the name the code being
+    /// checked knows it by, so this is how `Graphics.setFont` — or
+    /// `G.setFont` after `import Graphics as G` — finds the signature of the
+    /// package it was imported from, and not one from another installed
+    /// package with a `Graphics` of its own.
+    pub native_module: Option<String>,
 }
 
 pub type ClassRegistry = HashMap<String, ClassInfo>;
@@ -505,6 +516,8 @@ pub fn build_registry(
                         field_types: HashMap::new(),
                         static_fields: HashSet::new(),
                         methods: HashMap::new(),
+                        // A class declared in Saule source is no package's.
+                        native_module: None,
                     };
                     for m in members {
                         match &m.value {

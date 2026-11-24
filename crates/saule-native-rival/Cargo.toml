@@ -1,0 +1,17 @@
+[package]
+name = "saule-native-rival"
+version.workspace = true
+edition.workspace = true
+description = "A native package whose class shares its name with one in saule-native-fixture. Built by the test suites to prove two packages never see each other's signatures; never shipped."
+license.workspace = true
+publish = false
+
+[lib]
+name = "saule_rival"
+# A cdylib only, like the fixture: the tests install it into a throwaway
+# `native_packages/` beside the fixture and load it from there.
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+saule-sdk = { path = "../saule-sdk" }

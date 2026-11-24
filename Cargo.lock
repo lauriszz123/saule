@@ -885,6 +885,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "saule-native-rival"
+version = "26.0.0"
+dependencies = [
+ "saule-sdk",
+]
+
+[[package]]
 name = "saule-parser"
 version = "26.0.0"
 dependencies = [

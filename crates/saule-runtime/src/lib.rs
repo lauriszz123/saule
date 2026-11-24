@@ -111,6 +111,15 @@ pub fn init() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         saule_typeck::sigs::set_initializer(stdlib::register_all_sigs);
+        // A native package's static members are registered under the
+        // package's name (`shine::Graphics.setFont`); what a name in the
+        // code stands for is the class registry's to say, since it holds
+        // each class under the name it was imported as.
+        saule_typeck::sigs::set_module_resolver(|local| {
+            saule_semantic::with_classes(|classes| {
+                classes.get(local).and_then(|c| c.native_module.clone())
+            })
+        });
         saule_semantic::prelude::set_provider(stdlib::all_prelude_names);
         saule_semantic::builtins::set_provider(stdlib::builtin_registries);
         // Built-in native packages — anything we ship with the runtime that

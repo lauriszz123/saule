@@ -365,7 +365,7 @@ fn class_info_uses_the_signatures_param_names() {
         ),
     ])
     .expect("the package should assemble");
-    let info = class_info(&m.exports[0]);
+    let info = class_info(&m.name, &m.exports[0]);
     let sig = info.methods.get("circle").expect("circle method");
     let names: Vec<&str> = sig.params.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["mode", "x", "y", "radius"]);
@@ -385,7 +385,7 @@ fn class_info_describes_objects_like_a_saule_class() {
         method_rec("Image", "width", "getter", "fn() -> integer"),
     ])
     .expect("the package should assemble");
-    let info = class_info(&m.exports[0]);
+    let info = class_info(&m.name, &m.exports[0]);
 
     let init = info.methods.get("init").expect("a constructor");
     assert!(!init.is_static);

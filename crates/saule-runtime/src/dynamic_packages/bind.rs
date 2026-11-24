@@ -333,7 +333,7 @@ pub fn seed_classes(
         .flat_map(|class| {
             local_names(&class.name, names)
                 .into_iter()
-                .map(|local| (local, class_info(class)))
+                .map(|local| (local, class_info(&manifest.name, class)))
         })
         .collect()
 }
@@ -424,8 +424,14 @@ fn split_interface(spelled: &str) -> (String, Vec<saule_ast::Type>) {
     }
 }
 
-pub(crate) fn class_info(class: &ClassSpec) -> saule_semantic::ClassInfo {
-    let mut info = saule_semantic::ClassInfo::default();
+pub(crate) fn class_info(package: &str, class: &ClassSpec) -> saule_semantic::ClassInfo {
+    let mut info = saule_semantic::ClassInfo {
+        // Where `register_sigs` put this class's static members: under the
+        // package's name, so another package's class of the same name
+        // cannot answer for it.
+        native_module: Some(saule_typeck::sigs::package_module(package, &class.name)),
+        ..saule_semantic::ClassInfo::default()
+    };
 
     // `implements` and `implements_args` are positional, so they are pushed
     // together. Populating them is what makes `a + b` on a native object
