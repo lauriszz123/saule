@@ -414,7 +414,7 @@ mod sys {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::sync::{Arc, Mutex};
 
-    use windows_sys::Win32::Foundation::{HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
     use windows_sys::Win32::Storage::FileSystem::{ReadFile, WriteFile};
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
@@ -423,8 +423,8 @@ mod sys {
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
         GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTUPINFOEXW,
-        TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     /// What the reader thread has collected: the bytes, and whether the
@@ -549,6 +549,16 @@ mod sys {
                 let mut si: STARTUPINFOEXW = std::mem::zeroed();
                 si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
                 si.lpAttributeList = attrs;
+                // Standard handles said to be none, so the program's come
+                // from the pseudo-console. Left unsaid, a parent whose own
+                // output is redirected (a pipe, as under CI or a window
+                // manager) hands the child that pipe instead: its output
+                // went past the console, and only the console's own
+                // escape codes ever arrived here.
+                si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+                si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
+                si.StartupInfo.hStdOutput = INVALID_HANDLE_VALUE;
+                si.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
                 let ok = CreateProcessW(
                     std::ptr::null(),
