@@ -95,7 +95,7 @@ pub enum ParseError {
     ///
     /// Its own variant rather than "expected a type, found `>`" because that
     /// message describes the parser's position, not the mistake: the brackets
-    /// are optional in the first place, so "you left them empty" comes with
+    /// are optional in the first place, so "they were left empty" comes with
     /// the fix already attached.
     #[error("empty type argument list")]
     #[diagnostic(help(

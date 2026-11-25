@@ -158,6 +158,21 @@ commands:
           shell: powershell.exe
           command: git config --global core.autocrlf false
       - checkout
+      - run:
+          name: Fetch the example projects (the examples/ submodule)
+          shell: powershell.exe
+          command: git submodule update --init --recursive
+
+  # The example projects are a repository of their own (saule-examples),
+  # carried here as the `examples/` submodule, and `checkout` leaves a
+  # submodule as an empty folder. `run_examples.sh`, the language server's
+  # tests and the website's generated pages all read it — and an empty
+  # folder fails none of them loudly: no projects is no failures.
+  get-examples:
+    steps:
+      - run:
+          name: Fetch the example projects (the examples/ submodule)
+          command: git submodule update --init --recursive
 
   # Everything in `test-linux` that can differ between platforms:
   # clippy (for `cfg`-gated code the Linux lint never sees), the Rust tests,
@@ -308,6 +323,7 @@ jobs:
     executor: rust-linux
     steps:
       - checkout
+      - get-examples
       - skip-if-passed:
           job: test-linux
       - restore-cargo:
@@ -390,6 +406,7 @@ jobs:
       CARGO_TERM_COLOR: always
     steps:
       - checkout
+      - get-examples
       - skip-if-passed:
           job: test-macos
       - rust-macos
@@ -432,6 +449,7 @@ jobs:
     executor: rust-linux
     steps:
       - checkout
+      - get-examples
       - skip-if-passed:
           job: check-www
       - restore-cargo:

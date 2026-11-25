@@ -111,6 +111,15 @@ pub(crate) fn type_items() -> Vec<CompletionItem> {
             ));
         }
     });
+    saule_semantic::with_aliases(|r| {
+        for (n, alias) in r {
+            items.push(item(
+                n.clone(),
+                CompletionItemKind::TYPE_PARAMETER,
+                Some(format!("type = {}", render_type(&alias.ty))),
+            ));
+        }
+    });
     items
 }
 

@@ -342,7 +342,7 @@ println(Iter.first({1, 2}) ?? 0)      -- 1
 println(Iter.first({}) == nil)        -- true
 
 -- Safer than `t[1]` when the table might be empty, because the nullability
--- is in the type rather than in your head.
+-- is in the type rather than in the programmer's head.
 local queue: table<string> = {}
 println(Iter.first(queue) ?? "<empty>")   -- <empty>
 ```

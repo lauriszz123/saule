@@ -11,8 +11,8 @@
 -- Everything is ASCII, so Lua's byte indices and Saule's codepoint indices
 -- describe the same positions and the two outputs are comparable.
 
--- Lua has no `split`; this loop is what the standard library leaves you to
--- write. `plain = true` on `find` keeps it a literal search, which is what
+-- Lua has no `split`; this loop is what the standard library leaves to be
+-- written. `plain = true` on `find` keeps it a literal search, which is what
 -- `String.split` does.
 local function split(s, sep)
 	local out = {}

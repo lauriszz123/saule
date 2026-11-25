@@ -1,0 +1,123 @@
+-- A class test follows the hierarchy: an instance is its own class, every
+-- class above it, and every interface any of them implements — including
+-- the interfaces those extend.
+
+interface Named
+	fn name() -> string
+end
+
+interface Greeter extends Named
+	fn greet() -> string
+end
+
+interface Heavy
+	fn weight() -> integer
+end
+
+class Entity
+	id: integer
+
+	fn init(id: integer)
+		self.id = id
+	end
+end
+
+class Person extends Entity implements Greeter
+	called: string
+
+	fn init(id: integer, called: string)
+		self.super(id)
+		self.called = called
+	end
+
+	fn name() -> string
+		return self.called
+	end
+
+	fn greet() -> string
+		return "hello from " .. self.called
+	end
+end
+
+class Student extends Person
+	fn init(id: integer, called: string)
+		self.super(id, called)
+	end
+end
+
+class Rock extends Entity implements Heavy
+	fn init(id: integer)
+		self.super(id)
+	end
+
+	fn weight() -> integer
+		return 90
+	end
+end
+
+enum Colour
+	Red
+	Green
+end
+
+enum Shape
+	Dot
+	Line(length: integer)
+end
+
+local person: Entity = Person(1, "Ann")
+local student: Entity = Student(2, "Bo")
+local rock: Entity = Rock(3)
+
+-- Its own class, and every class above it.
+assert(person is Person)
+assert(person is Entity)
+assert(student is Student and student is Person and student is Entity)
+
+-- Not a class beside it or below it.
+assert(person is not Rock)
+assert(person is not Student)
+assert(rock is not Person)
+
+-- Interfaces: declared on the class, inherited from the parent class, and
+-- reached through `extends` between interfaces.
+assert(person is Greeter)
+assert(person is Named)          -- `Greeter extends Named`
+assert(student is Greeter)       -- `Student extends Person`
+assert(student is Named)
+assert(rock is Heavy)
+assert(rock is not Greeter)
+assert(person is not Heavy)
+
+-- Enums are their own types; a variant with a payload is still its enum.
+local colour: any = Colour.Green
+local shape: any = Shape.Line(4)
+assert(colour is Colour)
+assert(colour is not Shape)
+assert(shape is Shape)
+
+-- Nothing that is not an instance is one.
+local number: any = 7
+local name: any = "Ann"
+assert(number is not Entity)
+assert(name is not Named)
+local thing: any = rock
+assert(thing is not Colour)
+
+-- The answer drives ordinary code.
+fn describe(entity: Entity) -> string
+	if entity is Student then
+		return "student " .. entity.name()
+	elseif entity is Greeter then
+		return entity.greet()
+	elseif entity is Heavy then
+		return "weighs " .. entity.weight()
+	end
+	return "entity " .. entity.id
+end
+
+println(describe(person), "|", describe(student), "|", describe(rock), "|", describe(Entity(4)))
+assert(describe(person) == "hello from Ann")
+assert(describe(student) == "student Bo")
+assert(describe(rock) == "weighs 90")
+assert(describe(Entity(4)) == "entity 4")

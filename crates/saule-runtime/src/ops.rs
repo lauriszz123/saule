@@ -432,7 +432,7 @@ fn bitwise(
 ///
 /// * the vacated bits are filled with **zeros**, so `>>` is a *logical*
 ///   shift — `-1 >> 1` is a large positive number, not `-1`. Use division
-///   when you want the sign-preserving one;
+///   when the sign-preserving one is wanted;
 /// * a negative `n` shifts the other way, which is what lets `>>` be
 ///   expressed as a negated `<<`;
 /// * `|n| >= 64` is `0`, since every bit really has been shifted out. This

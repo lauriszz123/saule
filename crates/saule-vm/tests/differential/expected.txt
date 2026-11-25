@@ -278,7 +278,6 @@
 918e3a8ca3034f63	V string:$1
 938b1ee64de22d5a	V integer:42
 93a3e3b39833db74	V boolean:true
-9477b34d28935ab3	V string:classclass
 96974200f458d56f	V float:1.5
 96df6b4553b7573d	V integer:2
 98d8c0869188a0c9	V integer:0
@@ -602,3 +601,4 @@ bb529ad9da28713d	E `Box` has no field or method `nope`
 9d47384c9b98554f	E integer division by zero
 39e5c3703d463fc2	E integer division by zero
 f7506a95a008e184	E cannot iterate over an `integer`
+db1d85447b1599eb	V string:classclass

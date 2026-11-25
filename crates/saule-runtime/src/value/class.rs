@@ -35,6 +35,11 @@ impl From<Rc<VmFunctionRef>> for MethodRef {
 pub struct ClassObject {
     pub name: String,
     pub parent: Option<Rc<ClassObject>>,
+    /// The interfaces this class says it `implements`, and the ones those
+    /// extend, by name. Not the parent's: a question about an instance
+    /// walks the chain, as it does for the class names themselves. It is
+    /// what `v is Drawable` and `v as Drawable` are answered from.
+    pub interfaces: Vec<String>,
     /// Slot assignment for instance fields, shared by every instance of this
     /// class. See [`FieldLayout`].
     pub layout: Rc<FieldLayout>,

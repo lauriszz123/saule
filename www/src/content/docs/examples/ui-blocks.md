@@ -12,13 +12,13 @@ sidebar:
 
 A miniature SwiftUI-shaped toolkit drawn to the terminal: every widget is a class, constructing one draws it, and containers take their children as a trailing block (`Panel(title: "…") do … end`). Shows an immediate-mode layout engine that builds no widget tree, and why a block beats a table of children — `if` and `for` work inside one.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/ui-blocks)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/ui-blocks)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/ui-blocks
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/ui-blocks
 saule run
 ```
 

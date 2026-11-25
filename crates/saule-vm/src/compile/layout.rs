@@ -74,16 +74,11 @@ impl Layouts {
     }
 }
 
-/// What [`build_interfaces`] learned about a module's interfaces: the protos,
-/// each one's index by name, and each one's transitive ancestors.
+/// What [`build_interfaces`] learned about a module's interfaces: the
+/// protos, and each one's index by name.
 pub struct Interfaces {
     pub protos: Vec<crate::chunk::InterfaceProto>,
     pub index: HashMap<String, u32>,
-    /// Every interface each one extends, transitively, excluding itself. A
-    /// class listing `implements Combatant` satisfies `Damageable` too when
-    /// `Combatant extends Damageable`, and dispatch needs an itable for each
-    /// of them — built from that one `implements` entry.
-    pub ancestors: HashMap<String, Vec<String>>,
 }
 
 /// Collect every `interface` and number its methods.
@@ -91,9 +86,18 @@ pub struct Interfaces {
 /// `extends` is flattened two ways, for two different consumers. An
 /// interface's own slot list includes everything it inherits, so an
 /// implementing class needs one itable per interface rather than one per
-/// level; and [`Interfaces::ancestors`] names the interfaces each one
-/// extends, so the class gets an itable for those as well.
-pub fn build_interfaces(module: &Module) -> Interfaces {
+/// level; and each proto names the interfaces it extends, so the class gets
+/// an itable for those as well.
+///
+/// `outside` answers for an interface this module did not declare — one an
+/// `import` brought in, by the name it has here. An interface may extend
+/// one of those, and then inherits its methods and its ancestors exactly as
+/// it would a local parent's; without it `interface Greeter extends Named`
+/// had no `name` slot whenever `Named` lived in another file.
+pub fn build_interfaces<'p>(
+    module: &Module,
+    outside: &dyn Fn(&str) -> Option<&'p crate::chunk::InterfaceProto>,
+) -> Interfaces {
     use crate::chunk::InterfaceProto;
 
     let mut decls: HashMap<&str, (Vec<&str>, Vec<&str>)> = HashMap::new();
@@ -116,10 +120,17 @@ pub fn build_interfaces(module: &Module) -> Interfaces {
         }
     }
 
+    fn push_unique(out: &mut Vec<String>, name: &str) {
+        if !out.iter().any(|o| o == name) {
+            out.push(name.to_string());
+        }
+    }
+
     /// Method names of `name`, parents first, deduplicated.
-    fn gather<'a>(
+    fn gather<'a, 'p>(
         name: &'a str,
         decls: &HashMap<&'a str, (Vec<&'a str>, Vec<&'a str>)>,
+        outside: &dyn Fn(&str) -> Option<&'p InterfaceProto>,
         seen: &mut Vec<&'a str>,
         out: &mut Vec<String>,
     ) {
@@ -128,41 +139,60 @@ pub fn build_interfaces(module: &Module) -> Interfaces {
         }
         seen.push(name);
         let Some((extends, methods)) = decls.get(name) else {
+            // Declared elsewhere: its slot list is already flat.
+            if let Some(proto) = outside(name) {
+                for m in &proto.methods {
+                    push_unique(out, m);
+                }
+            }
             return;
         };
         for p in extends.iter() {
-            gather(p, decls, seen, out);
+            gather(p, decls, outside, seen, out);
         }
         for m in methods {
-            if !out.iter().any(|o| o == m) {
-                out.push((*m).to_string());
-            }
+            push_unique(out, m);
         }
     }
 
-    /// Every interface `name` extends, transitively, excluding itself.
-    fn ancestors<'a>(
+    /// Every interface `name` extends, transitively, excluding itself — by
+    /// the name each was *declared* with, which is what an instance is
+    /// asked about at run time.
+    fn ancestors<'a, 'p>(
         name: &'a str,
         decls: &HashMap<&'a str, (Vec<&'a str>, Vec<&'a str>)>,
+        outside: &dyn Fn(&str) -> Option<&'p InterfaceProto>,
+        seen: &mut Vec<&'a str>,
         out: &mut Vec<String>,
     ) {
+        if seen.contains(&name) {
+            return;
+        }
+        seen.push(name);
         let Some((extends, _)) = decls.get(name) else {
             return;
         };
         for p in extends.iter() {
-            if !out.iter().any(|o| o == p) {
-                out.push((*p).to_string());
-                ancestors(p, decls, out);
+            match (decls.contains_key(p), outside(p)) {
+                (false, Some(proto)) => {
+                    push_unique(out, &proto.name);
+                    for a in &proto.ancestors {
+                        push_unique(out, a);
+                    }
+                }
+                _ => {
+                    push_unique(out, p);
+                    ancestors(p, decls, outside, seen, out);
+                }
             }
         }
     }
 
     let mut protos = Vec::new();
     let mut index = HashMap::new();
-    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
     for name in order {
         let mut methods = Vec::new();
-        gather(name, &decls, &mut Vec::new(), &mut methods);
+        gather(name, &decls, outside, &mut Vec::new(), &mut methods);
         let names: Vec<Rc<str>> = methods.iter().map(|m| Rc::from(m.as_str())).collect();
         let idx = names
             .iter()
@@ -170,20 +200,16 @@ pub fn build_interfaces(module: &Module) -> Interfaces {
             .map(|(i, n)| (Rc::clone(n), i as u16))
             .collect();
         let mut up = Vec::new();
-        ancestors(name, &decls, &mut up);
-        parents.insert(name.to_string(), up);
+        ancestors(name, &decls, outside, &mut Vec::new(), &mut up);
         index.insert(name.to_string(), protos.len() as u32);
         protos.push(InterfaceProto {
             name: Rc::from(name),
             methods: names,
             index: idx,
+            ancestors: up.iter().map(|a| Rc::from(a.as_str())).collect(),
         });
     }
-    Interfaces {
-        protos,
-        index,
-        ancestors: parents,
-    }
+    Interfaces { protos, index }
 }
 
 /// Collect every `enum` and assign **dense tags in declaration order**.
@@ -287,8 +313,17 @@ pub fn build(
     let Interfaces {
         protos: mut ifaces,
         index: mut iface_index,
-        ancestors: iface_parents,
-    } = build_interfaces(module);
+    } = {
+        // An imported interface, by the name this module knows it under.
+        let already: &[crate::chunk::InterfaceProto] = interfaces;
+        let outside = |name: &str| {
+            imported
+                .interfaces
+                .get(name)
+                .and_then(|i| already.get(*i as usize))
+        };
+        build_interfaces(module, &outside)
+    };
     // Renumber this module's interfaces onto the end of the program's table,
     // then fold in what the imports already named.
     let base = interfaces.len() as u32;
@@ -366,24 +401,63 @@ pub fn build(
         // An itable per implemented interface: interface slot -> this
         // class's vtable slot. Built once here, so a `CALLIF` is a small-map
         // probe and an indexed load rather than a name lookup (§8.4).
+        //
+        // The parent's first. A subclass is everything its parent is, and
+        // its vtable extends the parent's with overrides written in place,
+        // so the parent's tables are correct for it as they stand. Without
+        // them a `Student extends Person` could not be called through the
+        // interface `Person` implements.
+        if let Some(p) = parent_idx {
+            proto.itables = classes[p as usize].itables.clone();
+        }
         let mut missing: Vec<(String, String)> = Vec::new();
-        let implemented: Vec<String> = implements
-            .get(*name)
-            .into_iter()
-            .flat_map(|v| v.iter())
-            .flat_map(|i| {
-                // The interface itself, then everything it extends: a
-                // `Combatant` is a `Damageable`, and a call through the
-                // parent interface looks for the parent's own itable.
-                std::iter::once((*i).to_string())
-                    .chain(iface_parents.get(*i).into_iter().flatten().cloned())
-            })
-            .collect();
-        for iname in implemented.iter() {
-            let Some(&ii) = iface_index.get(iname.as_str()) else {
+        // The interface itself, then everything it extends: a `Combatant`
+        // is a `Damageable`, and a call through the parent interface looks
+        // for the parent's own itable. An ancestor is found by the name it
+        // was declared with — this module may never have imported it.
+        let mut implemented: Vec<u32> = Vec::new();
+        for local in implements.get(*name).into_iter().flatten() {
+            let Some(&ii) = iface_index.get(*local) else {
+                // Not an interface the compiler can see. Recorded by the
+                // name written, so the instance still answers to it.
+                if !proto.interfaces.iter().any(|n| &**n == *local) {
+                    proto.interfaces.push(Rc::from(*local));
+                }
                 continue;
             };
             let iface = &ifaces[ii as usize];
+            let mut all = vec![ii];
+            for ancestor in &iface.ancestors {
+                let found = iface_index
+                    .get(&**ancestor)
+                    .copied()
+                    .filter(|i| ifaces[*i as usize].name == *ancestor)
+                    .or_else(|| {
+                        ifaces
+                            .iter()
+                            .position(|p| p.name == *ancestor)
+                            .map(|i| i as u32)
+                    });
+                match found {
+                    Some(i) => all.push(i),
+                    None => {
+                        if !proto.interfaces.contains(ancestor) {
+                            proto.interfaces.push(Rc::clone(ancestor));
+                        }
+                    }
+                }
+            }
+            for i in all {
+                if !implemented.contains(&i) {
+                    implemented.push(i);
+                }
+            }
+        }
+        for &ii in implemented.iter() {
+            let iface = &ifaces[ii as usize];
+            if !proto.interfaces.contains(&iface.name) {
+                proto.interfaces.push(Rc::clone(&iface.name));
+            }
             let slots: Option<Vec<u16>> = iface
                 .methods
                 .iter()
@@ -401,7 +475,7 @@ pub fn build(
                         .methods
                         .iter()
                         .filter(|m| !proto.vindex.contains_key(&**m))
-                        .map(|m| ((*iname).to_string(), m.to_string())),
+                        .map(|m| (iface.name.to_string(), m.to_string())),
                 ),
             }
         }
@@ -641,6 +715,7 @@ fn build_one(
         static_methods: static_slots.iter().map(|_| u32::MAX).collect(),
         smindex,
         itables: HashMap::new(),
+        interfaces: Vec::new(),
         init,
         // Which member declaration fills each slot; codegen consumes this
         // and it is not part of the runtime shape.

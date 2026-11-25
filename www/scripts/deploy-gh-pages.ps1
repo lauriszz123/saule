@@ -1,11 +1,11 @@
 # Build the site locally and publish it to the `gh-pages` branch.
 #
 # The Windows counterpart of deploy-gh-pages.sh — same steps, same result,
-# same `gh-pages` branch. Use whichever matches the shell you are in.
+# same `gh-pages` branch. Use whichever matches the shell in use.
 #
 # This is how the site is published. There is no CI path: the repository has no
 # GitHub Actions workflows, and CircleCI checks the site without publishing it
-# — see CIRCLECI.md. Your machine does the building, and `gh-pages` is the
+# — see CIRCLECI.md. The local machine does the building, and `gh-pages` is the
 # result.
 #
 # Usage:
@@ -34,7 +34,7 @@ param(
     # The site is published to GitHub Pages, so the deploy target is the
     # remote that hosts the GitHub repository. It defaults to `github` because
     # that is what the remote is called in this checkout; pass `-PagesRemote
-    # origin` if yours only has one.
+    # origin` if the checkout only has one.
     [string]$PagesRemote = 'github'
 )
 
@@ -145,7 +145,7 @@ if (Test-Path $Worktree) {
 }
 
 # Getting the remote wrong is not a harmless failure: `ls-remote` against a
-# remote you cannot read fails identically to "the branch does not exist", so
+# remote that cannot be read fails identically to "the branch does not exist", so
 # the create path below would quietly rebuild $Branch from HEAD and bury the
 # published site under the entire source history.
 if ((Invoke-Probe -Exe 'git' -Arguments @('remote', 'get-url', $PagesRemote)) -ne 0) {

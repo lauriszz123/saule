@@ -1,0 +1,8 @@
+-- `not` binds tighter than `is`, so `not v is string` asks whether the
+-- boolean `not v` is a string — which it never is. The question meant is
+-- `v is not string`.
+
+local v: any = 1
+if not v is string then
+	println("not a string")
+end

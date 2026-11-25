@@ -9,10 +9,10 @@
 //!
 //!   * **Every diagnostic, not just the first.** `run` fails fast because it
 //!     is about to execute and the first error already settled that. `check`
-//!     is the opposite: you want the whole list so you can fix it in one pass.
+//!     is the opposite: the whole list is wanted, so it can be fixed in one pass.
 //!   * **Every file, not just what the entry point reaches.** A module nobody
-//!     imports yet is precisely the one whose errors you want to hear about
-//!     before you import it.
+//!     imports yet is precisely the one whose errors are worth hearing about
+//!     before it is imported.
 
 use std::{
     path::{Path, PathBuf},

@@ -231,6 +231,7 @@ impl<'a> Reader<'a> {
             static_methods: self.u32s()?,
             smindex: self.map(Self::rc_str, Self::static_slot)?,
             itables: self.map(Self::u32, |r| r.list(Self::u16))?,
+            interfaces: self.list(Self::rc_str)?,
             init: self.option(Self::u16)?,
             member_of_vslot: self.map(Self::u16, Self::usize)?,
             member_of_sslot: self.list(Self::usize)?,
@@ -265,6 +266,7 @@ impl<'a> Reader<'a> {
             name: self.rc_str()?,
             methods: self.list(Self::rc_str)?,
             index: self.map(Self::rc_str, Self::u16)?,
+            ancestors: self.list(Self::rc_str)?,
         })
     }
 

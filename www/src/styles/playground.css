@@ -29,8 +29,8 @@
 	 * reads as a different material from the code around it.
 	 *
 	 * The greys are also lifted. Line numbers at #4d5560 were 2.3:1
-	 * against the pane, below the 3:1 floor for anything you are expected
-	 * to read, and they are the one part of an editor people scan
+	 * against the pane, below the 3:1 floor for anything that is expected
+	 * to be read, and they are the one part of an editor people scan
 	 * deliberately.
 	 */
 	--cm-text: var(--sl-color-white);
@@ -366,7 +366,7 @@
 /*
  * Tabs and actions on one line, after IntelliJ's main toolbar: the run
  * widget sits at the right end of the row that names what is open, so the
- * thing you press and the thing it acts on are never far apart.
+ * thing that is pressed and the thing it acts on are never far apart.
  */
 .pg-toolbar {
 	display: flex;
@@ -542,7 +542,7 @@
 	color: var(--sl-color-white);
 }
 
-/* A dot where the close button is, until you reach for it. */
+/* A dot where the close button is, until the pointer reaches for it. */
 .pg-tab-dirty .pg-tab-label::after {
 	content: '';
 	width: 0.4rem;
@@ -661,7 +661,7 @@
 
 /*
  * A strip across the top of the editor, as an IDE reports something about
- * the file you have open rather than about the project.
+ * the open file rather than about the project.
  */
 .pg-banner {
 	display: flex;
@@ -893,7 +893,7 @@
 
 /*
  * An IDE's status bar: one thin line, small type, readings rather than
- * actions. Everything you can *do* moved to the toolbar; what is left
+ * actions. Everything that can be *done* moved to the toolbar; what is left
  * states where the caret is, how the file is indented and encoded, and
  * which build of the language is answering.
  */

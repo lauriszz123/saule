@@ -72,7 +72,7 @@ pub struct PackageSpec {
 
 impl PackageSpec {
     /// `<owner>/<repo>`, which is how a message names a package and how
-    /// `saule remove` lets you refer to one.
+    /// `saule remove` refers to one.
     pub fn slug(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
     }

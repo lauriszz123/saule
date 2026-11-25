@@ -42,6 +42,8 @@ pub enum Symbol {
     Class(String),
     Interface(String),
     Enum(String),
+    /// A `type Name = T` alias.
+    TypeAlias(String),
     EnumVariant {
         enum_name: String,
         variant: String,

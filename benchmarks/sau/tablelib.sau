@@ -8,7 +8,7 @@
 -- ordered.
 --
 -- Lua ships `insert`, `remove`, `concat` and `sort`; the other six are
--- written out in the twin, because that is what Lua leaves you to do.
+-- written out in the twin, because that is what Lua leaves to be done by hand.
 class Main
 	static fn main()
 		local passes: integer = 3000

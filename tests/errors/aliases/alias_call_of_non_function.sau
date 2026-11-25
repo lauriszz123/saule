@@ -1,0 +1,7 @@
+-- A value of an alias type is callable only when the alias stands for a
+-- function type. `Names` is a table.
+
+type Names = table<string>
+
+local names: Names = {"a"}
+println(names("a"))

@@ -1,7 +1,7 @@
 # Saule — Production Readiness Analysis
 
 An assessment of what Saule is today, what it would take to become a language
-ordinary people use for real work, how you would *know* it is stable, how hard
+ordinary people use for real work, how it would be *known* to be stable, how hard
 it is to embed in another project, how hard it is to write a native library for
 it, and how the code should be split across crates and repositories.
 
@@ -104,8 +104,8 @@ on this machine (macOS 25.6, arm64), not estimated.
 ecosystem.**
 
 The original verdict here was "a well-built language implementation and not yet
-a product," and the product layer it was missing has largely arrived: you can
-install the toolchain in one command on three platforms, get working editor
+a product," and the product layer it was missing has largely arrived: the toolchain
+installs in one command on three platforms, get working editor
 support from a marketplace, typecheck, format, test, and install a dependency
 by Git ref. What remains is narrower and more specific than "a product" — it is
 *other people's code*: nothing published to install, and no supported way to
@@ -116,7 +116,7 @@ lines of Rust across 20 crates, 1,705 passing Rust tests plus 254 `.sau`
 fixtures with zero failures, zero `TODO`/`FIXME` markers, blocking `clippy -D warnings` and
 `rustfmt` gates in CI, and module-level documentation that explains *why* rather
 than restating the code. The type system is more coherent than most hobby
-languages — no bare `function` type, invariant table elements, an `any` you must
+languages — no bare `function` type, invariant table elements, an `any` that must be
 cast out of, split `integer`/`float` with no implicit promotion. The native
 package ABI is frozen, documented, and paired with a proc-macro SDK that infers
 the Saule signature from Rust types so the manifest cannot drift. That is
@@ -135,7 +135,7 @@ Where the gaps now fall, question by question:
 | Can I write a native library? | Only by cloning the compiler. The SDK crates are not on crates.io. |
 | Where are the docs for a package? | Nowhere. There is no `saule doc`. |
 | How fast is it? | 0.8×–4.8× PUC Lua on the bytecode VM, now the default engine, and **1.24×–3.52× the tree-walker** — the second figure is the one that does not depend on which Lua is installed. Phase 5's peepholes cut instructions retired by 11–50% depending on the benchmark. |
-| Is it stable? | [STABILITY.md](STABILITY.md) says what may change, and says plainly not to build something you cannot easily update. Nothing yet *enforces* it — see [§6.2](#62-then-mechanise-it). |
+| Is it stable? | [STABILITY.md](STABILITY.md) says what may change, and says plainly not to build something that cannot easily be updated. Nothing yet *enforces* it — see [§6.2](#62-then-mechanise-it). |
 
 None of those are research problems. All of them are work, and the sequencing
 matters more than the total volume — see [§10](#10-sequenced-roadmap).
@@ -270,16 +270,29 @@ Where it is incomplete or unsound:
   That is the right *default* for a young language — false positives drive users
   away faster than escaped errors — but it means the static types are a strong
   lint, not a guarantee. `RuntimeError::TypeError` exists and can fire. Before
-  1.0 you need to know, and document, exactly which constructs fall through.
+  1.0 it must be known, and documented, exactly which constructs fall through.
   Today nobody can enumerate them.
 - **`userdata` and `thread` are reserved and unimplemented.** The checker accepts
   `local h: userdata` and nothing in the language can produce a value for it.
   The README is honest about this, which is good; it is still a hole in the type
   grid, and `userdata` in particular is load-bearing for native packages
   ([§8](#8-is-it-easy-to-write-a-native-library)).
-- **No union types, no type aliases, no structural types.** `integer | float`
-  appears in the stdlib documentation (`int(n: integer | float)`) as a signature
-  the *user* cannot write. That asymmetry will be noticed.
+- **No union types and no structural types, by design.** What they are usually
+  wanted for is covered another way: "this or nothing" is `T?`; "one of several
+  shapes" is an enum with payloads, which `match` checks for exhaustiveness
+  where an untagged union could not; "anything with these fields" is a class
+  that says `implements`, which is the point of a nominal language. What is
+  left is loosely shaped data — decoded JSON — which goes through `any` and
+  the type test, `v is T`.
+
+  Type aliases, the third thing this entry used to list, exist:
+  `type Handler = fn(string) -> nil` names a long type once. They are
+  transparent, so they add a name and no new kind of type.
+
+  An earlier version of this section said the standard library documented
+  `integer | float` signatures that a program could not write. That is no
+  longer so: the `Math` functions are generic over the number type
+  (`Math.max<N>(...N) -> N`), and `DOCS.md` contains no union.
 - **No `const`/immutability**, no visibility beyond class access modifiers and
   module `export`.
 
@@ -464,7 +477,7 @@ per-project number above, not by a per-file one.
 
 Consequences:
 
-- **Performance is now what a bytecode VM gives you.** Measured three times,
+- **Performance is now what a bytecode VM gives.** Measured three times,
   on two machines, and they agree on shape rather than on digits — quote a
   range, and quote which row. The first two rows are the *same* box and the
   same Lua, before and after Phase 5's first slice, so they are the only pair
@@ -601,7 +614,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Implementation quality | Clean, tested, documented, lint-gated | **A** |
 | Compile-time diagnostics | miette, cross-module, `tests/errors/` pinned | **A−** |
 | Documentation (language) | README 73k + DOCS 15k, examples, website | **A−** |
-| Type system completeness | Strong core, deliberately partial checker, no unions/aliases | **B** |
+| Type system completeness | Strong core with aliases and a narrowing type test, deliberately partial checker | **B** |
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
@@ -671,7 +684,7 @@ done.
 4. ~~**Editor plugins are unpublished.**~~ **Done.** All three exist, work, and
    are installable from their normal channel: VS Code on the Visual Studio
    Marketplace (`saule.saule`), JetBrains as plugin 35823, and `saule-nvim`
-   via lazy.nvim or packer. A language you must sideload editor support for is
+   via lazy.nvim or packer. A language whose editor support must be sideloaded is
    a language people bounce off, and that is no longer the case. Open follow-on:
    Open VSX, for VSCodium users, and upstreaming the filetype and LSP config
    into `nvim-lspconfig`.
@@ -781,7 +794,7 @@ closes is the evidence.
 [STABILITY.md](STABILITY.md) exists. What it says, deliberately, is less than
 the table below: it is addressed to someone deciding whether to use Saule today,
 so it states the blunt version — the language and standard library *can* break
-between releases, pin your packages, set `min_saule_version`, run `saule check`
+between releases, pin packages, set `min_saule_version`, run `saule check`
 and `saule test` in CI. That is the honest contract for a pre-1.0 toolchain and
 it should not be strengthened before the gates in §6.2 can hold it up.
 
@@ -797,7 +810,7 @@ something fails when it is broken:
 | `saule.config` keys | Additive. Unknown keys already ignored (good); that becomes a promise. |
 | CLI surface | Subcommands and flags additive; output format of `--json` modes (once they exist) versioned. |
 | Native ABI (`CValue`, `HostApi`) | **Frozen**, versioned separately from the toolchain, with a runtime check. Any change is a new ABI major and the interpreter refuses the old one *by name*. |
-| Rust crate APIs (`saule-interpreter`, …) | Explicitly **unstable** unless and until you publish a `saule` facade crate. Say this loudly or embedders will assume otherwise. |
+| Rust crate APIs (`saule-interpreter`, …) | Explicitly **unstable** unless and until a `saule` facade crate is published. Say this loudly or embedders will assume otherwise. |
 | Wire protocol of the LSP | Follows the LSP spec; no Saule-specific extensions without a version. |
 
 The year-based `26.<build>` scheme is a good fit for this, and RELEASE_PLAN
@@ -817,7 +830,7 @@ A contract nobody tests is a wish. Each of these is a gate that fails a PR:
    "every diagnostic has exactly one fixture that produces it" is the same idea
    for errors. *Signal: coverage of the spec, measured and reported.*
 2. **Backwards-compatibility CI.** Keep a corpus of programs — the examples, the
-   benchmarks, `www`'s samples, and every real project you have — and run the
+   benchmarks, `www`'s samples, and every real project there is — and run the
    *current* build against *every previously released* corpus on each PR. The
    moment a `26.7` program breaks on `26.9`, CI says so. This is the single most
    valuable stability gate and it is cheap to build.
@@ -914,7 +927,7 @@ properly:
 3. **All state is process- or thread-global.** 22 `thread_local!` blocks across
    the analysis crates, plus process-wide `RwLock` statics for native package
    registries. There is no `Interpreter` handle. Consequences an embedder hits:
-   - **You cannot run two isolated Saule instances on one thread.** Two scripts
+   - **Two isolated Saule instances cannot run on one thread.** Two scripts
      with different sandbox policies, different sinks, or different registered
      natives cannot coexist.
    - The `init()` `Once` is process-wide, so package registration is
@@ -995,7 +1008,7 @@ is ever loaded.** Very few scripting languages do this.
 
 1. **The SDK crates are not published.** `saule-sdk`, `saule-native-abi`, and
    `saule-export-macro` are path dependencies inside this workspace. To write a
-   native package today you must clone the Saule compiler and add your crate to
+   native package today means cloning the Saule compiler and adding the crate to
    its workspace. **This is a hard stop on third-party native packages**, and it
    is the cheapest high-value fix available: publish three small crates.
 2. **Installation is manual file copying.** Now one copy: the library into
@@ -1277,7 +1290,7 @@ accepts two version schemes (toolchain vs. packages); this is a third, and it is
 the right one for the ABI.
 
 `saule-cli`, `saule-lsp`, `saule-interpreter`, and the pipeline crates should be
-`publish = false` until you are willing to guarantee their APIs.
+`publish = false` until their APIs can be guaranteed.
 
 ### 9.5 What should be its own git repository
 
@@ -1335,7 +1348,7 @@ Ordered by *unblocking*, not by size. Each phase makes the next one possible.
 ### Phase 1 — Make it obtainable — **DONE**
 RELEASE_PLAN steps 2–4. The release pipeline is proven (21 releases, six triples
 each), the one-line installer is live and checksum-verified, and the editor
-plugins are published. **Nothing else mattered until someone who is not you
+plugins are published. **Nothing else mattered until someone other than the author
 could run `saule`**, and that is now true in one command on three platforms.
 
 ### Phase 2 — Make it usable
@@ -1369,7 +1382,7 @@ could run `saule`**, and that is now true in one command on three platforms.
 RELEASE_PLAN steps 5–9. Done ahead of this sequencing: `saule check`, the
 config/lock format, and consuming packages — `install`, `update`, `remove`,
 `list`, with `saule.lock` pinning exact commits. Still open: `saule publish`
-(today you push a Git tag), `saule doctor` and `saule clean`, prebuilt native
+(today a Git tag is pushed), `saule doctor` and `saule clean`, prebuilt native
 release assets, `saule doc`, and **a package that actually exists to install** —
 see §1.
 
@@ -1387,7 +1400,7 @@ see §1.
 ### Phase 6 — Make it fast (**done ahead of schedule — read the caveat**)
 The bytecode VM shipped and is the default engine, and tail calls came with it.
 This phase was sequenced last, and deliberately: "it is the change most likely
-to break semantics, and without the stability gates you will not know that it
+to break semantics, and without the stability gates there is no knowing that it
 did." Building it early meant paying for that warning some other way, and the
 substitute was differential testing — the tree-walker kept in-tree as an oracle,
 every fixture and every example project run under both engines and compared on

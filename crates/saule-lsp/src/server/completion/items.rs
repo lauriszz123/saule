@@ -270,6 +270,11 @@ pub(crate) fn collect_exports(
                 name,
                 ..
             } => (name, CompletionItemKind::ENUM),
+            Decl::TypeAlias {
+                exported: true,
+                name,
+                ..
+            } => (name, CompletionItemKind::TYPE_PARAMETER),
             Decl::Import {
                 path,
                 names,

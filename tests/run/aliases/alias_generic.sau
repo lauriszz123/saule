@@ -1,0 +1,73 @@
+-- An alias takes type parameters of its own — `type Pair<A, B> = …` — and
+-- each use supplies the arguments. Applied to a function's type parameter
+-- it takes part in inference like the type it stands for.
+
+type Pair<A, B> = table<A, B>
+type Maybe<T> = T?
+type Check<T> = fn(T) -> boolean
+type Convert<A, B> = fn(A) -> B
+type Lookup<V> = Pair<string, V>          -- a generic alias of a generic alias
+type Grid<T> = table<table<T>>
+
+fn keep<T>(items: table<T>, want: Check<T>) -> table<T>
+	local out: table<T> = {}
+	for item in items do
+		if want(item) then
+			Table.insert(out, item)
+		end
+	end
+	return out
+end
+
+fn convert<A, B>(items: table<A>, change: Convert<A, B>) -> table<B>
+	local out: table<B> = {}
+	for item in items do
+		Table.insert(out, change(item))
+	end
+	return out
+end
+
+fn find<T>(items: table<T>, want: Check<T>) -> Maybe<T>
+	for item in items do
+		if want(item) then
+			return item
+		end
+	end
+	return nil
+end
+
+fn cell<T>(grid: Grid<T>, row: integer, column: integer) -> Maybe<T>
+	return grid[row]?[column]
+end
+
+local ages: Lookup<integer> = {ann: 31, bob: 27}
+local flags: Pair<integer, boolean> = {}
+flags[3] = true
+
+local words = {"sun", "moon", "star", "sky"}
+local short = keep(words, fn(w: string) -> boolean
+	return #w == 3
+end)
+local lengths = convert(words, fn(w: string) -> integer
+	return #w
+end)
+local long: Maybe<string> = find(words, fn(w: string) -> boolean
+	return #w > 3
+end)
+local none = find(lengths, fn(n: integer) -> boolean
+	return n > 10
+end)
+
+local grid: Grid<integer> = {{1, 2}, {3, 4}}
+
+println(#short, String.join(",", convert(lengths, fn(n: integer) -> string
+	return tostring(n)
+end)), long, none)                         -- 2  3,4,4,3  moon  nil
+println(ages["ann"], flags[3], cell(grid, 2, 1), cell(grid, 9, 1))  -- 31 true 3 nil
+
+assert(#short == 2)
+assert(long == "moon")
+assert(none == nil)
+assert(ages["ann"] == 31)
+assert(cell(grid, 2, 1) == 3)
+assert(cell(grid, 9, 1) == nil)

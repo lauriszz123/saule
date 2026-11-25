@@ -1,7 +1,7 @@
 //! Saule-typed wrappers — the `S*` "bridge" types.
 //!
 //! These give native-package authors ergonomic, Saule-flavoured handles to
-//! values crossing the ABI, each carrying helper methods so you rarely touch
+//! values crossing the ABI, each carrying helper methods so there is rarely a need to touch
 //! a raw [`CValue`](saule_native_abi::CValue):
 //!
 //! ## Scalars (cross the ABI by value)
@@ -469,7 +469,7 @@ impl<C: NativeClass> From<SObject<C>> for SValue {
 /// runtime behaviour: element access still goes through [`SValue`].
 ///
 /// The handle is valid only for the duration of the native call that produced
-/// (or created) it; don't retain one past your export's return.
+/// (or created) it; don't retain one past the export's return.
 pub struct STable<T = Untyped> {
     pub(crate) handle: Handle,
     _marker: PhantomData<fn() -> T>,

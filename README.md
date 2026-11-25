@@ -33,12 +33,12 @@ Then open a new terminal and check it:
 saule --version
 ```
 
-The installer picks the right build for your machine, verifies it against the
+The installer picks the right build for the machine, verifies it against the
 release's `SHA256SUMS`, and installs `saule` and `saule-lsp` into `~/.saule/bin`.
 Running it again upgrades in place.
 
 That installs the **stable** channel. For the newest build of all, pass
-`SAULE_CHANNEL=latest` (`$env:SAULE_CHANNEL='latest'` on Windows) — your choice
+`SAULE_CHANNEL=latest` (`$env:SAULE_CHANNEL='latest'` on Windows) — the choice
 is remembered, so later upgrades stay on it. Full details, options and a
 build-from-source path are in the
 [installation guide](https://lauriszz123.github.io/saule/guides/installation/).
@@ -115,12 +115,12 @@ saule install                                 # everything in saule.config
 A package is `<owner>@<repo>`, optionally pinned with `:<version>`. It is
 installed once, globally, and shared by every project. Dependencies resolve to
 exact commits recorded in `saule.lock` — commit that file. A library declares
-its own import name, so where it lives is independent of what you type to
+its own import name, so where it lives is independent of what is typed to
 import it, and publishing one means pushing a Git tag.
 
-A path dependency is different in kind: it is used *where it lies*, so your
-edits take effect immediately. That is what to reach for with a library you are
-developing alongside the project that uses it.
+A path dependency is different in kind: it is used *where it lies*, so
+edits take effect immediately. That is what to reach for with a library being
+developed alongside the project that uses it.
 
 ## Editor support
 
@@ -130,14 +130,14 @@ developing alongside the project that uses it.
 | JetBrains IDEs | [Marketplace](https://plugins.jetbrains.com/plugin/35823-saule) |
 | Neovim | [`lauriszz123/saule-nvim`](https://github.com/lauriszz123/saule-nvim) |
 
-All three use `saule-lsp`, which the installer puts on your `PATH`, and give
+All three use `saule-lsp`, which the installer puts on the `PATH`, and give
 diagnostics, hover, go-to-definition, references, symbols, inlay hints,
 signature help, completion and formatting.
 
 ## Status
 
-Saule is young and still changing. **Do not build something you cannot easily
-update on it yet** — see [STABILITY.md](./STABILITY.md) for what may change and
+Saule is young and still changing. **Do not build something that cannot easily
+be updated on it yet** — see [STABILITY.md](./STABILITY.md) for what may change and
 [CHANGELOG.md](./CHANGELOG.md) for what already has.
 
 Programs run on a bytecode VM at 0.8×–4.8× the speed of PUC Lua. The tree-walking

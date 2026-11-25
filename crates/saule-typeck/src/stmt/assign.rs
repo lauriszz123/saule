@@ -52,11 +52,61 @@ pub(crate) fn reject_unknown_types(
     errors: &mut Vec<TypeCheckError>,
 ) {
     for name in unknown_names(ty) {
+        // Reported where the alias that names it is declared; every place
+        // that alias is written would only say it again.
+        if UNKNOWN_IN_ALIASES.with(|u| u.borrow().contains(&name)) {
+            continue;
+        }
         errors.push(TypeCheckError::UnknownType {
             name,
             span: to_source_span(span.clone()),
         });
     }
+}
+
+thread_local! {
+    /// The unknown names this module's `type` aliases are declared with.
+    ///
+    /// By the time the checker runs, an alias has been replaced by what it
+    /// stands for wherever it was written, so `type Things = table<Thnig>`
+    /// puts the misspelling into every annotation that says `Things`. One
+    /// report belongs at the declaration; this is what keeps the rest quiet.
+    static UNKNOWN_IN_ALIASES: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Note the unknown names in `module`'s alias declarations, before anything
+/// is checked. Cleared by [`forget_alias_names`].
+pub(crate) fn note_alias_names(module: &saule_ast::Module) {
+    let mut names = std::collections::HashSet::new();
+    for stmt in &module.stmts {
+        if let Stmt::Decl(d) = &stmt.value
+            && let saule_ast::Decl::TypeAlias {
+                type_params, ty, ..
+            } = &d.value
+        {
+            let generics = crate::state::push_generics(type_params, &[]);
+            names.extend(unknown_names(ty));
+            crate::state::pop_generics(generics);
+        }
+    }
+    UNKNOWN_IN_ALIASES.with(|u| *u.borrow_mut() = names);
+}
+
+pub(crate) fn forget_alias_names() {
+    UNKNOWN_IN_ALIASES.with(|u| u.borrow_mut().clear());
+}
+
+/// [`check_binding_type`] for the right-hand side of a `type` alias: the
+/// one place its unknown names are reported.
+pub(crate) fn check_alias_type(
+    ty: &Type,
+    span: std::ops::Range<usize>,
+    errors: &mut Vec<TypeCheckError>,
+) {
+    let quiet = UNKNOWN_IN_ALIASES.with(|u| std::mem::take(&mut *u.borrow_mut()));
+    check_binding_type(ty, span, errors);
+    UNKNOWN_IN_ALIASES.with(|u| *u.borrow_mut() = quiet);
 }
 
 /// Names inside `ty` that nothing in scope declares, outermost first.

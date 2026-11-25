@@ -1,0 +1,7 @@
+-- An alias changes nothing about what converts: `Metres` is `float`, and
+-- an `integer` is never quietly a `float`, by any name.
+
+type Metres = float
+
+local length: Metres = 3
+println(length)

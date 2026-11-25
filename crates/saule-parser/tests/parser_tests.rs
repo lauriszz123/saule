@@ -1444,3 +1444,370 @@ fn async_fn_outside_an_extern_interface_is_refused() {
     let err = format!("{:?}", parse(tokens).unwrap_err());
     assert!(err.contains("extern interface"), "{err}");
 }
+
+// ─── `type` aliases ──────────────────────────────────────────────────────
+
+/// The one alias declared by `src`.
+fn alias_of(src: &str) -> (bool, String, Vec<String>, Type) {
+    let m = parse_src(src);
+    assert_eq!(m.stmts.len(), 1, "one statement in {src:?}");
+    match &m.stmts[0].value {
+        Stmt::Decl(d) => match &d.value {
+            Decl::TypeAlias {
+                exported,
+                name,
+                type_params,
+                ty,
+                ..
+            } => (*exported, name.clone(), type_params.clone(), ty.clone()),
+            other => panic!("expected a type alias, got {other:?}"),
+        },
+        other => panic!("expected a declaration, got {other:?}"),
+    }
+}
+
+fn named(n: &str) -> Type {
+    Type::Named(n.into())
+}
+
+#[test]
+fn parses_a_type_alias_of_a_named_type() {
+    let (exported, name, params, ty) = alias_of("type UserId = integer");
+    assert!(!exported);
+    assert_eq!(name, "UserId");
+    assert!(params.is_empty());
+    assert_eq!(ty, named("integer"));
+}
+
+#[test]
+fn parses_a_type_alias_of_a_function_type() {
+    let (_, name, _, ty) = alias_of("type Handler = fn(string, integer) -> boolean");
+    assert_eq!(name, "Handler");
+    assert_eq!(
+        ty,
+        Type::Function {
+            params: vec![named("string"), named("integer")],
+            ret: Box::new(named("boolean")),
+        }
+    );
+}
+
+#[test]
+fn parses_a_type_alias_of_a_nested_table_type() {
+    let (_, _, _, ty) = alias_of("type Index = table<string, table<integer>>");
+    assert_eq!(
+        ty,
+        Type::Table {
+            key: Some(Box::new(named("string"))),
+            value: Box::new(Type::Table {
+                key: None,
+                value: Box::new(named("integer")),
+            }),
+        }
+    );
+}
+
+#[test]
+fn parses_a_nullable_type_alias() {
+    let (_, _, _, ty) = alias_of("type MaybeName = string?");
+    assert_eq!(ty, Type::Nullable(Box::new(named("string"))));
+}
+
+#[test]
+fn parses_an_exported_type_alias() {
+    let (exported, name, _, _) = alias_of("export type Callback = fn() -> nil");
+    assert!(exported);
+    assert_eq!(name, "Callback");
+}
+
+#[test]
+fn parses_a_generic_type_alias() {
+    let (_, name, params, ty) = alias_of("type Pair<A, B> = table<A, B>");
+    assert_eq!(name, "Pair");
+    assert_eq!(params, ["A", "B"]);
+    assert_eq!(
+        ty,
+        Type::Table {
+            key: Some(Box::new(named("A"))),
+            value: Box::new(named("B")),
+        }
+    );
+}
+
+#[test]
+fn parses_a_type_alias_of_a_generic_application() {
+    let (_, _, params, ty) = alias_of("type Outcome<T> = Result<T>?");
+    assert_eq!(params, ["T"]);
+    assert_eq!(
+        ty,
+        Type::Nullable(Box::new(Type::generic("Result", vec![named("T")])))
+    );
+}
+
+/// The spans are what diagnostics and the editor point with.
+#[test]
+fn a_type_alias_records_where_its_name_and_its_type_are() {
+    let src = "export type Names = table<string>";
+    let m = parse_src(src);
+    let Stmt::Decl(d) = &m.stmts[0].value else {
+        panic!("expected a declaration");
+    };
+    let Decl::TypeAlias {
+        name_span, ty_span, ..
+    } = &d.value
+    else {
+        panic!("expected a type alias");
+    };
+    assert_eq!(&src[name_span.clone()], "Names");
+    assert_eq!(&src[ty_span.clone()], "table<string>");
+    // The declaration itself starts at `type`, as `export fn` starts at `fn`.
+    assert_eq!(&src[d.span.clone()], "type Names = table<string>");
+}
+
+#[test]
+fn type_aliases_sit_among_other_declarations() {
+    let m = parse_src(
+        "type Id = integer\n\
+         class User\n  id: Id = 0\nend\n\
+         type Users = table<User>\n\
+         fn first(users: Users) -> User?\n  return users[1]\nend\n",
+    );
+    let kinds: Vec<&str> = m
+        .stmts
+        .iter()
+        .map(|s| match &s.value {
+            Stmt::Decl(d) => match &d.value {
+                Decl::TypeAlias { .. } => "alias",
+                Decl::Class { .. } => "class",
+                Decl::Function { .. } => "fn",
+                _ => "other",
+            },
+            _ => "statement",
+        })
+        .collect();
+    assert_eq!(kinds, ["alias", "class", "alias", "fn"]);
+}
+
+/// `type` is a reserved word, like `class` and `enum`: it begins a
+/// declaration and cannot name anything else.
+#[test]
+fn type_is_a_reserved_word() {
+    for src in [
+        "local type = 1\n",
+        "fn f(type: string)\nend\n",
+        "class Token\n  type: string = \"\"\nend\n",
+        "type type = string\n",
+        "local kind = type(3)\n",
+        "fn type()\nend\n",
+    ] {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        assert!(parse(tokens).is_err(), "should not parse: {src:?}");
+    }
+}
+
+/// And the error for using it as a name says so, as for any keyword.
+#[test]
+fn naming_something_type_says_it_is_reserved() {
+    let err = alias_error("local type = 1\n");
+    assert!(err.contains("reserved word"), "{err}");
+}
+
+/// A member read is not a declaration position: a table or an object from
+/// elsewhere may have a field of that name, and it stays reachable.
+#[test]
+fn a_member_called_type_can_still_be_read() {
+    let m = parse_src("local kind = token.type\nlocal n = Math.type(1)\n");
+    assert_eq!(m.stmts.len(), 2);
+}
+
+// ─── `is` ────────────────────────────────────────────────────────────────
+
+/// The `v is T` at the root of the one expression statement in `src`.
+fn is_of(src: &str) -> (Expr, Type, bool) {
+    let m = parse_src(&format!("local probe = {src}\n"));
+    match &m.stmts[0].value {
+        Stmt::Local {
+            value: Some(v), ..
+        } => match &v.value {
+            Expr::Is { value, ty, negated } => (value.value.clone(), ty.clone(), *negated),
+            other => panic!("expected an `is` at the root of {src:?}, got {other:?}"),
+        },
+        other => panic!("expected a local, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_a_type_test() {
+    let (value, ty, negated) = is_of("v is integer");
+    assert_eq!(value, Expr::Ident("v".into()));
+    assert_eq!(ty, named("integer"));
+    assert!(!negated);
+}
+
+#[test]
+fn parses_a_negated_type_test() {
+    let (value, ty, negated) = is_of("v is not string");
+    assert_eq!(value, Expr::Ident("v".into()));
+    assert_eq!(ty, named("string"));
+    assert!(negated);
+}
+
+#[test]
+fn a_type_test_takes_any_type() {
+    assert_eq!(is_of("v is Person").1, named("Person"));
+    assert_eq!(
+        is_of("v is string?").1,
+        Type::Nullable(Box::new(named("string")))
+    );
+    assert_eq!(
+        is_of("v is table<string, integer>").1,
+        Type::Table {
+            key: Some(Box::new(named("string"))),
+            value: Box::new(named("integer")),
+        }
+    );
+    assert_eq!(
+        is_of("v is fn(integer) -> boolean").1,
+        Type::Function {
+            params: vec![named("integer")],
+            ret: Box::new(named("boolean")),
+        }
+    );
+    assert_eq!(
+        is_of("v is Box<integer>").1,
+        Type::generic("Box", vec![named("integer")])
+    );
+}
+
+/// `is` sits with the comparisons: tighter than `and` / `or` / `==`,
+/// looser than arithmetic and everything above it.
+#[test]
+fn a_type_test_binds_like_a_comparison() {
+    // Arithmetic, a call, a member read and a cast all belong to its left.
+    assert!(matches!(is_of("a + b is integer").0, Expr::Binary { op: BinOp::Add, .. }));
+    assert!(matches!(is_of("f(x) is string").0, Expr::Call { .. }));
+    assert!(matches!(is_of("p.owner is Person").0, Expr::Member { .. }));
+    assert!(matches!(is_of("a ?? b is string").0, Expr::Binary { op: BinOp::Coalesce, .. }));
+
+    // `and` / `or` take whole tests as operands.
+    let m = parse_src("local both = a is integer and b is not string or c is Person\n");
+    let Stmt::Local { value: Some(v), .. } = &m.stmts[0].value else {
+        panic!("expected a local");
+    };
+    let Expr::Binary { op: BinOp::Or, lhs, rhs } = &v.value else {
+        panic!("expected `or` at the root, got {:?}", v.value);
+    };
+    assert!(matches!(&rhs.value, Expr::Is { negated: false, .. }));
+    let Expr::Binary { op: BinOp::And, lhs: l, rhs: r } = &lhs.value else {
+        panic!("expected `and` under it");
+    };
+    assert!(matches!(&l.value, Expr::Is { negated: false, .. }));
+    assert!(matches!(&r.value, Expr::Is { negated: true, .. }));
+
+    // `==` is looser still: the test is its operand.
+    let m = parse_src("local same = a is integer == b is integer\n");
+    let Stmt::Local { value: Some(v), .. } = &m.stmts[0].value else {
+        panic!("expected a local");
+    };
+    assert!(matches!(&v.value, Expr::Binary { op: BinOp::Eq, .. }));
+}
+
+/// `not` binds tighter than `is`, as it does than `==`: `not v is T` is
+/// `(not v) is T`. The spelling for the other meaning is `v is not T`.
+#[test]
+fn a_leading_not_belongs_to_the_operand() {
+    let (value, _, negated) = is_of("not v is boolean");
+    assert!(matches!(value, Expr::Unary { op: UnaryOp::Not, .. }));
+    assert!(!negated);
+}
+
+#[test]
+fn a_type_test_is_a_condition() {
+    let m = parse_src(
+        "if v is integer then\n  x = 1\nelseif v is not string then\n  x = 2\nend\n\
+         while node is Branch do\n  node = node.next\nend\n",
+    );
+    assert_eq!(m.stmts.len(), 2);
+    let Stmt::If { cond, elseifs, .. } = &m.stmts[0].value else {
+        panic!("expected an if");
+    };
+    assert!(matches!(&cond.value, Expr::Is { negated: false, .. }));
+    assert!(matches!(&elseifs[0].0.value, Expr::Is { negated: true, .. }));
+}
+
+#[test]
+fn a_type_test_records_its_whole_span() {
+    let src = "local ok = shape is not Circle";
+    let m = parse_src(src);
+    let Stmt::Local { value: Some(v), .. } = &m.stmts[0].value else {
+        panic!("expected a local");
+    };
+    assert_eq!(&src[v.span.clone()], "shape is not Circle");
+}
+
+/// `is` is reserved too: as an infix word it could not also be a name
+/// without making `a\nis(b)` mean two things.
+#[test]
+fn is_is_a_reserved_word() {
+    for src in ["local is = 1\n", "fn is(x: integer)\nend\n", "is(3)\n"] {
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        assert!(parse(tokens).is_err(), "should not parse: {src:?}");
+    }
+    // A member of that name is still reachable.
+    let m = parse_src("local yes = token.is(kind)\n");
+    assert_eq!(m.stmts.len(), 1);
+}
+
+#[test]
+fn a_type_test_needs_a_type() {
+    let err = alias_error("local ok = v is\n");
+    assert!(err.contains("Expected") || err.contains("Eof"), "{err}");
+    let err = alias_error("local ok = v is 3\n");
+    assert!(err.contains("type"), "{err}");
+}
+
+fn alias_error(src: &str) -> String {
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    format!("{:?}", parse(tokens).expect_err("should not parse"))
+}
+
+#[test]
+fn a_type_alias_needs_its_equals_sign() {
+    let err = alias_error("type Id integer\n");
+    assert!(err.contains("`=`"), "{err}");
+}
+
+#[test]
+fn a_type_alias_needs_a_type_on_the_right() {
+    let err = alias_error("type Id =\n");
+    assert!(err.contains("Expected") || err.contains("Eof"), "{err}");
+}
+
+#[test]
+fn a_type_alias_parameter_takes_no_bound() {
+    let err = alias_error("type Sorted<T: Comparable> = table<T>\n");
+    assert!(err.contains("take no bounds"), "{err}");
+}
+
+#[test]
+fn a_type_alias_with_an_empty_parameter_list_is_refused() {
+    let err = alias_error("type Box<> = table<integer>\n");
+    assert!(err.contains("EmptyTypeParams"), "{err}");
+}
+
+/// Recovery keeps going past a broken alias: the declarations around it
+/// still reach the checker.
+#[test]
+fn a_broken_alias_does_not_take_its_neighbours_with_it() {
+    let src = "type Id integer\nfn after() -> integer\n  return 1\nend\n";
+    let tokens = Lexer::new(src).tokenize().unwrap();
+    let parsed = saule_parser::parse_recover(tokens, src);
+    assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+    assert!(
+        parsed.module.stmts.iter().any(|s| matches!(
+            &s.value,
+            Stmt::Decl(d) if matches!(&d.value, Decl::Function { name, .. } if name == "after")
+        )),
+        "the function after the broken alias should survive"
+    );
+}

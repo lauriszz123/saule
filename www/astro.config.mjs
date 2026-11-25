@@ -84,7 +84,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Introduction', slug: 'guides/introduction' },
 						{ label: 'Installation', slug: 'guides/installation' },
-						{ label: 'Your First Program', slug: 'guides/first-program' },
+						{ label: 'A First Program', slug: 'guides/first-program' },
 					],
 				},
 				{

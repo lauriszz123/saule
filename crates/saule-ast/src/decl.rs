@@ -1,4 +1,4 @@
-//! Top-level declaration shapes: `fn`, `class`, `interface`, `enum`, `import`,
+//! Top-level declaration shapes: `fn`, `class`, `interface`, `enum`, `type`, `import`,
 //! plus the class-member and enum-variant nodes those use.
 
 use crate::{Expr, Param, Spanned, Stmt, Type};
@@ -86,6 +86,28 @@ pub enum Decl {
         /// Byte range of the type ascription, when one was written.
         ty_span: Option<std::ops::Range<usize>>,
         value: Option<Spanned<Expr>>,
+    },
+    /// `type Name = T`, or `type Name<A, B> = T` — another name for a type.
+    ///
+    /// Transparent: `Name` and `T` are the same type everywhere, in both
+    /// directions. Nothing new is declared and nothing exists at run time;
+    /// the checker reads `Name` as `T` (see `saule_semantic`'s alias
+    /// registry), so a long function or table type is written once.
+    ///
+    /// The uses stay as written in the tree — a `Type::Named` or a
+    /// `Type::Generic` naming the alias — because the tree is also what the
+    /// formatter prints and what an editor shows.
+    TypeAlias {
+        exported: bool,
+        name: String,
+        /// Byte range of the declared name, for tooling.
+        name_span: std::ops::Range<usize>,
+        /// Type parameters declared with `<A, B>` after the name, each
+        /// standing for the argument written at a use: `Callback<string>`.
+        type_params: Vec<String>,
+        ty: Type,
+        /// Byte range of the type on the right of the `=`.
+        ty_span: std::ops::Range<usize>,
     },
     Import {
         names: ImportNames,

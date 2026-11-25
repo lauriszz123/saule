@@ -107,8 +107,8 @@ pub unsafe fn release_object(ptr: ObjectPtr) {
 /// A shared handle to an object of a `#[saule_class]`.
 ///
 /// Take one as a parameter to keep the object beyond the call — store it in
-/// your own state, say, as the current render target — and return one to
-/// hand Saule an object you also keep. Clone it freely; it is an `Rc`.
+/// the package's own state, say, as the current render target — and return one to
+/// hand Saule an object that is also kept. Clone it freely; it is an `Rc`.
 pub struct SObject<T: NativeClass> {
     rc: Rc<ObjectBox<T>>,
 }

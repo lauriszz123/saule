@@ -136,7 +136,7 @@ println(Bytes.toHex(Bytes.fromString("Hi")))   -- 4869
 println(#Bytes.fromString("saulė"))            -- 6 bytes
 println(String.len("saulė"))                   -- 5 characters
 
--- The byte count of a string, which `String.len` does not give you.
+-- The byte count of a string, which `String.len` does not give.
 local text: string = "héllo"
 println(#Bytes.fromString(text))               -- 6
 ```
@@ -177,7 +177,7 @@ println(text)                                          -- ok
 <summary><code class="api-sig"><span class="sig-fn">Bytes.len</span><span class="sig-punct">(</span><span class="sig-param">b</span><span class="sig-punct">:</span> <span class="sig-type">bytes</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">integer</span></code></summary>
 
 
-The byte count. `#b` is the same thing, as a value you can pass around.
+The byte count. `#b` is the same thing, as a value that can be passed around.
 
 ```saule
 local raw: bytes = Bytes.of(1, 2, 3)

@@ -1,6 +1,6 @@
 ---
 /**
- * Starlight's search dialog, with something in it before you type.
+ * Starlight's search dialog, with something in it before anything is typed.
  *
  * Pagefind renders nothing for an empty query, so opening the modal showed a
  * blank panel — which reads as broken rather than as "waiting for input", and
@@ -20,7 +20,7 @@ import Default from '@astrojs/starlight/components/Search.astro';
 <script>
 	/** Where the destinations come from. Paths are relative to the site base. */
 	const QUICK_LINKS: Array<{ path: string; label: string; hint: string }> = [
-		{ path: 'guides/first-program/', label: 'Write your first program', hint: 'Guide' },
+		{ path: 'guides/first-program/', label: 'Write a first program', hint: 'Guide' },
 		{ path: 'language/types/', label: 'Types, casting and nil', hint: 'Language' },
 		{ path: 'language/null-safety/', label: 'Null safety — ?. ?? !', hint: 'Language' },
 		{ path: 'language/classes/', label: 'Classes and interfaces', hint: 'Language' },
@@ -175,7 +175,7 @@ import Default from '@astrojs/starlight/components/Search.astro';
 			for (const entry of queries) {
 				const li = document.createElement('li');
 				if (entry.url) {
-					// A page you opened: one click back to it, no re-search.
+					// A page that was opened: one click back to it, no re-search.
 					const chip = document.createElement('a');
 					chip.className = 'saule-search-chip';
 					chip.dataset.kind = 'page';

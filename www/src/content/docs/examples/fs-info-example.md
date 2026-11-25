@@ -5,20 +5,20 @@ sidebar:
   order: 2
   badge:
     text: "Simple"
-    variant: tip
+    variant: success
 ---
 
 <!-- Generated from examples/fs-info-example by `npm run sync-docs`. Edit the example, not this file. -->
 
 Inspects one path with `Os.fsInfo` and reports what it is. Shows nullable returns for paths that may not exist, and `match` over an enum with a `_` fallback.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/fs-info-example)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/fs-info-example)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/fs-info-example
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/fs-info-example
 saule run -- .
 ```
 

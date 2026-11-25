@@ -1,0 +1,17 @@
+-- A generic alias named bare. Unlike a class, an alias has nothing to fall
+-- back on: its parameters only mean something once they are given.
+
+type Check<T> = fn(T) -> boolean
+
+fn all(items: table<integer>, want: Check) -> boolean
+	for item in items do
+		if not want(item) then
+			return false
+		end
+	end
+	return true
+end
+
+println(all({1, 2}, fn(n: integer) -> boolean
+	return n > 0
+end))

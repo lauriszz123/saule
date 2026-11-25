@@ -1,0 +1,6 @@
+-- `type Name = T`: the `=` is not optional.
+
+type UserId integer
+
+local id: UserId = 1
+println(id)

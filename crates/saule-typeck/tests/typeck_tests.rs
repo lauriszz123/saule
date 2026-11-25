@@ -2694,3 +2694,651 @@ fn byte_literals_fill_a_byte_table_literal() {
     rejects("local bs: byte[] = {1, 300}", "byte");
     accepts("local bs: table<integer, byte> = {0}");
 }
+
+// ─── `type` aliases ─────────────────────────────────────────────────────
+//
+// An alias is the type it stands for, in both directions and everywhere a
+// type is read. These pin that the checker cannot tell the two apart.
+
+#[test]
+fn an_alias_and_its_type_are_interchangeable() {
+    let decl = "type Id = integer\n";
+    accepts(&format!("{decl}local a: Id = 1\nlocal b: integer = a\nlocal c: Id = b\n"));
+    accepts(&format!("{decl}fn next(i: Id) -> Id\n  return i + 1\nend\nlocal n: integer = next(41)\n"));
+    rejects(&format!("{decl}local a: Id = \"one\"\n"), "integer");
+    rejects(&format!("{decl}local a: Id = 1.5\n"), "integer");
+}
+
+/// Two aliases of one type are that one type: nothing nominal is added.
+#[test]
+fn two_aliases_of_one_type_are_the_same_type() {
+    accepts(
+        "type Metres = float\ntype Seconds = float\n\
+         local d: Metres = 3.0\nlocal t: Seconds = d\nlocal speed: float = d / t\n",
+    );
+}
+
+#[test]
+fn a_mismatch_names_the_type_behind_the_alias() {
+    rejects("type Id = integer\nlocal a: Id = \"x\"\n", "`integer`");
+    rejects(
+        "type Handler = fn(string) -> nil\nlocal h: Handler = 3\n",
+        "fn(string) -> nil",
+    );
+}
+
+#[test]
+fn a_function_alias_is_callable_and_checked() {
+    let decl = "type Predicate = fn(integer) -> boolean\n\
+                fn test(p: Predicate, n: integer) -> boolean\n  return p(n)\nend\n";
+    accepts(&format!(
+        "{decl}local even: Predicate = fn(n: integer) -> boolean\n  return n % 2 == 0\nend\n\
+         local yes: boolean = test(even, 4)\n"
+    ));
+    // The argument is checked against what the alias stands for…
+    rejects(
+        &format!("{decl}local r = test(fn(s: string) -> boolean\n  return true\nend, 4)\n"),
+        "argument 1",
+    );
+    // …and so is the result, and a call through a value of the alias type.
+    rejects(
+        &format!("{decl}local p: Predicate = fn(n: integer) -> boolean\n  return true\nend\nlocal s: string = p(1)\n"),
+        "string",
+    );
+    rejects(
+        &format!("{decl}local p: Predicate = fn(n: integer) -> boolean\n  return true\nend\nlocal b = p(\"one\")\n"),
+        "integer",
+    );
+}
+
+#[test]
+fn a_lambda_is_checked_against_a_function_alias() {
+    let decl = "type Mapper = fn(integer) -> string\n";
+    rejects(
+        &format!("{decl}local m: Mapper = fn(n: integer) -> integer\n  return n\nend\n"),
+        "fn(integer) -> string",
+    );
+    rejects(
+        &format!("{decl}local m: Mapper = fn(n: integer, extra: integer) -> string\n  return \"\"\nend\n"),
+        "fn(integer) -> string",
+    );
+}
+
+#[test]
+fn a_table_alias_checks_its_elements() {
+    let decl = "type Names = table<string>\ntype Scores = table<string, integer>\n";
+    accepts(&format!("{decl}local n: Names = {{\"a\", \"b\"}}\nlocal first: string? = n[1]\n"));
+    accepts(&format!("{decl}local s: Scores = {{ann: 3}}\nlocal a: integer? = s[\"ann\"]\n"));
+    rejects(&format!("{decl}local n: Names = {{1, 2}}\n"), "string");
+    rejects(&format!("{decl}local s: Scores = {{ann: \"three\"}}\n"), "integer");
+    rejects(
+        &format!("{decl}local s: Scores = {{}}\nlocal a: string? = s[\"ann\"]\n"),
+        "integer",
+    );
+}
+
+#[test]
+fn a_nullable_alias_has_to_be_narrowed() {
+    let decl = "type MaybeName = string?\n";
+    accepts(&format!("{decl}local n: MaybeName = nil\nlocal m: MaybeName = \"x\"\n"));
+    rejects(&format!("{decl}local n: MaybeName = nil\nlocal s: string = n\n"), "string");
+    accepts(&format!("{decl}local n: MaybeName = nil\nlocal s: string = n ?? \"none\"\n"));
+    accepts(&format!(
+        "{decl}fn len(n: MaybeName) -> integer\n  if n != nil then\n    return #n\n  end\n  return 0\nend\n"
+    ));
+}
+
+#[test]
+fn a_generic_alias_is_checked_with_its_arguments() {
+    let decl = "type Pair<A, B> = table<A, B>\ntype Maybe<T> = T?\ntype Check<T> = fn(T) -> boolean\n";
+    accepts(&format!("{decl}local p: Pair<string, integer> = {{a: 1}}\n"));
+    rejects(&format!("{decl}local p: Pair<string, integer> = {{a: \"one\"}}\n"), "integer");
+    accepts(&format!("{decl}local m: Maybe<integer> = nil\nlocal n: Maybe<integer> = 3\n"));
+    rejects(&format!("{decl}local m: Maybe<integer> = \"x\"\n"), "integer");
+    accepts(&format!(
+        "{decl}local c: Check<string> = fn(s: string) -> boolean\n  return #s > 0\nend\nlocal ok: boolean = c(\"a\")\n"
+    ));
+    rejects(
+        &format!("{decl}local c: Check<string> = fn(n: integer) -> boolean\n  return true\nend\n"),
+        "fn(string) -> boolean",
+    );
+}
+
+/// An alias applied to a function's own type parameter takes part in
+/// inference like the type it stands for.
+#[test]
+fn a_generic_alias_over_a_type_parameter_infers() {
+    let decl = "type Check<T> = fn(T) -> boolean\n\
+                fn count<T>(items: table<T>, want: Check<T>) -> integer\n\
+                \x20 local n = 0\n\
+                \x20 for item in items do\n\
+                \x20   if want(item) then\n\
+                \x20     n += 1\n\
+                \x20   end\n\
+                \x20 end\n\
+                \x20 return n\n\
+                end\n";
+    accepts(&format!(
+        "{decl}local n: integer = count({{1, 2, 3}}, fn(i: integer) -> boolean\n  return i > 1\nend)\n"
+    ));
+    rejects(
+        &format!(
+            "{decl}local n = count({{1, 2, 3}}, fn(s: string) -> boolean\n  return true\nend)\n"
+        ),
+        "argument 2",
+    );
+}
+
+#[test]
+fn an_alias_of_a_class_is_that_class() {
+    let decl = "class Point\n  x: integer = 0\n  y: integer = 0\n  fn sum() -> integer\n    return self.x + self.y\n  end\nend\n\
+                type Position = Point\ntype Path = table<Position>\n";
+    accepts(&format!(
+        "{decl}local p: Position = Point()\nlocal x: integer = p.x\nlocal s: integer = p.sum()\n"
+    ));
+    accepts(&format!("{decl}local path: Path = {{Point(), Point()}}\n"));
+    rejects(&format!("{decl}local p: Position = Point()\nlocal s: string = p.x\n"), "integer");
+    rejects(&format!("{decl}local p: Position = Point()\nlocal z = p.z\n"), "z");
+    rejects(&format!("{decl}local p: Position = 3\n"), "Point");
+}
+
+#[test]
+fn an_alias_of_a_subclass_fits_its_parent() {
+    accepts(
+        "class Animal\nend\nclass Dog extends Animal\nend\n\
+         type Pet = Dog\nlocal d: Pet = Dog()\nlocal a: Animal = d\n",
+    );
+    rejects(
+        "class Animal\nend\nclass Dog extends Animal\nend\n\
+         type Pet = Dog\nlocal a: Animal = Animal()\nlocal d: Pet = a\n",
+        "Dog",
+    );
+}
+
+#[test]
+fn an_alias_of_an_interface_and_of_an_enum() {
+    accepts(
+        "interface Shape\n  fn area() -> float\nend\n\
+         class Square implements Shape\n  fn area() -> float\n    return 4.0\n  end\nend\n\
+         type Drawable = Shape\nlocal s: Drawable = Square()\nlocal a: float = s.area()\n",
+    );
+    accepts(
+        "enum Colour\n  Red\n  Green\nend\n\
+         type Paint = Colour\nlocal c: Paint = Colour.Red\n\
+         local name: string = match c\n  case Colour.Red then \"red\"\n  case Colour.Green then \"green\"\nend\n",
+    );
+    // Exhaustiveness is still the enum's.
+    rejects(
+        "enum Colour\n  Red\n  Green\nend\n\
+         type Paint = Colour\nlocal c: Paint = Colour.Red\n\
+         local name: string = match c\n  case Colour.Red then \"red\"\nend\n",
+        "Green",
+    );
+}
+
+#[test]
+fn an_alias_types_fields_methods_and_statics() {
+    let decl = "type Id = integer\ntype Handler = fn(Id) -> nil\n\
+                class Registry\n\
+                \x20 next: Id = 1\n\
+                \x20 static count: Id = 0\n\
+                \x20 handlers: table<Handler> = {}\n\
+                \x20 fn add(h: Handler) -> Id\n\
+                \x20   self.next += 1\n\
+                \x20   return self.next\n\
+                \x20 end\n\
+                end\n";
+    accepts(&format!(
+        "{decl}local r = Registry()\nlocal id: integer = r.add(fn(i: integer) -> nil end)\nlocal n: integer = r.next\n"
+    ));
+    rejects(
+        &format!("{decl}local r = Registry()\nlocal id = r.add(fn(s: string) -> nil end)\n"),
+        "argument 1",
+    );
+    rejects(&format!("{decl}local r = Registry()\nlocal s: string = r.next\n"), "integer");
+    rejects(&format!("{decl}local r = Registry()\nr.next = \"two\"\n"), "integer");
+}
+
+#[test]
+fn an_alias_works_in_an_interface_signature() {
+    let decl = "type Id = integer\n\
+                interface Store\n  fn get(id: Id) -> Id?\nend\n\
+                class Memory implements Store\n  fn get(id: integer) -> integer?\n    return nil\n  end\nend\n";
+    accepts(&format!("{decl}local s: Store = Memory()\nlocal v: integer? = s.get(1)\n"));
+    // A call through the interface answers with what the alias stands for.
+    rejects(
+        &format!("{decl}local s: Store = Memory()\nlocal v: string? = s.get(1)\n"),
+        "integer?",
+    );
+}
+
+#[test]
+fn an_alias_works_in_an_enum_payload() {
+    let decl = "type Id = integer\nenum Event\n  Opened(id: Id)\n  Closed\nend\n";
+    accepts(&format!("{decl}local e = Event.Opened(3)\n"));
+    accepts(&format!(
+        "{decl}fn which(e: Event) -> integer\n  return match e\n    case Event.Opened(id) then id\n    case Event.Closed then 0\n  end\nend\n"
+    ));
+    // What the pattern binds is an `integer`, not a name the arms cannot
+    // be compared through.
+    rejects(
+        &format!(
+            "{decl}fn which(e: Event) -> string\n  return match e\n    case Event.Opened(id) then id\n    case Event.Closed then \"closed\"\n  end\nend\n"
+        ),
+        "`integer` vs `string`",
+    );
+}
+
+#[test]
+fn an_alias_works_as_a_cast_target() {
+    let decl = "type Id = integer\ntype Names = table<string>\n";
+    accepts(&format!("{decl}local v: any = 3\nlocal i: integer? = v as Id\n"));
+    accepts(&format!("{decl}local v: any = {{}}\nlocal n: table<string>? = v as Names\n"));
+    rejects(&format!("{decl}local v: any = 3\nlocal s: string? = v as Id\n"), "integer");
+}
+
+#[test]
+fn an_alias_works_as_an_explicit_type_argument() {
+    let decl = "type Id = integer\nfn first<T>(items: table<T>) -> T?\n  return items[1]\nend\n";
+    accepts(&format!("{decl}local a: integer? = first<Id>({{1, 2}})\n"));
+    rejects(&format!("{decl}local a: integer? = first<Id>({{\"a\"}})\n"), "integer");
+}
+
+#[test]
+fn an_alias_works_in_a_loop_and_a_catch() {
+    accepts(
+        "type Id = integer\nfn total(ids: table<Id>) -> Id\n  local sum: Id = 0\n  for id: Id in ids do\n    sum += id\n  end\n  return sum\nend\n",
+    );
+    rejects(
+        "type Id = integer\nfn total(ids: table<string>) -> nil\n  for id: Id in ids do\n  end\n  return\nend\n",
+        "integer",
+    );
+    accepts(
+        "class Oops\nend\ntype Failure = Oops\nfn guarded() -> nil\n  try\n  catch e: Failure\n  end\n  return\nend\n",
+    );
+}
+
+#[test]
+fn an_alias_works_as_a_generic_classs_argument() {
+    let decl = "type Id = integer\nclass Box<T>\n  value: T\n  fn init(value: T)\n    self.value = value\n  end\n  fn get() -> T\n    return self.value\n  end\nend\n\
+                type IdBox = Box<Id>\n";
+    accepts(&format!("{decl}local b: IdBox = Box(3)\nlocal v: integer = b.get()\n"));
+    accepts(&format!("{decl}local b: Box<Id> = Box(3)\nlocal v: Id = b.get()\n"));
+    rejects(&format!("{decl}local b: IdBox = Box(3)\nlocal v: string = b.get()\n"), "integer");
+}
+
+/// The class's parameter keeps its meaning where an alias shares its name.
+#[test]
+fn a_type_parameter_is_not_mistaken_for_an_alias() {
+    let decl = "type Key = string\n\
+                class Slot<Key>\n  held: Key\n  fn init(held: Key)\n    self.held = held\n  end\n  fn get() -> Key\n    return self.held\n  end\nend\n";
+    // `Slot<integer>` holds integers: `Key` there is the parameter.
+    accepts(&format!("{decl}local s: Slot<integer> = Slot(3)\nlocal v: integer = s.get()\n"));
+    // Outside the class, `Key` is the alias.
+    accepts(&format!("{decl}local k: Key = \"a\"\n"));
+    rejects(&format!("{decl}local k: Key = 3\n"), "string");
+}
+
+#[test]
+fn an_unknown_type_in_an_alias_is_reported_once_where_it_is_declared() {
+    let src = "type Things = table<Thnig>\nlocal a: Things = {}\nlocal b: Things = {}\n\
+               fn f(t: Things) -> Things\n  return t\nend\n";
+    let errs = errors(src);
+    let unknown: Vec<String> = errs
+        .iter()
+        .map(|e| e.to_string())
+        .filter(|m| m.contains("unknown type"))
+        .collect();
+    assert_eq!(unknown, ["unknown type `Thnig`"], "{errs:?}");
+}
+
+/// The quiet only covers names an alias introduced: an unknown type
+/// written directly is reported where it is written, as always.
+#[test]
+fn an_unknown_type_written_directly_is_still_reported() {
+    rejects("type Id = integer\nlocal a: Missing = nil\n", "unknown type `Missing`");
+    let errs = errors("type Id = integer\nlocal a: Missing = nil\nlocal b: Missing = nil\n");
+    assert_eq!(
+        errs.iter().filter(|e| e.to_string().contains("unknown type")).count(),
+        2,
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn an_alias_has_to_stand_for_a_type() {
+    rejects("type Nothing = nil\n", "nil");
+    rejects("type N = number\n", "number");
+    rejects("type F = function\n", "function");
+    // `nil` is a result, though, and a nullable is a type.
+    accepts("type Done = fn() -> nil\ntype Maybe = string?\n");
+}
+
+#[test]
+fn an_aliass_own_parameters_are_types_on_its_right() {
+    accepts("type Pair<A, B> = table<A, B>\ntype Fn2<A, B, R> = fn(A, B) -> R\n");
+    rejects("type Pair<A> = table<A, B>\n", "unknown type `B`");
+}
+
+/// The checker is handed the tree by shared reference here, and must not
+/// have rewritten it.
+#[test]
+fn checking_leaves_the_callers_tree_as_written() {
+    let module = parse("type Id = integer\nlocal a: Id = 1\n");
+    let _ = saule_semantic::analyze(&module);
+    assert!(check(&module).is_empty());
+    match &module.stmts[1].value {
+        saule_ast::Stmt::Local {
+            ty: Some(saule_ast::Type::Named(n)),
+            ..
+        } => assert_eq!(n, "Id"),
+        other => panic!("expected the local as written, got {other:?}"),
+    }
+}
+
+/// `check_and_resolve` is what an execution path calls, and what comes
+/// after it reads types out of the tree: the alias has to be gone.
+#[test]
+fn resolving_writes_the_aliases_out_for_the_compiler() {
+    let mut module = parse("type Id = integer\nlocal v: any = 1\nlocal a = v as Id\n");
+    let _ = saule_semantic::analyze(&module);
+    let errs = saule_typeck::check_and_resolve(&mut module);
+    assert!(errs.is_empty(), "{errs:?}");
+    let saule_ast::Stmt::Local { value: Some(v), .. } = &module.stmts[2].value else {
+        panic!("expected a local");
+    };
+    match &v.value {
+        saule_ast::Expr::Cast {
+            ty: saule_ast::Type::Named(n),
+            ..
+        } => assert_eq!(n, "integer"),
+        other => panic!("expected a cast to the type itself, got {other:?}"),
+    }
+}
+
+// ─── `is` ───────────────────────────────────────────────────────────────
+
+const ZOO: &str = "\
+interface Named
+  fn name() -> string
+end
+class Animal
+  legs: integer = 4
+end
+class Dog extends Animal implements Named
+  fn name() -> string
+    return \"dog\"
+  end
+  fn bark() -> string
+    return \"woof\"
+  end
+end
+class Cat extends Animal
+  lives: integer = 9
+end
+enum Colour
+  Red
+  Green
+end
+";
+
+#[test]
+fn a_type_test_is_a_boolean() {
+    accepts("local v: any = 1\nlocal yes: boolean = v is integer\nlocal no: boolean = v is not string\n");
+    rejects("local v: any = 1\nlocal n: integer = v is integer\n", "boolean");
+    accepts("local v: any = 1\nif v is integer and v is not string or v is float then\nend\n");
+}
+
+#[test]
+fn a_type_test_narrows_an_any() {
+    accepts(&in_fn("local v: any = 1\nif v is integer then\n  local n: integer = v + 1\nend"));
+    accepts(&in_fn("local v: any = 1\nif v is string then\n  local n: integer = #v\n  local s: string = v .. \"!\"\nend"));
+    accepts(&in_fn("local v: any = 1\nif v is table<integer> then\n  local first: integer? = v[1]\nend"));
+    // …to that type, and no other.
+    rejects(
+        &in_fn("local v: any = 1\nif v is string then\n  local n: integer = v\nend"),
+        "string",
+    );
+    rejects(
+        &in_fn("local v: any = 1\nif v is integer then\n  local s: string = v\nend"),
+        "integer",
+    );
+}
+
+#[test]
+fn each_branch_of_a_chain_sees_its_own_test() {
+    accepts(&in_fn(
+        "local v: any = 1\n\
+         if v is integer then\n  local a: integer = v\n\
+         elseif v is float then\n  local b: float = v\n\
+         elseif v is string then\n  local c: string = v\n\
+         end",
+    ));
+    rejects(
+        &in_fn(
+            "local v: any = 1\n\
+             if v is integer then\n  local a: integer = v\n\
+             elseif v is float then\n  local b: integer = v\n\
+             end",
+        ),
+        "float",
+    );
+}
+
+#[test]
+fn a_type_test_narrows_a_class_to_a_subclass() {
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal) -> string\n  if a is Dog then\n    return a.bark()\n  end\n  return \"\"\nend\n"
+    ));
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal) -> integer\n  if a is Cat then\n    return a.lives\n  end\n  return a.legs\nend\n"
+    ));
+    // Without the test the member is not there.
+    rejects(
+        &format!("{ZOO}fn f(a: Animal) -> string\n  return a.bark()\nend\n"),
+        "bark",
+    );
+    // And it is not there after the branch either.
+    rejects(
+        &format!(
+            "{ZOO}fn f(a: Animal) -> string\n  if a is Dog then\n    return a.bark()\n  end\n  return a.bark()\nend\n"
+        ),
+        "bark",
+    );
+}
+
+#[test]
+fn a_type_test_narrows_to_an_interface() {
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal) -> string\n  if a is Named then\n    return a.name()\n  end\n  return \"\"\nend\n"
+    ));
+}
+
+/// A test for something wider takes nothing away.
+#[test]
+fn a_test_against_a_wider_type_keeps_the_narrower_one() {
+    accepts(&format!(
+        "{ZOO}fn f(d: Dog) -> string\n  if d is Animal then\n    return d.bark()\n  end\n  return \"\"\nend\n"
+    ));
+    accepts(&format!(
+        "{ZOO}fn f(d: Dog) -> string\n  if d is Named then\n    return d.bark()\n  end\n  return \"\"\nend\n"
+    ));
+}
+
+#[test]
+fn a_type_test_rules_nil_out_of_a_nullable() {
+    accepts("fn f(s: string?) -> string\n  if s is string then\n    return s\n  end\n  return \"\"\nend\n");
+    rejects("fn f(s: string?) -> string\n  return s\nend\n", "string");
+    // Testing against the nullable type itself leaves it nullable.
+    rejects(
+        "fn f(s: string?) -> string\n  if s is string? then\n    return s\n  end\n  return \"\"\nend\n",
+        "string",
+    );
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal?) -> string\n  if a is Dog then\n    return a.bark()\n  end\n  return \"\"\nend\n"
+    ));
+}
+
+#[test]
+fn is_not_narrows_past_a_guard() {
+    accepts("fn f(v: any) -> integer\n  if v is not integer then\n    return 0\n  end\n  return v + 1\nend\n");
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal) -> string\n  if a is not Dog then\n    return \"\"\n  end\n  return a.bark()\nend\n"
+    ));
+    // Its own branch learns nothing positive.
+    rejects(
+        &format!(
+            "{ZOO}fn f(a: Animal) -> string\n  if a is not Dog then\n    return a.bark()\n  end\n  return \"\"\nend\n"
+        ),
+        "bark",
+    );
+    // `not (v is T)` is the same guard.
+    accepts("fn f(v: any) -> integer\n  if not (v is integer) then\n    return 0\n  end\n  return v + 1\nend\n");
+}
+
+#[test]
+fn a_type_test_narrows_the_else_of_its_negation() {
+    accepts("fn f(v: any) -> integer\n  if v is not integer then\n    return 0\n  else\n    return v + 1\n  end\nend\n");
+}
+
+#[test]
+fn a_type_test_narrows_through_and() {
+    accepts("fn f(v: any) -> boolean\n  return v is string and #v > 3\nend\n");
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal, b: Animal) -> string\n  if a is Dog and b is Cat then\n    return a.bark() .. b.lives\n  end\n  return \"\"\nend\n"
+    ));
+}
+
+#[test]
+fn a_type_test_narrows_a_loop_condition() {
+    accepts(&format!(
+        "{ZOO}fn f(list: table<Animal>) -> string\n  local out = \"\"\n  local i = 1\n  local a: Animal? = list[1]\n  while a is Dog do\n    out = out .. a.bark()\n    i += 1\n    a = list[i]\n  end\n  return out\nend\n"
+    ));
+}
+
+/// A write puts back what the local was declared as: the narrowing was a
+/// fact about the value that was there.
+#[test]
+fn an_assignment_undoes_the_narrowing() {
+    rejects(
+        &format!(
+            "{ZOO}fn f(a: Animal) -> string\n  if a is Dog then\n    a = Cat()\n    return a.bark()\n  end\n  return \"\"\nend\n"
+        ),
+        "bark",
+    );
+    // The write itself is checked against the declared type, not the
+    // narrowed one.
+    accepts(&format!(
+        "{ZOO}fn f(a: Animal) -> integer\n  if a is Dog then\n    a = Cat()\n  end\n  return a.legs\nend\n"
+    ));
+}
+
+/// Only a local is narrowed: a field could be written between the test and
+/// the use by anything the branch calls.
+#[test]
+fn a_field_is_not_narrowed() {
+    rejects(
+        &format!(
+            "{ZOO}class Pen\n  holds: Animal = Animal()\n  fn f() -> string\n    if self.holds is Dog then\n      return self.holds.bark()\n    end\n    return \"\"\n  end\nend\n"
+        ),
+        "bark",
+    );
+}
+
+#[test]
+fn a_test_that_can_only_say_no_is_refused() {
+    rejects("local n: integer = 1\nlocal b = n is string\n", "always false");
+    rejects("local n: integer = 1\nlocal b = n is float\n", "always false");
+    rejects("local s: string = \"\"\nlocal b = s is table\n", "always false");
+    rejects("local s: string = \"\"\nlocal b = s is not boolean\n", "always false");
+    rejects(&format!("{ZOO}local d = Dog()\nlocal b = d is Cat\n"), "always false");
+    rejects(&format!("{ZOO}local d = Dog()\nlocal b = d is string\n"), "always false");
+    rejects(&format!("{ZOO}local d = Dog()\nlocal b = d is Colour\n"), "always false");
+    rejects(&format!("{ZOO}local c = Colour.Red\nlocal b = c is Animal\n"), "always false");
+    rejects("local t: table<integer> = {}\nlocal b = t is string\n", "always false");
+}
+
+/// Nothing is refused that could be true.
+#[test]
+fn a_test_that_could_be_true_is_allowed() {
+    // Up, down, and across to an interface a subclass might implement.
+    accepts(&format!("{ZOO}local d = Dog()\nlocal b = d is Animal\n"));
+    accepts(&format!("{ZOO}local a: Animal = Dog()\nlocal b = a is Dog\n"));
+    accepts(&format!("{ZOO}local a: Animal = Cat()\nlocal b = a is Named\n"));
+    accepts(&format!("{ZOO}local n: Named = Dog()\nlocal b = n is Cat\n"));
+    // Same type: always true, and harmless.
+    accepts("local n: integer = 1\nlocal b = n is integer\n");
+    // A nullable against its own type is the nil test.
+    accepts("local s: string? = nil\nlocal b = s is string\n");
+    accepts("local s: string? = nil\nlocal b = s is integer?\n");
+    // Tables are told apart by their contents, which the types do not fix.
+    accepts("local t: table<any> = {}\nlocal b = t is table<integer>\n");
+    // A `byte` is an integer in a range.
+    accepts("local n: integer = 1\nlocal b = n is byte\n");
+    // And `any` says nothing.
+    accepts("local v: any = 1\nlocal b = v is string\n");
+}
+
+#[test]
+fn a_leading_not_is_explained() {
+    use miette::Diagnostic;
+    let errs = errors("local v: any = 1\nlocal b = not v is string\n");
+    let help: Vec<String> = errs
+        .iter()
+        .filter_map(|e| e.help().map(|h| h.to_string()))
+        .collect();
+    assert!(
+        help.iter().any(|h| h.contains("v is not T")),
+        "the help should give the spelling that was meant: {help:?}"
+    );
+}
+
+#[test]
+fn nil_cannot_stand_after_is() {
+    rejects("local v: any = 1\nlocal b = v is nil\n", "`nil` is a value, not a type");
+    accepts("local v: any? = nil\nlocal b = v is string?\nlocal c = v == nil\n");
+}
+
+#[test]
+fn a_type_parameter_cannot_stand_after_is() {
+    rejects(
+        "fn f<T>(v: any) -> boolean\n  return v is T\nend\n",
+        "type parameter `T`",
+    );
+    rejects(
+        "fn f<T>(v: any) -> boolean\n  return v is table<T>\nend\n",
+        "type parameter `T`",
+    );
+    rejects(
+        "class Box<T>\n  fn holds(v: any) -> boolean\n    return v is T\n  end\nend\n",
+        "type parameter `T`",
+    );
+    // A value *of* the parameter's type can be tested against a real one.
+    accepts("fn f<T>(v: T) -> boolean\n  return v is string\nend\n");
+}
+
+#[test]
+fn the_type_after_is_has_to_exist() {
+    rejects("local v: any = 1\nlocal b = v is Widget\n", "unknown type `Widget`");
+    rejects("local v: any = 1\nlocal b = v is table<Widget>\n", "unknown type `Widget`");
+    rejects("local v: any = 1\nlocal b = v is number\n", "number");
+    rejects("local v: any = 1\nlocal b = v is function\n", "function");
+}
+
+#[test]
+fn a_type_test_reads_through_an_alias() {
+    let decl = "type Id = integer\ntype Label = string?\n";
+    accepts(&format!(
+        "{decl}fn f(v: any) -> integer\n  if v is Id then\n    return v + 1\n  end\n  return 0\nend\n"
+    ));
+    accepts(&format!("{decl}local v: any? = nil\nlocal b = v is Label\n"));
+    rejects(&format!("{decl}local s: string = \"\"\nlocal b = s is Id\n"), "always false");
+}
+
+/// Narrowing an enum keeps its `match` exhaustive.
+#[test]
+fn a_type_test_narrows_to_an_enum() {
+    accepts(&format!(
+        "{ZOO}fn f(v: any) -> string\n  if v is Colour then\n    return match v\n      case Colour.Red then \"red\"\n      case Colour.Green then \"green\"\n    end\n  end\n  return \"\"\nend\n"
+    ));
+}

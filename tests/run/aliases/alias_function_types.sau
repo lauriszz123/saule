@@ -1,0 +1,97 @@
+-- The case aliases exist for: a function type written once and named,
+-- instead of spelled out at every parameter, field and result that has it.
+
+type Predicate = fn(integer) -> boolean
+type Mapper = fn(integer) -> integer
+type Reducer = fn(integer, integer) -> integer
+type Thunk = fn() -> nil
+type Maker = fn(integer) -> Predicate    -- an alias inside an alias
+
+fn keep(items: table<integer>, want: Predicate) -> table<integer>
+	local out: table<integer> = {}
+	for item in items do
+		if want(item) then
+			Table.insert(out, item)
+		end
+	end
+	return out
+end
+
+fn each(items: table<integer>, change: Mapper) -> table<integer>
+	local out: table<integer> = {}
+	for item in items do
+		Table.insert(out, change(item))
+	end
+	return out
+end
+
+fn fold(items: table<integer>, start: integer, step: Reducer) -> integer
+	local acc = start
+	for item in items do
+		acc = step(acc, item)
+	end
+	return acc
+end
+
+-- A function that answers with a value of an alias type.
+fn above(limit: integer) -> Predicate
+	return fn(n: integer) -> boolean
+		return n > limit
+	end
+end
+
+-- Held in a field, in a table, and in a local.
+class Button
+	label: string
+	onTap: Thunk
+	taps: integer = 0
+
+	fn init(label: string, onTap: Thunk)
+		self.label = label
+		self.onTap = onTap
+	end
+
+	fn tap() -> nil
+		self.taps += 1
+		self.onTap()
+	end
+end
+
+local numbers = {1, 2, 3, 4, 5, 6}
+local even: Predicate = fn(n: integer) -> boolean
+	return n % 2 == 0
+end
+local double: Mapper = fn(n: integer) -> integer
+	return n * 2
+end
+local add: Reducer = fn(a: integer, b: integer) -> integer
+	return a + b
+end
+local maker: Maker = fn(limit: integer) -> Predicate
+	return above(limit)
+end
+
+local evens = keep(numbers, even)
+local big = keep(numbers, maker(4))
+local sum = fold(each(evens, double), 0, add)
+
+println(#evens, #big, sum)  -- 3  2  24
+assert(#evens == 3)
+assert(#big == 2)
+assert(sum == 24)
+
+local log: table<string> = {}
+local later: table<Thunk> = {}
+local ok = Button("OK", fn() -> nil
+	Table.insert(log, "ok")
+end)
+Table.insert(later, fn() -> nil
+	ok.tap()
+end)
+Table.insert(later, ok.onTap)
+for thunk in later do
+	thunk()
+end
+println(String.join(",", log), ok.taps)  -- ok,ok  1
+assert(#log == 2)
+assert(ok.taps == 1)

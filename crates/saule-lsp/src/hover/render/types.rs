@@ -20,6 +20,15 @@ pub(crate) fn render_type_params(type_params: &[String]) -> String {
     }
 }
 
+/// A `type` alias, as it is declared: `type Handler<T> = fn(T) -> nil`.
+pub(crate) fn render_alias(name: &str, type_params: &[String], ty: &Type) -> String {
+    format!(
+        "```saule\ntype {name}{} = {}\n```",
+        render_type_params(type_params),
+        render_type(ty)
+    )
+}
+
 /// A named type reference from a declaration header, arguments included —
 /// `Animal`, or `Repository<Player>`.
 pub(crate) fn render_type_ref(r: &TypeRef) -> String {
@@ -217,8 +226,8 @@ fn render_member_method(name: &str, sig: &MethodSig) -> String {
 /// reader sees `fn sqrt(n: float) -> float` instead of just `sqrt`.
 ///
 /// The documented signature is preferred over the registry's, because the
-/// registry has no parameter names: `fn sub(string, integer, integer?)` tells
-/// you an index goes second but not that it is the *start*. Where a member is
+/// registry has no parameter names: `fn sub(string, integer, integer?)` says
+/// an index goes second but not that it is the *start*. Where a member is
 /// registered and undocumented, the typed form is still rendered.
 pub(crate) fn render_stdlib_module(name: &str, kind: &str) -> String {
     let mut members = saule_typeck::sigs::module_members(name);

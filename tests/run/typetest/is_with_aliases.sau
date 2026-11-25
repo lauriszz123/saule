@@ -1,0 +1,40 @@
+-- An alias stands wherever a type does, after `is` included: the test is
+-- against what the alias stands for.
+
+class Failure
+	reason: string
+
+	fn init(reason: string)
+		self.reason = reason
+	end
+end
+
+type Count = integer
+type Label = string?
+type Names = table<string>
+type Problem = Failure
+type Lookup<V> = table<string, V>
+
+fn describe(v: any) -> string
+	if v is Count then
+		return "count " .. (v + 1)
+	elseif v is Problem then
+		return "problem: " .. v.reason
+	elseif v is Names then
+		return #v .. " names"
+	elseif v is Lookup<integer> then
+		return "lookup"
+	elseif v is Label then
+		return "label " .. (v ?? "-")
+	end
+	return "?"
+end
+
+println(describe(1), "|", describe(Failure("lost")), "|", describe({"a", "b"}), "|", describe({a: 1}), "|", describe("x"), "|", describe(nil), "|", describe(1.5))
+assert(describe(1) == "count 2")
+assert(describe(Failure("lost")) == "problem: lost")
+assert(describe({"a", "b"}) == "2 names")
+assert(describe({a: 1}) == "lookup")
+assert(describe("x") == "label x")
+assert(describe(nil) == "label -")
+assert(describe(1.5) == "?")

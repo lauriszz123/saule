@@ -99,6 +99,15 @@ pub enum Expr {
 
     /// `{a, b, c}` or `{name: "alice", "x y": 1, 42}` — array, map, and
     /// mixed table literals all share this single shape.
+    /// `v is T`, and with `negated`, `v is not T` — whether the value is a
+    /// `T` when the program runs. A boolean; the same test the checked
+    /// reading of `as` makes, without handing the value back.
+    Is {
+        value: Box<Spanned<Expr>>,
+        ty: Type,
+        negated: bool,
+    },
+
     Table(Vec<TableEntry>),
 
     // Lambdas

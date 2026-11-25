@@ -67,7 +67,7 @@ saule list                               # what this project uses
 
 Leaving the version off installs the newest tag and then **records it**, so a
 fresh clone of the project gets that same version rather than whatever is
-newest that day. Pre-releases are passed over unless you pin one. A repository
+newest that day. Pre-releases are passed over unless one is pinned. A repository
 with no tags falls back to its default branch, and `saule update` compares such
 a package by commit.
 
@@ -119,7 +119,7 @@ and carries the Saule version that built it.
 
 `saule test` runs every top-level function named `test_...` that takes no
 parameters, in any `.sau` file under `tests/` and any file ending `_test.sau` in
-your source directories:
+the source directories:
 
 ```saule
 fn add(a: integer, b: integer) -> integer
@@ -178,7 +178,7 @@ There are two ways to run Saule code, with different rules about what the entry 
 ```saule
 class Main
     static fn main()
-        -- your code here
+        -- the program's code goes here
     end
 end
 ```

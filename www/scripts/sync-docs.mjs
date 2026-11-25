@@ -25,7 +25,7 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { withBase, repo } from '../site.config.mjs';
+import { withBase, repo, examplesRepo } from '../site.config.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..', '..');
@@ -126,6 +126,17 @@ function yamlString(value) {
 function repoUrl(path) {
 	const encoded = path.split('/').map(encodeURIComponent).join('/');
 	return `${repo}/tree/main/${encoded}`;
+}
+
+/**
+ * The same for an example project, `dir` being its folder: the examples
+ * live in a repository of their own (`examplesRepo`), which this one only
+ * carries as a submodule — and a path into a submodule is not a page on
+ * GitHub.
+ */
+function exampleUrl(dir) {
+	const encoded = dir.split('/').map(encodeURIComponent).join('/');
+	return `${examplesRepo}/tree/main/${encoded}`;
 }
 
 /**
@@ -230,14 +241,23 @@ function rewriteLinks(body, index, { file, section }) {
 		.replace(/\]\(\.{1,2}\/LANGUAGE\.md\)/g, `](${withBase('/guides/introduction/')})`)
 		.replace(/\]\(\.{1,2}\/README\.md\)/g, `](${withBase('/guides/introduction/')})`);
 
-	// `./examples/<dir>` is the project directory when the guide is read on
-	// GitHub. On the site it becomes that example's generated page — or a
-	// repository link when the project has no page, which is a 404 otherwise.
-	out = out.replace(/\]\(\.{1,2}\/examples\/([^)\s]+?)\/?\)/g, (match, dir) =>
-		EXAMPLES.some((e) => e.dir === dir)
-			? `](${withBase(`/examples/${dir}/`)})`
-			: `](${repoUrl(`examples/${dir}`)})`,
+	// A link to an example project: written as its page in the examples
+	// repository, which is what works when the guide is read on GitHub (or
+	// as `./examples/<dir>`, which is where it is in a checkout). On the
+	// site it becomes that example's generated page — or stays a link to
+	// the examples repository when the project has no page.
+	const toExample = (match, dir) => {
+		const name = decodeURIComponent(dir);
+		return EXAMPLES.some((e) => e.dir === name)
+			? `](${withBase(`/examples/${name}/`)})`
+			: `](${exampleUrl(name)})`;
+	};
+	out = out.replace(/\]\(\.{1,2}\/examples\/([^)\s]+?)\/?\)/g, toExample);
+	const inExamplesRepo = new RegExp(
+		`\\]\\(${examplesRepo.replaceAll('.', '\\.')}/tree/main/([^)\\s/]+)/?\\)`,
+		'g'
 	);
+	out = out.replace(inExamplesRepo, toExample);
 
 	for (const anchor of unresolved) {
 		console.warn(`  ! ${file} › ${section}: unresolved link target #${anchor}`);
@@ -250,7 +270,7 @@ function rewriteLinks(body, index, { file, section }) {
  * is redundant once Starlight generates the sidebar.
  *
  * "Quick Reference" and "Grammar" are reference material rather than parts of
- * the language guide — they are things you come back to, not things you read
+ * the language guide — they are things to come back to, not things read
  * once — so they are routed out of `language/` into `reference/`.
  */
 const SKIP = new Set(['Table of Contents']);
@@ -336,7 +356,7 @@ function planDocument({ file, dir, sourcePath }) {
  * The standard library's reference tables are the pages people *use*, and a
  * two-column table of inline code is the wrong shape for them: the signature
  * wraps mid-type, nothing is highlighted, and every description is expanded
- * at once whether or not it is the one you came for.
+ * at once whether or not it is the one that was wanted.
  *
  * These turn each row into an expandable entry with a highlighted signature.
  * Done here, at generation time, rather than in the browser: the markup is
@@ -645,7 +665,7 @@ function write(plans, index) {
  *
  * `tier` is the difficulty heading the index groups the project under, and
  * the badge the sidebar shows next to it: a project is tiered by the features
- * you need to know to read it, not by how long it is. The array is kept in
+ * needed to read it, not by how long it is. The array is kept in
  * tier order, because that order is also the sidebar's.
  *
  * Projects are left out of this list on purpose when they exist only as a
@@ -654,12 +674,13 @@ function write(plans, index) {
  */
 /**
  * The tiers, in the order they are read. `badge` is the Starlight variant
- * the sidebar paints the label with.
+ * the sidebar paints the label with: green, blue, then a warm red — easy to
+ * hard, as a trail map marks its runs (see "Sidebar chips" in `theme.css`).
  */
 const TIERS = [
 	{
 		name: 'Simple',
-		badge: 'tip',
+		badge: 'success',
 		intro:
 			'Ordinary programs: arguments, files, tables and `match`, with nothing exotic in them.',
 	},
@@ -814,7 +835,7 @@ function writeExamples() {
 			'',
 			example.blurb,
 			'',
-			`[Browse this example on GitHub](${repoUrl(`examples/${example.dir}`)})`,
+			`[Browse this example on GitHub](${exampleUrl(example.dir)})`,
 			'',
 		];
 
@@ -826,8 +847,8 @@ function writeExamples() {
 			'## Run it',
 			'',
 			'```sh',
-			`git clone ${repo}.git`,
-			`cd ${shellPath(`saule/examples/${example.dir}`)}`,
+			`git clone ${examplesRepo}.git`,
+			`cd ${shellPath(`saule-examples/${example.dir}`)}`,
 			example.run,
 			'```',
 			''
@@ -860,7 +881,7 @@ function writeExamples() {
 	});
 
 	// A hand-written index that links the generated pages, so the Examples
-	// section has a landing page rather than dropping you into whichever
+	// section has a landing page rather than landing on whichever
 	// example happens to sort first.
 	const knownDirs = new Set(EXAMPLES.map((e) => e.dir));
 	const extras = readdirSync(examplesRoot, { withFileTypes: true })
@@ -870,18 +891,18 @@ function writeExamples() {
 	const index = [
 		'---',
 		'title: Overview',
-		'description: "Complete Saule projects you can clone and run, grouped simple to advanced."',
+		'description: "Complete Saule projects to clone and run, grouped simple to advanced."',
 		'sidebar:',
 		'  order: 1',
 		'---',
 		'',
 		'<!-- Generated by `npm run sync-docs`. -->',
 		'',
-		'Every example here is a real project in the repository — the code on each',
-		'page is read straight from it, so it always matches what you get when you',
-		'clone and run.',
+		`Every example here is a real project in the [examples repository](${examplesRepo}) —`,
+		'the code on each page is read straight from it, so it always matches what',
+		'a clone gives when it is run.',
 		'',
-		'They are grouped by what you need to know to read one, not by how long it',
+		'They are grouped by what needs to be known to read one, not by how long it',
 		'is, and each group is in reading order.',
 		'',
 		// One table per tier. A tier with nothing in it is left out rather
@@ -910,7 +931,7 @@ function writeExamples() {
 		index.push(
 			'## Also in the repository',
 			'',
-			...extras.map((name) => `- [\`examples/${name}\`](${repoUrl(`examples/${name}`)})`),
+			...extras.map((name) => `- [\`${name}\`](${exampleUrl(name)})`),
 			''
 		);
 	}

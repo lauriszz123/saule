@@ -1,0 +1,6 @@
+-- Type arguments on an alias that declares no parameters.
+
+type Id = integer
+
+local ids: table<Id<string>> = {}
+println(#ids)

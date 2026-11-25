@@ -135,7 +135,7 @@ impl Cx<'_> {
     /// * **A block-bodied lambda** (`fn(...) ... end`) — the caret is
     ///   writing statements in a new scope that runs to its own `end`,
     ///   not filling in an argument. The whole lambda counts, parameter
-    ///   list included: while typing `fn(next: boolean)` you are
+    ///   list included: typing `fn(next: boolean)` is
     ///   declaring the callback's parameters, and the enclosing widget
     ///   has nothing to say about those either. A `=>` lambda's body is
     ///   a single expression, still visibly one of the arguments, so
@@ -341,7 +341,7 @@ impl Cx<'_> {
                     self.visit_expr(v);
                 }
             }
-            Decl::Interface { .. } | Decl::Import { .. } => {}
+            Decl::Interface { .. } | Decl::TypeAlias { .. } | Decl::Import { .. } => {}
         }
     }
 
@@ -484,7 +484,7 @@ impl Cx<'_> {
         match &e.value {
             // A recovery hole has no children to walk.
             Expr::Error => {}
-            Expr::Cast { value, .. } => self.visit_expr(value),
+            Expr::Cast { value, .. } | Expr::Is { value, .. } => self.visit_expr(value),
             Expr::Call { callee, args, .. } => {
                 let destination = match self.call_hint.take() {
                     Some((id, ty)) if id == e.id => Some(ty),

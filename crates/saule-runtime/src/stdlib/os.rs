@@ -160,6 +160,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     );
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "Os".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.
@@ -1090,6 +1091,7 @@ fn install_fsinfo_class(env: &Rc<RefCell<Prelude>>) {
         .collect();
     let layout = Rc::new(crate::value::FieldLayout::build(None, &field_defs));
     let class = Rc::new(ClassObject {
+        interfaces: Vec::new(),
         name: "FsInfo".to_string(),
         parent: None,
         layout,

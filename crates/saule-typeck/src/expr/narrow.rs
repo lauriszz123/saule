@@ -6,6 +6,9 @@
 //! the else-branch counterpart, covering `x == nil`. `not` flips between
 //! the two, which is what makes the `if not x then return end` guard work.
 //!
+//! `x is T` narrows too, further than nil: where it held, `x` is a `T`.
+//! `x is not T` is its falsy counterpart, for the guard written with it.
+//!
 //! Both directions deliberately handle only *identifiers* — narrowing a
 //! field or index would have to track invalidation on every write.
 
@@ -32,6 +35,12 @@ pub(crate) fn narrow_truthy(cond: &Spanned<Expr>, scope: &mut Scope) {
             narrow_truthy(lhs, scope);
             narrow_truthy(rhs, scope);
         }
+        // `x is T` held, so `x` is a `T` from here.
+        Expr::Is {
+            value,
+            ty,
+            negated: false,
+        } => narrow_to_tested(value, ty, scope),
         // A truthy `x` cannot be nil. Conditions must be `boolean`, so
         // this arm is reached through `not x` rather than from a bare
         // `if x then` — see the `Unary` arm in `narrow_falsy`.
@@ -57,6 +66,12 @@ pub(crate) fn narrow_falsy(cond: &Spanned<Expr>, scope: &mut Scope) {
                 strip_nullable_binding(name, scope);
             }
         }
+        // `if x is not T then return end` — past the guard, `x` is a `T`.
+        Expr::Is {
+            value,
+            ty,
+            negated: true,
+        } => narrow_to_tested(value, ty, scope),
         // `if not x then return end` — falling through means `not x` was
         // false, i.e. `x` is truthy and therefore non-nil. This is the
         // guard idiom the `== nil` form already supported.
@@ -66,6 +81,19 @@ pub(crate) fn narrow_falsy(cond: &Spanned<Expr>, scope: &mut Scope) {
         } => narrow_truthy(rhs, scope),
         _ => {}
     }
+}
+
+/// `value is ty` held: when `value` is a local, a read of it now yields the
+/// tested type. `narrow`, not `bind`, so a write is still checked against
+/// what the local was declared as — and undoes the narrowing.
+fn narrow_to_tested(value: &Spanned<Expr>, ty: &Type, scope: &mut Scope) {
+    let Expr::Ident(name) = &value.value else {
+        return;
+    };
+    let Some(current) = scope.lookup(name).cloned() else {
+        return;
+    };
+    scope.narrow(name.clone(), super::type_test::narrowed(&current, ty));
 }
 
 /// Rebind `name` to its non-nullable inner type, if it is a nullable local.

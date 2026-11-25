@@ -295,6 +295,7 @@ mod tests {
 
     fn class(name: &str) -> Rc<ClassObject> {
         Rc::new(ClassObject {
+            interfaces: Vec::new(),
             name: name.to_string(),
             parent: None,
             layout: Rc::new(Default::default()),

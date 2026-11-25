@@ -87,6 +87,12 @@ pub struct ClassProto {
     pub smindex: HashMap<Rc<str>, StaticSlot>,
     /// interface -> (interface method slot -> this class's vtable slot).
     pub itables: HashMap<InterfaceIdx, Vec<u16>>,
+    /// The interfaces this class says it `implements`, and every one those
+    /// extend, by the name each was declared with. Not the parent class's:
+    /// a question about an instance walks the chain. This is what `v is
+    /// Drawable` is answered from — by name, as a class test is, because
+    /// the test's type reaches the VM as written.
+    pub interfaces: Vec<Rc<str>>,
     /// Vtable slot of `init`, resolved through the inheritance chain.
     pub init: Option<u16>,
 
@@ -114,6 +120,9 @@ pub struct InterfaceProto {
     /// `extends`.
     pub methods: Vec<Rc<str>>,
     pub index: HashMap<Rc<str>, u16>,
+    /// Every interface this one extends, transitively, by the name each was
+    /// declared with. A class implementing this one is all of these too.
+    pub ancestors: Vec<Rc<str>>,
 }
 
 /// A compiled enum. Variants are dense by tag, in declaration order (§9.1).

@@ -1,0 +1,7 @@
+-- `number` is not a Saule type: a value is an `integer` or a `float`, and
+-- the test has to say which.
+
+local v: any = 1
+if v is number then
+	println("numeric")
+end

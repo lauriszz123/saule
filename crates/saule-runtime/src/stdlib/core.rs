@@ -14,7 +14,7 @@ pub static CORE_PACKAGE: NativePackage = NativePackage {
     version: saule_version::VERSION,
     install,
     exports: &[
-        "print", "println", "printf", "tostring", "type", "assert", "error",
+        "print", "println", "printf", "tostring", "typeof", "assert", "error",
     ],
     register_sigs,
     builtins: empty_builtins,
@@ -30,7 +30,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Prelude>>) {
     define_native(env, "println", builtin_println);
     define_native(env, "printf", builtin_printf);
     define_native(env, "tostring", builtin_tostring);
-    define_native(env, "type", builtin_type);
+    define_native(env, "typeof", builtin_typeof);
     define_native(env, "assert", builtin_assert);
     define_native(env, "error", builtin_error);
 }
@@ -53,7 +53,10 @@ pub fn register_sigs() {
         vec![t_named("nil")],
     );
     register("tostring", vec![any.clone()], vec![t_named("string")]);
-    register("type", vec![any.clone()], vec![t_named("string")]);
+    // `typeof(v)` — the name of what `v` is, as text: for a message, or to
+    // compare two values' types with each other. Asking whether a value is
+    // some *particular* type is `v is T`, which the checker can follow.
+    register("typeof", vec![any.clone()], vec![t_named("string")]);
     // No `int` / `float` / `tonumber` / `tointeger` / `tofloat`: numeric
     // conversion is the `as` cast, which needs no signature here because
     // the typechecker knows the pairs itself (`saule_typeck::casts`).
@@ -112,7 +115,7 @@ fn builtin_tostring(args: &[Value]) -> Result<Value, String> {
     )?)))
 }
 
-fn builtin_type(args: &[Value]) -> Result<Value, String> {
+fn builtin_typeof(args: &[Value]) -> Result<Value, String> {
     let v = args.first().cloned().unwrap_or(Value::Nil);
     let name = match &v {
         Value::Instance(inst) => inst.borrow().class.name.clone(),

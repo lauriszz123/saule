@@ -26,8 +26,8 @@
 //!
 //! * `args` / `argc` — the positional Saule arguments, already converted to
 //!   [`CValue`]. String payloads point at the caller's buffer and are valid
-//!   **only for the duration of the call** — copy out anything you need to
-//!   keep.
+//!   **only for the duration of the call** — copy out anything that needs to
+//!   be kept.
 //! * `out` — write the single return value here (use [`CValue::nil`] for a
 //!   `nil`-returning function).
 //! * return code — `0` for success. Any non-zero value means failure; write
@@ -209,7 +209,7 @@ pub type ObjectReleaseFn = unsafe extern "C" fn(ObjectPtr);
 ///
 /// Required, unlike [`SET_HOST_SYMBOL`]: a library that does not export it
 /// was built against an ABI that predates versioning, which is exactly the
-/// case this check exists to catch. `saule-sdk` emits it for you.
+/// case this check exists to catch. `saule-sdk` emits it.
 pub const ABI_VERSION_SYMBOL: &str = "saule_abi_version";
 
 /// Signature of [`ABI_VERSION_SYMBOL`] — returns the [`ABI_VERSION`] the
@@ -223,7 +223,7 @@ pub type AbiVersionFn = unsafe extern "C" fn() -> u32;
 /// The symbol an interpreter looks up (optionally) right after loading a
 /// package's shared library, to hand the package its [`HostApi`]. A package
 /// that uses reference values (`STable` / `SFunction`) must export it; one
-/// that only deals in scalars may omit it. `saule-sdk` emits it for you.
+/// that only deals in scalars may omit it. `saule-sdk` emits it.
 pub const SET_HOST_SYMBOL: &str = "saule_set_host";
 
 /// Signature of [`SET_HOST_SYMBOL`]. The pointer is valid for the entire
@@ -356,7 +356,7 @@ impl CValue {
     /// A `string` value borrowing `bytes`. The caller must keep `bytes`
     /// alive for as long as the receiver may read it (see the module-level
     /// string-ownership rules). Prefer [`return_string`] on the package
-    /// side, which manages the lifetime for you.
+    /// side, which manages the lifetime.
     ///
     /// # Safety
     /// `bytes` must remain valid and immutable for the duration of the

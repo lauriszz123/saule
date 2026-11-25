@@ -66,8 +66,8 @@ $sauleHome = if ($env:SAULE_HOME) { $env:SAULE_HOME } else { Join-Path $env:USER
 #
 # A version is `26.7` on both channels; stability is a property of the
 # release, not of the version. The channel is remembered in
-# `$SAULE_HOME\channel`, so re-running this script upgrades you within the
-# channel you chose instead of silently moving you to the other one.
+# `$SAULE_HOME\channel`, so re-running this script upgrades within the
+# chosen channel instead of silently moving to the other one.
 $channelFile = Join-Path $sauleHome 'channel'
 $channel = if ($env:SAULE_CHANNEL) {
     $env:SAULE_CHANNEL
@@ -184,7 +184,7 @@ try {
     }
     # Remembered so the next run of this script stays on the same channel. An
     # explicit SAULE_VERSION does not change it: pinning one build is not a
-    # decision to leave the channel you are on.
+    # decision to leave the current channel.
     if (-not $env:SAULE_VERSION) {
         try { Set-Content -Path $channelFile -Value $channel -NoNewline } catch {}
     }
@@ -192,7 +192,7 @@ try {
     Say "installed to $bin"
 
     # Both binaries matter. `saule-lsp` is the language server every editor
-    # plugin uses; without it on PATH you get syntax highlighting and
+    # plugin uses; without it on PATH there is syntax highlighting and
     # indentation but no diagnostics, hover or formatting.
     $got = & (Join-Path $bin 'saule.exe') --version
     if ($got -ne "saule $version") { Fail "installed binary reports '$got', expected 'saule $version'" }

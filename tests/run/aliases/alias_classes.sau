@@ -1,0 +1,99 @@
+-- An alias of a class, an interface or an enum is that class, interface or
+-- enum: members are read through it, subtyping works through it, and a
+-- `match` over it is still checked against the enum's variants.
+
+interface Shape
+	fn area() -> float
+	fn name() -> string
+end
+
+class Square implements Shape
+	side: float
+
+	fn init(side: float)
+		self.side = side
+	end
+
+	fn area() -> float
+		return self.side * self.side
+	end
+
+	fn name() -> string
+		return "square"
+	end
+end
+
+class Circle implements Shape
+	radius: float
+
+	fn init(radius: float)
+		self.radius = radius
+	end
+
+	fn area() -> float
+		return 3.0 * self.radius * self.radius
+	end
+
+	fn name() -> string
+		return "circle"
+	end
+end
+
+enum Unit
+	Metres
+	Feet
+	Custom(name: string, scale: float)
+end
+
+type Figure = Shape                -- an interface
+type Tile = Square                 -- a class
+type Figures = table<Figure>
+type Measure = Unit                -- an enum
+type Catalogue = table<string, Figures>
+
+class Drawing
+	figures: Figures = {}
+	unit: Measure = Unit.Metres
+
+	fn add(figure: Figure) -> Drawing
+		Table.insert(self.figures, figure)
+		return self
+	end
+
+	fn area() -> float
+		local total = 0.0
+		for figure in self.figures do
+			total += figure.area()
+		end
+		return total * Drawing.scale(self.unit)
+	end
+
+	static fn scale(unit: Measure) -> float
+		return match unit
+			case Unit.Metres then 1.0
+			case Unit.Feet then 0.5
+			case Unit.Custom(_, scale) then scale
+		end
+	end
+end
+
+local tile: Tile = Square(2.0)
+local side: float = tile.side          -- a field, read through the alias
+local figure: Figure = tile            -- the class fits the interface alias
+local shape: Shape = figure            -- and the alias fits the interface
+
+local drawing = Drawing().add(tile).add(Circle(1.0))
+assert(drawing.area() == 7.0)
+
+drawing.unit = Unit.Custom("half", 0.5)
+assert(drawing.area() == 3.5)
+
+local catalogue: Catalogue = {flat: drawing.figures}
+local names: table<string> = {}
+for figure in catalogue["flat"]! do
+	Table.insert(names, figure.name())
+end
+
+println(side, shape.name(), drawing.area(), String.join("+", names))
+assert(side == 2.0)
+assert(String.join("+", names) == "square+circle")

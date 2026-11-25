@@ -18,6 +18,13 @@ export const base = '/saule';
  */
 export const repo = 'https://github.com/lauriszz123/saule';
 
+/**
+ * The example projects: a repository of their own, which the main one
+ * carries as its `examples/` folder (a git submodule). Links to an example,
+ * and the instructions for running one, point here.
+ */
+export const examplesRepo = 'https://github.com/lauriszz123/saule-examples';
+
 /** Where an "edit this page" link goes. Starlight appends the file's path. */
 export const editBase = `${repo}/edit/main/www/`;
 

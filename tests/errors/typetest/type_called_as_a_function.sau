@@ -1,0 +1,7 @@
+-- `type(v)` was a function before `type` was reserved. Asking what a value
+-- is is `v is T`; the name of its type as text is `typeof(v)`.
+
+local v: any = 3
+if type(v) == "integer" then
+	println("an integer")
+end

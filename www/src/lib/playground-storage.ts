@@ -164,8 +164,8 @@ export function deleteScript(id: string) {
 
 /*
  * Which entry the picker had selected last, as its option value — so coming
- * back to `/play/` reopens the script you were writing rather than dropping
- * you on "Hello, world" again. A shared link in the URL still wins over it.
+ * back to `/play/` reopens the script that was being written rather than landing
+ * on "Hello, world" again. A shared link in the URL still wins over it.
  */
 const LAST_KEY = 'saule.playground.last.v1';
 
@@ -226,8 +226,8 @@ export const DEFAULT_SESSION: Session = {
 	layout: 'side-by-side',
 	split: 0.56,
 	sidebar: true,
-	// Collapsed to begin with: the sidebar opens on your own files, and
-	// the examples are one line away when you want them.
+	// Collapsed to begin with: the sidebar opens on the visitor's own files, and
+	// the examples are one line away when they are wanted.
 	examples: false,
 };
 

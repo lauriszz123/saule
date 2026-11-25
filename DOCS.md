@@ -77,7 +77,7 @@ stdout, with **no** trailing newline.
 printf("%s scored %d\n", "Ada", 98)       -- Ada scored 98
 printf("%.2f%%\n", 99.5)                  -- 99.50%
 
--- No newline unless you write one.
+-- No newline unless one is written.
 printf("a")
 printf("b\n")                             -- ab
 ```
@@ -101,28 +101,51 @@ println(tostring({1, 2}))         -- {1, 2}
 println("n = " .. 42)             -- n = 42
 ```
 
-#### `type(v: any) -> string`
+#### `typeof(v: any) -> string`
 
-The runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`,
-`"nil"`, `"function"`, `"table"`, or the class name for an instance.
+The name of what a value is, as text: `"integer"`, `"float"`, `"string"`,
+`"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for an
+instance.
 
-`"function"` is a runtime tag covering every callable — it is not a type you
-can write, since a function's type is its signature, `fn(A) -> R`.
+To ask whether a value is one particular type, write
+[`v is T`](./LANGUAGE.md#testing-a-type-with-is) instead: `if v is string
+then … end` is checked by the compiler and narrows `v` inside the branch,
+which comparing names cannot do. `typeof` is for the two things `is` does not
+cover — putting the name in a message, and asking whether two values are the
+same kind of thing.
+
+`"function"` is a runtime tag covering every callable — it is not a type that
+can be written, since a function's type is its signature, `fn(A) -> R`.
 
 ```saule
-println(type(42))             -- integer
-println(type(2.5))            -- float
-println(type("hi"))           -- string
-println(type(true))           -- boolean
-println(type(nil))            -- nil
-println(type({1}))            -- table
-println(type(println))        -- function
+println(typeof(42))             -- integer
+println(typeof(2.5))            -- float
+println(typeof("hi"))           -- string
+println(typeof(true))           -- boolean
+println(typeof(nil))            -- nil
+println(typeof({1}))            -- table
+println(typeof(println))        -- function
 
--- An instance reports its class.
+-- An instance reports its own class, not a parent's.
 class Point
     x: integer = 0
 end
-println(type(Point()))        -- Point
+class Pixel extends Point
+end
+println(typeof(Pixel()))        -- Pixel
+println(Pixel() is Point)       -- true: `is` follows the hierarchy
+
+-- In a message.
+fn expectString(v: any) -> string
+    if v is string then
+        return v
+    end
+    return "expected a string, got " .. typeof(v)
+end
+println(expectString(3))        -- expected a string, got integer
+
+-- Are these two the same kind of thing?
+println(typeof(Point()) == typeof(Pixel()))   -- false
 ```
 
 ### Failing
@@ -132,8 +155,8 @@ println(type(Point()))        -- Point
 If `v` is truthy, answers it with the nullability stripped. Otherwise throws
 `msg`, which defaults to `"assertion failed"`.
 
-The stripping is the point: `assert` is how a `T?` becomes a `T` when you are
-prepared to fail rather than handle the absence.
+The stripping is the point: `assert` is how a `T?` becomes a `T` when failing
+is preferable to handling the absence.
 
 ```saule
 local maybe: string? = "present"
@@ -175,7 +198,7 @@ end
 println(sqrtOf(4.0))             -- 2.0
 ```
 
-**It is not the same as `throw`.** A value you `throw` can be caught by a
+**It is not the same as `throw`.** A thrown value can be caught by a
 `catch` clause of the matching type; an `error` cannot be caught at all. Use
 `throw` for a failure the program is meant to handle, and `error` only where
 stopping is the point.
@@ -210,8 +233,8 @@ opts into a piece of syntax that would otherwise be refused.
 
 #### Operators
 
-One row per operator. The method is what you write; the interface is what you
-list in `implements` so the compiler knows to look for it.
+One row per operator. The method is what is written; the interface is what is
+listed in `implements` so the compiler knows to look for it.
 
 | Operator | Interface | Method to define |
 | --- | --- | --- |
@@ -253,12 +276,12 @@ Saule's `__index` / `__newindex`.
 
 #### Where the standard library looks for them
 
-Implementing one of these does not only change what *your* code can write —
+Implementing one of these does not only change what the implementing code can write —
 parts of the library consult them too, which is usually the reason to bother:
 
 | Interface | What starts working |
 | --- | --- |
-| `OpEq<T>` | `Table.contains`, `Table.indexOf` and `Iter.unique` compare with `==`, so they match by your rule rather than by identity |
+| `OpEq<T>` | `Table.contains`, `Table.indexOf` and `Iter.unique` compare with `==`, so they match by the class's rule rather than by identity |
 | `OpCompare<T>` | `Iter.sortBy` orders with `<`; `Table.sort` takes a comparator directly and needs no interface |
 | `OpToString` | `tostring`, `print`, `println`, `String.join` and `Table.concat` all render through it |
 | `Iterable<T>` | `Iter.collect(instance.iter())` drains it into a table, which is how an instance reaches the `Iter` combinators |
@@ -304,8 +327,8 @@ takes two (the operand and the result), `OpEq` one, `OpLen` none — supplying
 the wrong number is an error rather than being ignored. See
 [Custom Iterable](./LANGUAGE.md#custom-iterable) and
 [Operator Overloading](./LANGUAGE.md#operator-overloading) for the dispatch
-rules, and [Generic Classes](./LANGUAGE.md#generic-classes) for declaring your
-own generic types.
+rules, and [Generic Classes](./LANGUAGE.md#generic-classes) for declaring
+new generic types.
 
 ---
 
@@ -321,7 +344,7 @@ Most functions here operate on **literal text**: the `.` in
 in [Patterns](#patterns) — `String.match`, `String.gmatch` and `String.gsub` —
 read their pattern argument as a Lua-style pattern instead, where `.` *is* any
 character. Which language an argument is written in is decided by the function
-you call, never by a flag.
+called, never by a flag.
 
 ### Characters and codepoints
 
@@ -395,7 +418,7 @@ println(vowels)                  -- 3
 
 The number of **characters**, which is not the number of bytes. `#s` is not
 defined for a string — use this, and use `#Bytes.fromString(s)` when the
-byte count is what you want.
+byte count is what is wanted.
 
 ```saule
 local word: string = "saulė"
@@ -484,7 +507,7 @@ The 1-based start and end indices of the first occurrence of `needle`, or
 `nil, nil` when there is none. `from` says where to start looking and
 defaults to 1.
 
-Two values, so you can slice around the match without measuring it. For just
+Two values, so the text around the match can be sliced without measuring it. For just
 the start index, [`String.indexOf`](#string-indexof) answers the same
 question with one value. `needle` is literal text; for the pattern form see
 [`String.match`](#string-match) and [`Patterns`](#patterns).
@@ -685,8 +708,8 @@ matches nothing and returns `s` unchanged, so this can never loop forever.
 
 For the pattern form — where `.` is any character and `(…)` captures — see
 [`String.gsub`](#string-gsub). The two are separate functions rather than one
-with a flag, so that neither has an argument whose language you have to
-remember.
+with a flag, so that neither has an argument whose language has to be
+remembered.
 
 ```saule
 println(String.replace("a.b.c", ".", "/"))        -- a/b/c
@@ -764,7 +787,7 @@ group read their second argument as a **pattern** instead, where `.` means "any
 character", `%d` means "a digit" and `(…)` captures part of the match.
 
 These are Lua's patterns, not regular expressions. There is no alternation
-(`a|b`) and no counted repetition (`a{2,5}`); what you get instead is a small
+(`a|b`) and no counted repetition (`a{2,5}`); what there is instead is a small
 language that fits in the table below, needs no separate engine, and is already
 familiar to anyone arriving from Lua.
 
@@ -788,7 +811,7 @@ A **character class** matches one character:
 | `%A`, `%D`, `%S`, … | the **complement** — any uppercase class letter negates it |
 | `[set]` | any character in the set: `[aeiou]`, a range `[a-z]`, or a class `[%a_]` |
 | `[^set]` | any character **not** in the set |
-| `%x` where `x` is not a class letter | the literal `x` — this is how you match `%.`, `%%`, `%(` |
+| `%x` where `x` is not a class letter | the literal `x` — this is how `%.`, `%%`, `%(` are matched |
 
 A **quantifier** follows a class and repeats it:
 
@@ -834,8 +857,8 @@ with them. [`String.find`](#string-find) already answers that question.
 The first match of `pat` in `s`, or `nil` when there is none. `from` says where
 to start looking and defaults to 1; a negative value counts back from the end.
 
-On a match you get the **captures**, one element each, in the order they were
-opened. When the pattern declares no captures you get a one-element table
+A match gives the **captures**, one element each, in the order they were
+opened. When the pattern declares no captures the result is a one-element table
 holding the whole match — a pattern without parentheses captures itself, which
 is Lua's rule, and it means `m[1]` is always "the interesting part".
 
@@ -875,7 +898,7 @@ match and its captures; the loop ends when there are no more.
 
 Two values here rather than one, because a `for` *is* flexible about how many it
 binds — unlike a `local`. So one loop variable costs nothing and gets the common
-case right, and a second is there when you want the captures:
+case right, and a second is there when the captures are wanted:
 
 ```saule
 -- One variable: the whole match.
@@ -939,7 +962,7 @@ it is far more likely to be a typo than an intent.
 local out: string, n: integer = String.gsub("hello world", "o", "0")
 println(out .. " (" .. n .. ")")                    -- hell0 w0rld (2)
 
--- Captures let you reorder what you matched.
+-- Captures allow what was matched to be reordered.
 local name: string, _c: integer = String.gsub("john smith", "(%a+) (%a+)", "%2, %1")
 println(name)                                       -- smith, john
 
@@ -974,7 +997,7 @@ println(fixed .. " (" .. fn2 .. ")")                -- baa (1)
 ```
 
 Compare [`String.replace`](#string-replace), which is the literal form and the
-right choice when the text you are replacing is just text.
+right choice when the text being replaced is just text.
 
 ## `Bytes`
 
@@ -1083,7 +1106,7 @@ println(Bytes.toHex(Bytes.fromString("Hi")))   -- 4869
 println(#Bytes.fromString("saulė"))            -- 6 bytes
 println(String.len("saulė"))                   -- 5 characters
 
--- The byte count of a string, which `String.len` does not give you.
+-- The byte count of a string, which `String.len` does not give.
 local text: string = "héllo"
 println(#Bytes.fromString(text))               -- 6
 ```
@@ -1110,7 +1133,7 @@ println(text)                                          -- ok
 
 #### `Bytes.len(b: bytes) -> integer`
 
-The byte count. `#b` is the same thing, as a value you can pass around.
+The byte count. `#b` is the same thing, as a value that can be passed around.
 
 ```saule
 local raw: bytes = Bytes.of(1, 2, 3)
@@ -1829,14 +1852,14 @@ end
 
 #### `Table.len<V>(t: table<V>) -> integer`
 
-The array length — the same number `#t` gives, as a value you can pass
+The array length — the same number `#t` gives, as a value that can be passed
 around.
 
 ```saule
 println(Table.len({1, 2, 3}))        -- 3
 println(Table.len({}))               -- 0
 
--- `#` is the operator form; this is the one you can hand to something else.
+-- `#` is the operator form; this is the one that can be handed to something else.
 local sizes: table<integer> = Iter.map({{1}, {1, 2}}, t => Table.len(t))
 println(Table.concat(sizes, ","))    -- 1,2
 ```
@@ -2227,7 +2250,7 @@ println(Iter.first({1, 2}) ?? 0)      -- 1
 println(Iter.first({}) == nil)        -- true
 
 -- Safer than `t[1]` when the table might be empty, because the nullability
--- is in the type rather than in your head.
+-- is in the type rather than in the programmer's head.
 local queue: table<string> = {}
 println(Iter.first(queue) ?? "<empty>")   -- <empty>
 ```
@@ -2376,7 +2399,7 @@ Both would have to return pairs, and a pair has no representation here —
 
 A coroutine is a function that can stop part-way — **yield** a value — and
 later be **resumed** exactly where it stopped, with its locals and its whole
-call stack intact. `Coroutine<T>` is the handle you resume; the body is handed
+call stack intact. `Coroutine<T>` is the handle that is resumed; the body is handed
 a `Yielder<T>`, the one thing that can yield it. The language guide's
 [Coroutines](./LANGUAGE.md#coroutines) section explains the model; this is the
 reference.
@@ -2505,7 +2528,7 @@ println(gen.error() ?? "")     -- out of data
 #### `gen.iter() -> fn() -> T?`
 
 A step closure that resumes the coroutine once per call — what
-`for v in gen do` uses, so you rarely call it yourself. A coroutine is an
+`for v in gen do` uses, so it is rarely called by hand. A coroutine is an
 `Iterable<T>`, and the loop variable is a `T`.
 
 Unlike `resume`, iterating **raises** if the coroutine fails part-way: a loop
@@ -2842,7 +2865,7 @@ Os.remove(path)
 #### `f.lines() -> fn() -> string?`
 
 A step closure over the handle's remaining lines. The same as `Io.lines`, for
-a file you have already opened — which is what you want when the handle was
+a file that is already open — which is what is wanted when the handle was
 opened in a particular mode, or when some of it has already been read.
 
 ```saule
@@ -2866,7 +2889,7 @@ Os.remove(path)
 
 Moves the read/write position and answers the new position, counted in bytes
 from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so
-answers where you are.
+answers where the handle is.
 
 `nil` when the handle cannot seek — a pipe, or a closed file.
 
@@ -3274,7 +3297,7 @@ Os.remove(b)
 #### `Os.tmpname() -> string`
 
 A path under the system temp directory that nothing is using yet. It is a
-**name**, not a file: nothing is created until you create it.
+**name**, not a file: nothing is created until the program creates it.
 
 ```saule
 local path: string = Os.tmpname()
@@ -3331,8 +3354,8 @@ Os.remove(path)
 ### `FsKind` variants
 
 `File` (`"file"`), `Dir` (`"dir"`), `Symlink` (`"symlink"`) and `Other`
-(`"other"`). Match on the variant rather than comparing `.value` when you
-want the compiler to check you have covered every case.
+(`"other"`). Match on the variant rather than comparing `.value` when
+the compiler should check that every case is covered.
 
 ```saule
 local info: FsInfo = Os.fsInfo(Os.cwd())!
@@ -3457,7 +3480,7 @@ escape codes included, for a terminal emulator to interpret — and `write`
 sends it keystrokes. `nil` when it cannot be started.
 
 The terminal starts at 80×24; `resize` changes it, and the program is told.
-The environment is inherited, so set `TERM` (with `Os.setenv`) to what your
+The environment is inherited, so set `TERM` (with `Os.setenv`) to what the
 emulator understands before starting the shell.
 
 | Method | |
@@ -3527,7 +3550,7 @@ Two properties shape everything below. **Reads never block**: each captured
 stream is drained on a thread of its own into a buffer, and `read` takes
 whatever has arrived so far. And **reads are `bytes`, not `string`**: a
 child's output is not promised to be text, and a `string` is always valid
-UTF-8 — use `Bytes.toString` where you expect text, which returns `string?`
+UTF-8 — use `Bytes.toString` where text is expected, which returns `string?`
 precisely because that is where it can fail.
 
 ```saule
@@ -3724,7 +3747,7 @@ it — call `kill` or `wait`.
 ### Failure conventions
 
 The filesystem calls disagree about how they report trouble, and it is worth
-knowing which is which before you write the error handling:
+knowing which is which before writing the error handling:
 
 - `Os.remove` / `Os.rename` / `Os.chdir` / `Os.mkdir` return `boolean`.
 - `Os.fsInfo` and `Os.getenv` return `T?`.
@@ -3738,10 +3761,10 @@ not a design.
 
 ## `Saule`
 
-The version of the **toolchain** running your code. Distinct from
+The version of the **toolchain** running the code. Distinct from
 [`Project`](#project), which is the version of the code being run: upgrade
 the compiler and `Saule.version` moves, while `Project.version` only moves
-when you edit your own config.
+when the project's own config is edited.
 
 Saule versions are `<two-digit year>.<build number>` — `26.7` is the seventh
 release cut in 2026. There is no patch component; a fix is simply the next
@@ -3773,7 +3796,7 @@ components, so `"26.7"` satisfies `"26"` and `"26.7"` but not `"26.8"`.
 
 A development build reports the version it is *heading toward*, not the last
 one released — so `26.8-dev` satisfies `atLeast("26.8")`. That is deliberate:
-it lets you write and test code against a feature before its release exists.
+it lets code be written and tested against a feature before its release exists.
 
 ```saule
 println(Saule.atLeast("26"))           -- true
@@ -3791,7 +3814,7 @@ end
 `atLeast` is the runtime counterpart to `min_saule_version` in `saule.config`.
 The two use the same comparison but answer different questions:
 `min_saule_version` refuses to run the project at all on an old toolchain,
-whereas `atLeast` lets code degrade. Reach for `min_saule_version` when your
+whereas `atLeast` lets code degrade. Reach for `min_saule_version` when the
 project simply cannot work without a version, and `atLeast` when it can.
 
 ## `Project`
@@ -3801,7 +3824,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 | Name | Type | What it holds |
 | --- | --- | --- |
 | `Project.name` | `string` | The project's `name:` |
-| `Project.version` | `string` | Its `version:` — the version of *your* code |
+| `Project.version` | `string` | Its `version:` — the version of the project's own code |
 | `Project.root` | `string` | Absolute path of the directory holding `saule.config` — in a program built with `saule build`, the directory its bundled files were unpacked to |
 | `Project.srcDirs` | `table<string>` | The `src_dirs:` roots as absolute paths, resolved against `root` — not the relative spellings the config used |
 
@@ -3811,7 +3834,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 --
 -- Project.name      is "bf"
 -- Project.version   is "0.1.0"
--- Project.root      is /home/you/code/bf
+-- Project.root      is /home/user/code/bf
 -- #Project.srcDirs  is 1
 --
 -- Run as a single file, there is no project, so every field is empty:
@@ -3823,7 +3846,7 @@ println(#Project.srcDirs)            -- 0
 Three things worth knowing.
 
 **They are snapshots, taken at startup.** There is no setter, and writing to
-the `srcDirs` table changes your copy rather than anything the module loader
+the `srcDirs` table changes that copy rather than anything the module loader
 will consult.
 
 **Every field is a plain `string`, never `string?`.** In **single-file mode**
@@ -3855,7 +3878,7 @@ A handful of patterns repeat across the stdlib:
   it makes sense.
 - **`?` means "may not happen".** Lookups that can miss (`String.find`,
   `Io.open`, `Os.getenv`) return nullable types so the typechecker forces
-  you to handle the absence with `?.`, `??`, `!`, or a `match`.
+  the absence to be handled with `?.`, `??`, `!`, or a `match`.
 - **Multi-return is a tuple.** Functions like `String.find` and `Os.capture`
   return `(integer?, integer?)` / `(integer, string, string)`. Destructure
   with `local s, e = ...` or pattern-match.

@@ -1,0 +1,53 @@
+-- `v is T` asks what a value is when the program runs, and answers a
+-- boolean. Against the built-in types it is an exact test: an integer is
+-- not a float, and nothing but nil is missing.
+
+fn kind(v: any) -> string
+	if v is integer then
+		return "integer"
+	elseif v is float then
+		return "float"
+	elseif v is string then
+		return "string"
+	elseif v is boolean then
+		return "boolean"
+	elseif v is bytes then
+		return "bytes"
+	elseif v is table then
+		return "table"
+	elseif v == nil then
+		return "nil"
+	end
+	return "other"
+end
+
+local seen: table<string> = {}
+for v in {1, 2.5, "three", true, {4}, Bytes.fromString("5")} do
+	Table.insert(seen, kind(v))
+end
+Table.insert(seen, kind(nil))
+
+println(String.join(" ", seen))
+assert(String.join(" ", seen) == "integer float string boolean table bytes nil")
+
+-- No conversion is involved: `1` is not a float and `1.0` is not an
+-- integer, however alike they print.
+local one: any = 1
+local uno: any = 1.0
+assert(one is integer and not (one is float))
+assert(uno is float and uno is not integer)
+
+-- A string that looks like a number is a string.
+local text: any = "42"
+assert(text is string)
+assert(text is not integer)
+
+-- `false` and `0` are values of their types, not absences.
+local no: any = false
+local zero: any = 0
+assert(no is boolean)
+assert(zero is integer)
+
+-- `any` holds everything, nil included.
+assert(one is any)
+println("ok")

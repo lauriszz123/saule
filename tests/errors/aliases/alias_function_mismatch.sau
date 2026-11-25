@@ -1,0 +1,9 @@
+-- A lambda is checked against the function type behind the alias: this one
+-- takes a string where `Predicate` says integer.
+
+type Predicate = fn(integer) -> boolean
+
+local even: Predicate = fn(text: string) -> boolean
+	return #text % 2 == 0
+end
+println(even(2))

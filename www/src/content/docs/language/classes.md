@@ -78,7 +78,7 @@ p.greet()                       -- Hi, I am Arthur
 
 Inside a method body, `self` is always in scope if it is a non `static` and in an **instance method** (and `init`), so `self` is the instance.
 
-In addition, every class member — static fields, static methods, instance methods — is reachable by its **bare name** from inside any method of the same class. Local variables and parameters can shadow them, which is what you want.
+In addition, every class member — static fields, static methods, instance methods — is reachable by its **bare name** from inside any method of the same class. Local variables and parameters can shadow them, which is the wanted behaviour.
 
 ```saule
 class Counter
@@ -317,7 +317,7 @@ local words: Box<string> = Box("hi")
 local s: string = words.get()       -- and `string` here
 ```
 
-The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
+The argument is **inferred from the constructor** when it is not written, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
 
 ```saule
 class Pair<A, B>

@@ -140,6 +140,9 @@ struct Resolver {
     /// undefined-name diagnostics, since any unknown ident might have
     /// come in through the glob.
     has_opaque_wildcard_import: bool,
+    /// Names that are `type` aliases and nothing else — see
+    /// [`type_only_names`].
+    type_only: HashSet<String>,
     errors: Vec<SemanticError>,
     /// Collected only when someone asked for it — `analyze_with_seed` runs
     /// on every language-server keystroke and should not build a table
@@ -182,6 +185,7 @@ pub(crate) fn check(
         in_init: false,
         in_method: false,
         has_opaque_wildcard_import: wildcard_names.is_none() && module_has_wildcard_import(module),
+        type_only: type_only_names(module),
         errors: Vec::new(),
         bindings: collect.then(Bindings::default),
     };

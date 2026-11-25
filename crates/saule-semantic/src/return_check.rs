@@ -66,7 +66,10 @@ fn check_decl(decl: &Decl, errors: &mut Vec<SemanticError>) {
         // No function body to walk. A lambda in the initializer carries its
         // own `return`s, which `check_fn` reaches through the expression
         // walk in the enclosing function, not from here.
-        Decl::Interface { .. } | Decl::Import { .. } | Decl::Variable { .. } => {}
+        Decl::Interface { .. }
+        | Decl::TypeAlias { .. }
+        | Decl::Import { .. }
+        | Decl::Variable { .. } => {}
     }
 }
 

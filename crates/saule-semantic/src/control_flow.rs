@@ -217,7 +217,7 @@ fn check_decl(decl: &Decl, ctx: Ctx, errors: &mut Vec<SemanticError>) {
             }
         }
         // Interface / Import declarations have no executable body.
-        Decl::Interface { .. } | Decl::Import { .. } => {}
+        Decl::Interface { .. } | Decl::TypeAlias { .. } | Decl::Import { .. } => {}
     }
 }
 
@@ -232,7 +232,7 @@ fn check_expr(expr: &Spanned<Expr>, ctx: Ctx, errors: &mut Vec<SemanticError>) {
         Expr::Member { obj, .. } | Expr::SafeMember { obj, .. } => check_expr(obj, ctx, errors),
         // A cast is transparent to control flow — it wraps a value, it
         // doesn't branch or return.
-        Expr::Cast { value, .. } => check_expr(value, ctx, errors),
+        Expr::Cast { value, .. } | Expr::Is { value, .. } => check_expr(value, ctx, errors),
         Expr::Index { obj, index } | Expr::SafeIndex { obj, index } => {
             check_expr(obj, ctx, errors);
             check_expr(index, ctx, errors);

@@ -1,0 +1,12 @@
+-- `is` is a reserved word: it is the type test, and cannot name a
+-- function, a variable or a field.
+
+class Token
+	kind: string = ""
+
+	fn is(kind: string) -> boolean
+		return self.kind == kind
+	end
+end
+
+println(Token().kind)

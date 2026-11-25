@@ -1,0 +1,5 @@
+-- `type` is a reserved word: it begins a `type Name = T` declaration, and
+-- cannot name a variable.
+
+local type = "circle"
+println("drawn")

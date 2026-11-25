@@ -1,0 +1,8 @@
+-- The right-hand side has to name types that exist. Reported once, here,
+-- and not again at each of the places `Things` is written.
+
+type Things = table<Thnig>
+
+local a: Things = {}
+local b: Things = {}
+println(#a, #b)

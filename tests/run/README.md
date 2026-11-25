@@ -2,7 +2,7 @@
 
 **Every `.sau` file under this directory must run and exit 0.** `run_tests.sh`
 gates on that, and on nothing else: what a fixture *prints* is not compared
-against anything. Read a fixture's output yourself when you change one — and
+against anything. Read a fixture's output by hand when changing one — and
 see [`../errors/README.md`](../errors/README.md) for what this gate has missed
 before.
 
@@ -20,6 +20,7 @@ fixtures sit at mirrored paths:
 
 | Area | Holds |
 | --- | --- |
+| `aliases` | `type Name = T`: plain, generic, built on each other, of classes, nullable, as cast targets |
 | `basics` | The smoke tests — `hello_world`, `fibonacci`, enums |
 | `classes` | Inheritance, interfaces, statics, fields, overrides, visibility, operator overloads |
 | `control` | Loops, `break` / `continue`, `match`, narrowing |
@@ -32,6 +33,7 @@ fixtures sit at mirrored paths:
 | `stdlib` | `String`, `Table`, `Math`, `Io`, `Os`, `Bytes`, `Iter`, `printf`, `Os.spawn` |
 | `syntax` | Literals, escapes, operators, precedence, casts |
 | `tables` | Table types, keys, element variance |
+| `typetest` | `v is T` and `is not`: every kind of type, the class hierarchy, narrowing, precedence; `typeof` |
 
 Put a new fixture in the area its *subject* belongs to. Where a fixture spans
 two, pick the one a reader would look in first.

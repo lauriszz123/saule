@@ -12,9 +12,9 @@ use super::*;
 /// Drop signatures that take no arguments, and the whole response if
 /// nothing is left.
 ///
-/// A parameterless call has nothing to tell you, and IntelliJ renders it
+/// A parameterless call has nothing to say, and IntelliJ renders it
 /// as a literal `<no parameters>` row — noise sitting next to the call
-/// you're actually filling in, as with `update(dt: Timer.getDelta(`.
+/// actually being filled in, as with `update(dt: Timer.getDelta(`.
 ///
 /// The AST path filters earlier, in [`help_from_module`], where spans
 /// are still around to reselect the enclosing level. This is the same
@@ -293,7 +293,7 @@ pub(crate) fn utf16_len(s: &str) -> u32 {
 /// parenthesise a function under `?` (`(fn() -> nil)?`, not the
 /// `fn() -> nil?` that reads as returning `nil?`) and this copy did not,
 /// so the same parameter described itself two different ways depending
-/// on which popup you were looking at. Delegating is what keeps them
+/// on which popup was showing. Delegating is what keeps them
 /// honest.
 pub(crate) fn render_type(ty: &Type) -> String {
     crate::hover::render::render_type(ty)

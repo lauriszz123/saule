@@ -667,7 +667,7 @@ fn coroutines_are_typed_in_the_editor() {
         "`co.` lacks yield: {offered:?}"
     );
 
-    // Diagnostics: a misuse is shown as you type, not when the program runs.
+    // Diagnostics: a misuse is shown during typing, not when the program runs.
     let wrong = source.replace("co.yield(i)", "co.yield(\"x\")");
     server.change(&file, &wrong);
     let errors = server.errors(&file);

@@ -55,6 +55,7 @@ fn static_class(name: &str, members: &[(&str, Value)]) -> Value {
         statics.insert((*n).to_string(), v.clone());
     }
     Value::Class(Rc::new(ClassObject {
+        interfaces: Vec::new(),
         name: name.to_string(),
         parent: None,
         layout: Default::default(),

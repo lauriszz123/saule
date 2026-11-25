@@ -1,0 +1,4 @@
+-- `is` is followed by a type, not by a value to compare with.
+
+local v: any = 1
+println(v is 1)

@@ -91,7 +91,7 @@ bite that do not on Windows:
 ## Nine traps this codebase has already fallen into
 
 Each one cost real debugging time and each is written up in full further
-down; this is the index, so you meet them before you repeat them.
+down; this is the index, so they are met before they are repeated.
 
 1. **A module-level `local` is a module *slot*, not a frame local**, so
    `FuncCtx::lookup` structurally cannot see it. Three shadowing bugs came
@@ -107,7 +107,7 @@ down; this is the index, so you meet them before you repeat them.
    because enum-method calls refused — then `CALLMX` dispatched dynamically
    and reached the empty map. A dynamic fallback is only as safe as the
    runtime data it falls back *onto*. Re-read the "known safe because X
-   refuses" notes whenever you delete a refusal. (§ "§8.5 dynamic member
+   refuses" notes whenever a refusal is deleted. (§ "§8.5 dynamic member
    dispatch — done, and what it exposed".)
 3. **A reported refusal can be hiding an unreported miscompile.** Chasing
    `case x when x < 0` (a clean refusal) found a second bug beside it: a
@@ -136,7 +136,7 @@ down; this is the index, so you meet them before you repeat them.
    it. True — until the tree-walker got a trampoline, at which point the same
    note was defending the divergence it was written to prevent. **Every
    deferral justified by "the engines would disagree" is relative to what the
-   other engine does today.** When you change the tree-walker, grep this file
+   other engine does today.** On changing the tree-walker, grep this file
    for the deferrals that reasoning supported. (§ "Tail calls — done, and the
    two bugs it uncovered".)
 
@@ -332,7 +332,7 @@ Three successive attempts got this wrong, each more subtly than the last:
    `a named argument to a callee the compiler cannot identify` (5 files) and
    `a class implementing an interface this compiler cannot see` (2).
 
-For a **cause histogram** you still have to read the message, so squeeze the
+For a **cause histogram** the message still has to be read, so squeeze the
 wrap out first and anchor on `×` alone rather than on any trailing phrase:
 
 ```
@@ -350,7 +350,7 @@ line that `uniq -c` then counted as one. A fourth way to get this
 census wrong — wrap the pipeline in `c=$(...)` and `echo "$c"`.)*
 
 Cross-check its total against the exit-status count. If they disagree, trust
-the exit status — a cause you cannot parse is still a refusal.
+the exit status — a cause that cannot be parsed is still a refusal.
 
 | Cause (first refusal per file) | Files |
 |---|---|
@@ -1580,7 +1580,7 @@ exist, and the generic fallback is standing in for it.
 
 Constructs the language **accepts silently** or reports late and unhelpfully.
 None is a VM/tree-walker divergence; both engines behave identically. Listed
-in the order I would fix them.
+in the order they should be fixed.
 
 **Accepted with no diagnostic at all.** Each of these compiles, runs, and
 gives the last declaration silently:
@@ -2051,7 +2051,7 @@ such a proto is the `EXTRAARG` rather than the tail call. `verify.rs`'s
 **tail** call. Once the tree-walker trampolined it, unbounded recursion
 became an unbounded *loop*: both engines spin, and `run_tests.sh` has no
 per-fixture timeout, so the whole suite hangs rather than fails. Pre-existing
-at `HEAD`, and invisible unless you actually run the suite to completion.
+at `HEAD`, and invisible unless the suite is actually run to completion.
 
 Fixed by binding the result first, so the call is no longer in tail position
 and the fixture tests what its comment says it tests. The comment now says
@@ -2164,8 +2164,8 @@ Worth drawing out, because it is the third time this pattern has appeared:
 the truncation had been correct-by-accident for as long as nothing compiled
 that could consume two values. It became a wrong answer the moment coverage
 widened — the same shape as `EnumObject.methods` and the `toString` guard.
-**Re-read what a gap is "known safe because of" whenever you close a
-neighbouring one.**
+**Re-read what a gap is "known safe because of" whenever a
+neighbouring one is closed.**
 
 #### Two opcodes had no room for a result count
 
@@ -2837,7 +2837,7 @@ candidate this phase was originally written around.*
 
       Asking for `--profile-bytecode` on a binary without the feature is an
       error naming the rebuild, never an empty report — an empty report
-      reads as "your program executed no bytecode", which is a different and
+      reads as "the program executed no bytecode", which is a different and
       alarming claim. `saule_vm::profile::SUPPORTED` is what the CLI checks.
 
       **First results, on release builds.** `loop_arith`: `LOADI` and `MOVE`
@@ -3507,7 +3507,7 @@ tree-walker refuses it at the `import` before anything prints. The lazy
 resolve stays in the closures anyway, so one that somehow outlives its
 preload reports rather than dangles, but in a real run it is a cache hit.
 
-Two things to know if you touch this:
+Two things to know before touching this:
 
 - **Drop the `RefCell` borrow before calling the native.** A package can call
   back into Saule through `native_host`, and that call can reach the same
@@ -3819,7 +3819,7 @@ Two things were wrong, and both are fixed:
 **Why no test caught it.** Single-module hierarchies cannot reproduce it: the
 parent's slot is still `u32::MAX` at Pass 1, so the sweep does the right
 thing. It needs an ancestor that has *already been compiled*, which only an
-`import` gives you — and
+`import` gives — and
 `a_subclass_extends_a_parent_from_another_module` compiles such a program but
 never runs it, asserting only that the slot is non-placeholder.
 `an_override_of_an_imported_method_is_inherited_by_its_own_subclass` is the
@@ -4080,7 +4080,7 @@ never have caught any of them.
 
 ---
 
-# Open questions to settle as you go
+# Open questions to settle along the way
 
 | # | Question | Current recommendation |
 |---|---|---|

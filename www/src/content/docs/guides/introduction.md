@@ -1,6 +1,6 @@
 ---
 title: Introduction
-description: Saule is a statically typed, class-oriented scripting language with Lua's runtime model and a type system that catches mistakes before you run anything.
+description: Saule is a statically typed, class-oriented scripting language with Lua's runtime model and a type system that catches mistakes before anything runs.
 sidebar:
   order: 1
 ---
@@ -10,7 +10,7 @@ simplicity and runtime model — tables, closures,
 [coroutines](/saule/language/coroutines/), multiple return values — and puts a
 real type system in front of them.
 
-The goal is a language that stays small enough to hold in your head while
+The goal is a language that stays small enough to hold in one's head while
 refusing to let a `nil` reach production.
 
 ## What it looks like
@@ -47,25 +47,25 @@ and mixing them is a compile error rather than a silent coercion. Tables are
 acquire an integer.
 
 **`nil` is opt-in.** A variable cannot hold `nil` unless its type says so with
-`?`. The compiler then makes you deal with it — through
+`?`. The compiler then requires dealing with it — through
 [safe access](/saule/language/null-safety/#safe-access), a
 [coalescing default](/saule/language/null-safety/#null-coalescing), or an
-explicit [force unwrap](/saule/language/null-safety/#force-unwrap) you had to
-type out on purpose.
+explicit [force unwrap](/saule/language/null-safety/#force-unwrap) that had to
+be typed out on purpose.
 
 **Classes, not table metaprogramming.** Inheritance, interfaces, access
 modifiers and static members are language constructs with real declarations
-instead of metatable conventions you rediscover in every codebase.
+instead of metatable conventions rediscovered in every codebase.
 
 **Exhaustive pattern matching.** [`match`](/saule/language/pattern-matching/)
 takes a value apart and binds what it finds — enum variants and their payloads,
-`nil`, literals, tuples — and it will not compile if you leave a case
+`nil`, literals, tuples — and it will not compile if a case is left
 unhandled.
 
 ## Where to go next
 
-- **[Installation](/saule/guides/installation/)** — build the toolchain and put it on your PATH.
-- **[Your First Program](/saule/guides/first-program/)** — hello world, then a real project.
-- **[Playground](/saule/play/)** — run Saule in your browser, nothing to install.
+- **[Installation](/saule/guides/installation/)** — build the toolchain and put it on the PATH.
+- **[A First Program](/saule/guides/first-program/)** — hello world, then a real project.
+- **[Playground](/saule/play/)** — run Saule in the browser, nothing to install.
 - **[Language Guide](/saule/language/types/)** — the full tour, starting with the type system.
 - **[Standard Library](/saule/stdlib/prelude-always-in-scope/)** — `String`, `Math`, `Table`, `Io`, `Os`.

@@ -1,0 +1,48 @@
+-- Aliases may be built from each other, in any order: like functions and
+-- classes, a module's aliases are all in scope from its first line, so one
+-- may mention another declared further down.
+
+type Board = table<Row>            -- `Row` is declared below
+type Row = table<Cell>
+type Cell = Mark?
+type Mark = string
+
+type Move = fn(Board, Position) -> Board
+type Position = table<integer>     -- {row, column}
+
+fn empty(size: integer) -> Board
+	local board: Board = {}
+	for r = 1, size do
+		local row: Row = {}
+		for c = 1, size do
+			row[c] = nil
+		end
+		board[r] = row
+	end
+	return board
+end
+
+fn place(mark: Mark) -> Move
+	return fn(board: Board, at: Position) -> Board
+		board[at[1]]![at[2]] = mark
+		return board
+	end
+end
+
+fn at(board: Board, position: Position) -> Cell
+	return board[position[1]]?[position[2]]
+end
+
+local cross: Move = place("x")
+local nought: Move = place("o")
+
+local board = nought(cross(empty(3), {1, 1}), {2, 2})
+
+-- Written out by hand, every one of these is the same type.
+local rows: table<table<string?>> = board
+local centre: string? = at(rows, {2, 2})
+
+println(at(board, {1, 1}), centre, at(board, {3, 3}))  -- x  o  nil
+assert(at(board, {1, 1}) == "x")
+assert(centre == "o")
+assert(at(board, {3, 3}) == nil)

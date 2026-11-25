@@ -5,6 +5,15 @@
 use miette::Diagnostic;
 use thiserror::Error;
 
+/// "no type arguments", "1 type argument", "2 type arguments".
+fn type_arguments(n: usize) -> String {
+    match n {
+        0 => "no type arguments".to_string(),
+        1 => "1 type argument".to_string(),
+        n => format!("{n} type arguments"),
+    }
+}
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum SemanticError {
     #[error("field `{field}` of class `{class}` is never initialized")]
@@ -123,6 +132,72 @@ pub enum SemanticError {
         name: String,
         ty: String,
         #[label("missing `return` on some path")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{name}` is already a type")]
+    #[diagnostic(help(
+        "a `type` alias gives a type one more name; it cannot take the name of a built-in type"
+    ))]
+    AliasOfBuiltin {
+        name: String,
+        #[label("this name is taken")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("the type `{name}` is declared more than once in this module")]
+    #[diagnostic(help(
+        "a module's classes, interfaces, enums and `type` aliases share one set of names; rename one of them"
+    ))]
+    DuplicateType {
+        name: String,
+        #[label("already declared")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("the type alias `{name}` is defined in terms of itself")]
+    #[diagnostic(help(
+        "{path}. An alias is replaced by the type on its right wherever it is written, so it cannot contain itself; a type that refers to itself has to be a `class` or an `enum`"
+    ))]
+    AliasCycle {
+        name: String,
+        /// The aliases the definition goes through to arrive back, as text.
+        path: String,
+        #[label("leads back to itself")]
+        span: miette::SourceSpan,
+    },
+
+    #[error(
+        "the type alias `{name}` takes {}, but is used here with {}",
+        type_arguments(*.expected),
+        if *.found == 0 { "none".to_string() } else { .found.to_string() }
+    )]
+    #[diagnostic(help(
+        "write one type for each parameter the alias declares, as in `{name}<...>`, or none at all for an alias with no parameters"
+    ))]
+    AliasArity {
+        name: String,
+        expected: usize,
+        found: usize,
+        #[label("wrong number of type arguments")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`{name}` is a type alias, not a value")]
+    #[diagnostic(help(
+        "an alias is only a name for a type: it can stand in an annotation, after `as`, or between `<` and `>`, and nothing exists by that name when the program runs"
+    ))]
+    AliasAsValue {
+        name: String,
+        #[label("used as a value")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("a `type` alias can only be declared at the top level of a module")]
+    #[diagnostic(help("move `type {name} = ...` out of this block, beside the module's other declarations"))]
+    AliasNotAtTopLevel {
+        name: String,
+        #[label("declared inside a block")]
         span: miette::SourceSpan,
     },
 

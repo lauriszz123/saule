@@ -45,7 +45,7 @@ use crate::op::Op;
 /// `Vm::execute`, and the feature's comment in `Cargo.toml`, for the
 /// measurement that put it behind a feature rather than a flag alone. A
 /// caller must check this and say so: a silently empty report reads as
-/// "your program executed no bytecode", which is a different and alarming
+/// "the program executed no bytecode", which is a different and alarming
 /// claim.
 pub const SUPPORTED: bool = cfg!(feature = "profile");
 

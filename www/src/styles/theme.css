@@ -210,7 +210,7 @@ a[data-saule-play]::after {
 /* Reserve the scrollbar's gutter on every page, whether or not that page
  * scrolls. Without it the viewport is a scrollbar narrower on a long page
  * than on a short one, so the header and the centred content shift sideways
- * as you navigate — and on the home page, which always scrolls, the whole
+ * from page to page — and on the home page, which always scrolls, the whole
  * layout sits offset from the window edge by that much.
  *
  * `stable` keeps the space even when nothing overflows, which is what makes
@@ -308,7 +308,7 @@ html {
 /* ── Links and navigation ────────────────────────────────────────────────
  * Sidebar entries and the table of contents shift a hair on hover. Only the
  * colour is animated on prose links: moving body text under the pointer is
- * distracting where moving a nav item is a target growing toward you.
+ * distracting where moving a nav item is a target growing toward the pointer.
  */
 a {
 	transition: color var(--saule-fast) var(--saule-ease);
@@ -454,7 +454,7 @@ site-search dialog[open]::backdrop {
 /* ── The home page, in segments ──────────────────────────────────────────
  * Four full-height panes — the hero, why, what it looks like, how to get
  * it — rather than one long scroll. Each fills the viewport and arrives as
- * you reach it.
+ * it is reached.
  *
  * Snapping is `mandatory` and `scroll-snap-stop: always`: one segment per
  * screen, and a flick advances exactly one rather than skipping past two.
@@ -546,8 +546,8 @@ body:has(.pane) .hero {
 	padding-block: clamp(2rem, 6vh, 5rem);
 }
 
-/* A hairline between segments, so the boundary is visible before you reach
-   it rather than only once it has snapped. */
+/* A hairline between segments, so the boundary is visible before it is
+   reached rather than only once it has snapped. */
 .pane + .pane {
 	border-top: 1px solid var(--sl-color-gray-6);
 }
@@ -602,6 +602,18 @@ body:has(.pane) .hero {
 .pane .card p {
 	font-size: var(--sl-text-sm);
 	line-height: 1.6;
+}
+
+/*
+ * The icon beside a card's title, a third larger. Scaled rather than
+ * sized: a larger box would push the title along and the card's lines
+ * down, and the text is where it should be. It grows from its left edge,
+ * which stays in line with the paragraph under it, into the gap before
+ * the title.
+ */
+.pane .card .icon {
+	transform: scale(1.35);
+	transform-origin: left center;
 }
 
 .pane .sl-markdown-content :is(h2, .pane-inner > h2) {
@@ -668,27 +680,55 @@ body:has(.pane) .hero {
 /*
  * The reveal.
  *
- * `[data-reveal]` is written by the observer in `Head.astro`, which also
- * sets `--step`. Doing it from script rather than in CSS is what keeps the
- * page readable with JavaScript off: nothing is hidden until something is
- * there to show it again.
+ * Every segment is in one of three places: `after` (below the one on
+ * screen, waiting), `current`, or `before` (above it, already read). The
+ * script in `Head.astro` says which, from where the page is scrolled to.
+ *
+ * Only `after` is hidden. Coming down to a segment, its pieces rise in one
+ * after another. Going back up, that same motion runs backwards: the
+ * segment being left sinks away piece by piece, last in first out,
+ * and the one above is simply there, as it was left — an entrance played
+ * again for something already read is the page looking as if it were
+ * loading a second time.
+ *
+ * `data-state` and `[data-reveal]` are written by the script. Without it
+ * nothing is hidden: the page is simply all there.
  */
 .pane [data-reveal] {
-	opacity: 0;
-	/* `--reveal-from` is set per pane as it arrives: positive when the
-	   reader is going down, so the content rises into place, negative when
-	   they are coming back up, so it settles downward. Against the scroll
-	   it would read as a stutter. */
-	transform: translateY(var(--reveal-from, 1.25rem));
 	transition:
-		opacity var(--saule-slow) var(--saule-ease),
-		transform var(--saule-slow) var(--saule-ease);
+		opacity var(--saule-reveal) var(--saule-ease),
+		transform var(--saule-reveal) var(--saule-ease);
+	/* Arriving is staggered; see below for leaving. */
 	transition-delay: calc(var(--step, 0) * 70ms);
+	--saule-reveal: 520ms;
 }
 
-.pane.is-visible [data-reveal] {
-	opacity: 1;
-	transform: none;
+@media (min-width: 50rem) and (min-height: 40rem) {
+	.pane[data-state='after'] [data-reveal] {
+		opacity: 0;
+		transform: translateY(2rem);
+		/* Going back up, the entrance runs backwards: the same length, the
+		   last piece in the first one out (`--back` counts from the end),
+		   and the easing turned round — the curve above, mirrored — so a
+		   piece that arrived fast and settled now eases away and goes. */
+		transition-timing-function: cubic-bezier(0.64, 0, 0.78, 0);
+		/* Quicker than it arrived: the segment is on its way out of the
+		   window, and the whole of this has to happen before it has gone. */
+		transition-duration: 300ms;
+		transition-delay: calc(var(--back, 0) * 40ms);
+	}
+}
+
+/*
+ * Where a segment is not a screen — a phone, a short window: see below —
+ * there is no "the one on screen". Each arrives once, the first time it is
+ * seen (`.is-seen`), and stays.
+ */
+@media not ((min-width: 50rem) and (min-height: 40rem)) {
+	.pane[data-state]:not(.is-seen) [data-reveal] {
+		opacity: 0;
+		transform: translateY(1.25rem);
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -698,6 +738,9 @@ body:has(.pane) .hero {
 
 	.pane [data-reveal] {
 		transition-property: opacity;
+	}
+
+	.pane[data-state] [data-reveal] {
 		transform: none;
 	}
 }
@@ -768,6 +811,165 @@ body:has(.pane) .hero {
 
 	.pane {
 		padding-block: 2rem;
+	}
+}
+
+/* ── Sidebar chips ───────────────────────────────────────────────────────
+ * The difficulty beside each example: Simple, Intermediate, Advanced.
+ *
+ * Starlight's badge is a bordered box of monospace type set inline after
+ * the label, so it sits wherever the label happens to end — beside a short
+ * name, on a line of its own under a long one — and the list has no edge.
+ * Here every entry is a row: the name on the left, wrapping within its own
+ * space if it must, and the chip against the right edge, level with the
+ * name's first line. The chips make a column, and the names read as a list.
+ *
+ * The chip itself is a tint, not an outline: the level's colour as the
+ * text, and the same colour faintly behind it. Three outlined boxes in
+ * three saturated colours were the loudest thing in the sidebar, for the
+ * least important thing in it.
+ */
+.sidebar-content a:has(> .sl-badge) {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.sidebar-content a > .sl-badge {
+	flex: none;
+	margin-inline: 0;
+	padding: 0.2em 0.6em;
+	border: 0;
+	border-radius: 999px;
+	font-family: inherit;
+	font-size: 0.6875rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	line-height: 1.3;
+	white-space: nowrap;
+	/* The level's own colour: lightened for the text on a dark page,
+	   deepened on a light one, and a wash of it behind. */
+	color: color-mix(in oklab, var(--saule-chip) 72%, var(--sl-color-white));
+	background-color: color-mix(in oklab, var(--saule-chip) 16%, transparent);
+}
+
+.sidebar-content a > .sl-badge.success {
+	--saule-chip: var(--sl-color-green);
+}
+
+.sidebar-content a > .sl-badge.note {
+	--saule-chip: var(--sl-color-blue);
+}
+
+.sidebar-content a > .sl-badge.caution {
+	--saule-chip: var(--sl-color-orange);
+}
+
+.sidebar-content a > .sl-badge.tip {
+	--saule-chip: var(--sl-color-purple);
+}
+
+.sidebar-content a > .sl-badge.danger {
+	--saule-chip: var(--sl-color-red);
+}
+
+.sidebar-content a > .sl-badge.default {
+	--saule-chip: var(--sl-color-accent);
+}
+
+/* The current page is a filled row in the accent: its chip is that
+   row's own ink, a shade darker behind, rather than a fourth colour. */
+.sidebar-content a[aria-current='page'] > .sl-badge {
+	color: inherit;
+	background-color: rgb(0 0 0 / 0.14);
+}
+
+/* ── Between pages ───────────────────────────────────────────────────────
+ * Going from one page to another, the frame stays and the page changes
+ * inside it. The header and the sidebar are the same on every page of the
+ * documentation, so they are named and carried across: only what differs
+ * is redrawn — one article fades into the next — instead of the whole
+ * window blinking to white and back.
+ *
+ * The browser does this between two ordinary page loads; nothing is
+ * intercepted, and where it is not supported a link is simply a link.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	@view-transition {
+		navigation: auto;
+	}
+
+	.page > .header {
+		view-transition-name: saule-header;
+	}
+
+	#starlight__sidebar {
+		view-transition-name: saule-sidebar;
+	}
+
+	.right-sidebar-panel {
+		view-transition-name: saule-contents;
+	}
+
+	/* Everything not named above: one page fading into the next, in
+	   place. Not moved: a page left halfway down and one arriving at its
+	   top are in different places, and sliding between the two is a lurch. */
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation-duration: var(--saule-mid);
+		animation-timing-function: var(--saule-ease);
+	}
+
+	::view-transition-group(saule-header),
+	::view-transition-group(saule-sidebar),
+	::view-transition-group(saule-contents) {
+		animation-duration: var(--saule-mid);
+	}
+}
+
+/* ── Within a page ───────────────────────────────────────────────────────
+ * A link to a heading travels there instead of cutting to it, so where it
+ * went is something that was seen. Not on the home page, whose segments snap,
+ * and not until the page has settled (`data-settled`, from `Head.astro`):
+ * a page opened at a heading far down a long reference should be there,
+ * not be seen scrolling to it.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	html[data-settled]:not(:has(.pane)) {
+		scroll-behavior: smooth;
+	}
+}
+
+/*
+ * A group in the sidebar, or any `<details>`, opens to its height and
+ * closes back from it. `interpolate-size` is what lets a height run to
+ * `auto`; without it the group simply opens, as before.
+ *
+ * Only once the page has settled (`data-settled`): the groups a reader
+ * left open are opened again as the page loads, and that is the page
+ * being put back as it was, not something to watch happen.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	:root {
+		interpolate-size: allow-keywords;
+	}
+
+	html[data-settled] .sidebar-content details::details-content,
+	html[data-settled] .sl-markdown-content details::details-content {
+		block-size: 0;
+		overflow-y: clip;
+		opacity: 0;
+		transition:
+			block-size var(--saule-mid) var(--saule-ease),
+			opacity var(--saule-mid) var(--saule-ease),
+			content-visibility var(--saule-mid) allow-discrete;
+	}
+
+	html[data-settled] .sidebar-content details[open]::details-content,
+	html[data-settled] .sl-markdown-content details[open]::details-content {
+		block-size: auto;
+		opacity: 1;
 	}
 }
 

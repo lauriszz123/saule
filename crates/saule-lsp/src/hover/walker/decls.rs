@@ -228,6 +228,24 @@ impl<'a> Cx<'a> {
                     self.record_type_idents_in(t, span);
                 }
             }
+            Decl::TypeAlias {
+                name,
+                name_span,
+                type_params,
+                ty,
+                ty_span,
+                ..
+            } => {
+                let doc = self.doc_at(d.span.start);
+                self.record(
+                    name_span.clone(),
+                    with_doc(
+                        crate::hover::render::render_alias(name, type_params, ty),
+                        doc.as_ref(),
+                    ),
+                );
+                self.record_type_idents_in(ty, ty_span);
+            }
             Decl::Import { names, .. } => {
                 // Best match wins: walk the precomputed blurbs and
                 // record any whose span contains the cursor. Spans

@@ -1,5 +1,5 @@
 ---
-title: Your First Program
+title: A First Program
 description: From a one-line script to a typed, multi-file Saule project in a few minutes.
 sidebar:
   order: 3
@@ -66,7 +66,7 @@ an instance.
 ## Handling nothing
 
 A variable cannot be `nil` unless its type says so. Mark it with `?` and the
-compiler makes you handle the empty case:
+compiler requires the empty case to be handled:
 
 ```saule
 local nickname: string? = nil
@@ -110,7 +110,7 @@ project mode and single-file mode.
 
 ### Multiple files
 
-Project mode resolves imports across your source directories:
+Project mode resolves imports across the source directories:
 
 ```saule
 -- entities/Player.sau
@@ -145,7 +145,7 @@ folder modules, dependencies, and visibility rules.
 
 ### Passing arguments
 
-Anything after `--` goes to your program untouched, and shows up in `Os.args()`:
+Anything after `--` goes to the program untouched, and shows up in `Os.args()`:
 
 ```sh
 saule run -- input.txt --verbose

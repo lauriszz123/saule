@@ -1,0 +1,6 @@
+-- An empty parameter list is a mistake, on an alias as on a function.
+
+type Box<> = table<integer>
+
+local box: Box = {}
+println(#box)

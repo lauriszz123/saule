@@ -24,8 +24,8 @@ its lit edge lands under a pixel and vanishes.
 
 The wordmark is real outlines (Avenir Next Bold, converted to paths), not a
 `<text>` element, so it renders identically everywhere and needs no font
-installed. To change the word you have to regenerate the path, not edit a
-string.
+installed. To change the word the path has to be regenerated, not a
+string edited.
 
 ## Where each asset is installed
 

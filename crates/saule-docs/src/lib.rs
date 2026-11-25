@@ -26,7 +26,7 @@
 //! ordinary trivia.
 //!
 //! The marker is *exactly* three dashes not followed by a fourth — the
-//! same escape hatch Rust gives you with `////`. So a decorative rule
+//! same escape hatch Rust gives with `////`. So a decorative rule
 //! (`--------------------`) or a banner (`---- Section ----`) stays a
 //! plain comment and never attaches itself to whatever follows it.
 //!

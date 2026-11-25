@@ -4,7 +4,7 @@
 //! fields and enum variants nested as children.
 //!
 //! Symbol *ranges* cover the entire declaration span (so clicking on
-//! the outline takes you to the start of the decl); *selection ranges*
+//! the outline goes to the start of the decl); *selection ranges*
 //! cover just the name token, recovered by scanning the source for the
 //! first occurrence of the name inside the decl span.
 
@@ -166,6 +166,20 @@ fn build(module: &Module, source: &str, idx: &LineIndex) -> Vec<DocumentSymbol> 
                     name,
                     SymbolKind::VARIABLE,
                     ty.as_ref().map(render_type),
+                    &d.span,
+                    name,
+                    source,
+                    idx,
+                    None,
+                ));
+            }
+            Decl::TypeAlias { name, ty, .. } => {
+                // The protocol has no kind for an alias; this is the one
+                // editors show as a type that is not a class.
+                out.push(symbol(
+                    name,
+                    SymbolKind::TYPE_PARAMETER,
+                    Some(render_type(ty)),
                     &d.span,
                     name,
                     source,
@@ -412,5 +426,22 @@ mod tests {
     fn indentation_alone_still_works() {
         let broken = "fn before()\n    local a = 1\n\nfn after()\n    local b = 2\nend\n";
         assert_eq!(outline_broken(None, broken), ["before", "after"]);
+    }
+
+    #[test]
+    fn a_type_alias_is_in_the_outline_with_what_it_stands_for() {
+        let syms = outline(
+            "type Handler = fn(string) -> nil\nexport type Pair<A, B> = table<A, B>\nclass Bus\nend\n",
+        );
+        let got: Vec<(String, SymbolKind, Option<String>)> = syms
+            .iter()
+            .map(|s| (s.name.clone(), s.kind, s.detail.clone()))
+            .collect();
+        assert_eq!(got[0].0, "Handler");
+        assert_eq!(got[0].1, SymbolKind::TYPE_PARAMETER);
+        assert_eq!(got[0].2.as_deref(), Some("fn(string) -> nil"));
+        assert_eq!(got[1].0, "Pair");
+        assert_eq!(got[1].2.as_deref(), Some("table<A, B>"));
+        assert_eq!(got[2].0, "Bus");
     }
 }

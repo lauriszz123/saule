@@ -17,7 +17,7 @@ Most functions here operate on **literal text**: the `.` in
 in [Patterns](/saule/stdlib/string/#patterns) — `String.match`, `String.gmatch` and `String.gsub` —
 read their pattern argument as a Lua-style pattern instead, where `.` *is* any
 character. Which language an argument is written in is decided by the function
-you call, never by a flag.
+called, never by a flag.
 
 ### Characters and codepoints
 
@@ -115,7 +115,7 @@ println(vowels)                  -- 3
 
 The number of **characters**, which is not the number of bytes. `#s` is not
 defined for a string — use this, and use `#Bytes.fromString(s)` when the
-byte count is what you want.
+byte count is what is wanted.
 
 ```saule
 local word: string = "saulė"
@@ -239,7 +239,7 @@ The 1-based start and end indices of the first occurrence of `needle`, or
 `nil, nil` when there is none. `from` says where to start looking and
 defaults to 1.
 
-Two values, so you can slice around the match without measuring it. For just
+Two values, so the text around the match can be sliced without measuring it. For just
 the start index, [`String.indexOf`](/saule/stdlib/string/#string-indexof) answers the same
 question with one value. `needle` is literal text; for the pattern form see
 [`String.match`](/saule/stdlib/string/#string-match) and [`Patterns`](/saule/stdlib/string/#patterns).
@@ -510,8 +510,8 @@ matches nothing and returns `s` unchanged, so this can never loop forever.
 
 For the pattern form — where `.` is any character and `(…)` captures — see
 [`String.gsub`](/saule/stdlib/string/#string-gsub). The two are separate functions rather than one
-with a flag, so that neither has an argument whose language you have to
-remember.
+with a flag, so that neither has an argument whose language has to be
+remembered.
 
 ```saule
 println(String.replace("a.b.c", ".", "/"))        -- a/b/c
@@ -614,7 +614,7 @@ group read their second argument as a **pattern** instead, where `.` means "any
 character", `%d` means "a digit" and `(…)` captures part of the match.
 
 These are Lua's patterns, not regular expressions. There is no alternation
-(`a|b`) and no counted repetition (`a{2,5}`); what you get instead is a small
+(`a|b`) and no counted repetition (`a{2,5}`); what there is instead is a small
 language that fits in the table below, needs no separate engine, and is already
 familiar to anyone arriving from Lua.
 
@@ -638,7 +638,7 @@ A **character class** matches one character:
 | `%A`, `%D`, `%S`, … | the **complement** — any uppercase class letter negates it |
 | `[set]` | any character in the set: `[aeiou]`, a range `[a-z]`, or a class `[%a_]` |
 | `[^set]` | any character **not** in the set |
-| `%x` where `x` is not a class letter | the literal `x` — this is how you match `%.`, `%%`, `%(` |
+| `%x` where `x` is not a class letter | the literal `x` — this is how `%.`, `%%`, `%(` are matched |
 
 A **quantifier** follows a class and repeats it:
 
@@ -687,8 +687,8 @@ with them. [`String.find`](/saule/stdlib/string/#string-find) already answers th
 The first match of `pat` in `s`, or `nil` when there is none. `from` says where
 to start looking and defaults to 1; a negative value counts back from the end.
 
-On a match you get the **captures**, one element each, in the order they were
-opened. When the pattern declares no captures you get a one-element table
+A match gives the **captures**, one element each, in the order they were
+opened. When the pattern declares no captures the result is a one-element table
 holding the whole match — a pattern without parentheses captures itself, which
 is Lua's rule, and it means `m[1]` is always "the interesting part".
 
@@ -735,7 +735,7 @@ match and its captures; the loop ends when there are no more.
 
 Two values here rather than one, because a `for` *is* flexible about how many it
 binds — unlike a `local`. So one loop variable costs nothing and gets the common
-case right, and a second is there when you want the captures:
+case right, and a second is there when the captures are wanted:
 
 ```saule
 -- One variable: the whole match.
@@ -806,7 +806,7 @@ it is far more likely to be a typo than an intent.
 local out: string, n: integer = String.gsub("hello world", "o", "0")
 println(out .. " (" .. n .. ")")                    -- hell0 w0rld (2)
 
--- Captures let you reorder what you matched.
+-- Captures allow what was matched to be reordered.
 local name: string, _c: integer = String.gsub("john smith", "(%a+) (%a+)", "%2, %1")
 println(name)                                       -- smith, john
 
@@ -841,7 +841,7 @@ println(fixed .. " (" .. fn2 .. ")")                -- baa (1)
 ```
 
 Compare [`String.replace`](/saule/stdlib/string/#string-replace), which is the literal form and the
-right choice when the text you are replacing is just text.
+right choice when the text being replaced is just text.
 
 </details>
 </div>

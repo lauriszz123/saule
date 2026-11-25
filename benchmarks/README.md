@@ -12,7 +12,7 @@ python3 benchmarks/bench.py check              # confirm outputs still agree
 ONLY=coroutine,fib python3 benchmarks/bench.py # just these two
 ```
 
-To compare two builds — which is what you want when judging a change — pass
+To compare two builds — which is what is wanted when judging a change — pass
 both:
 
 ```bash

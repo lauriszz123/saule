@@ -31,6 +31,8 @@ pub enum ItemKind {
     Variant,
     /// A module-level `export name: T = value`.
     Variable,
+    /// A `type Name = T` alias.
+    TypeAlias,
 }
 
 /// A declaration that may carry a doc comment.
@@ -154,6 +156,13 @@ pub fn walk(module: &Module) -> Vec<DocItem<'_>> {
                     });
                 }
             }
+
+            Decl::TypeAlias { name, .. } => out.push(DocItem {
+                qname: name.clone(),
+                anchor,
+                params: NONE,
+                kind: ItemKind::TypeAlias,
+            }),
 
             Decl::Import { .. } => {}
         }

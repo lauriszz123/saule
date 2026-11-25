@@ -1,0 +1,8 @@
+-- One name, one alias. The second declaration is the error; the first
+-- stands, so the rest of the file is still checked against something.
+
+type Id = integer
+type Id = string
+
+local id: Id = 1
+println(id)

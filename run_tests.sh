@@ -10,8 +10,8 @@
 # what diagnostic an error fixture produces, is no longer gated. So a fixture
 # that fails for the wrong reason passes here, and a change that prints the
 # wrong value while still exiting 0 passes too — `tests/errors/README.md` has
-# the two cases where that happened before. Read a fixture's output yourself
-# when you change one.
+# the two cases where that happened before. Read a fixture's output by hand
+# when changing one.
 #
 # Exits non-zero if any fixture is on the wrong side of either line, so CI
 # can gate on it. `SAULE_BIN` overrides the binary (e.g. to test a release

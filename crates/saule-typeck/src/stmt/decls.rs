@@ -286,6 +286,20 @@ pub(crate) fn check_decl(
             }
             pop_generics(prev_generics);
         }
+        // `type Name<A> = T`. By now the alias is written out wherever it
+        // was used, this declaration's right-hand side included, so all that
+        // is left is to ask whether that side is a type at all — here, once,
+        // and not at every place the alias is written.
+        Decl::TypeAlias {
+            type_params,
+            ty,
+            ty_span,
+            ..
+        } => {
+            let prev_generics = push_generics(type_params, &[]);
+            check_alias_type(ty, ty_span.clone(), errors);
+            pop_generics(prev_generics);
+        }
         _ => {}
     }
 }

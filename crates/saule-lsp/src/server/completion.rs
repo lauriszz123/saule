@@ -61,6 +61,7 @@ pub fn complete(source: &str, offset: usize) -> Vec<CompletionItem> {
         return Vec::new();
     };
     let _ = saule_semantic::analyze_with_seed(&module, saule_semantic::ModuleSeed::default());
+    let module = saule_semantic::aliases::written_out(&module);
 
     let Some(found) = Walk::run(&module) else {
         if Walk::in_interface_body(&module, offset - prefix.len()) {
@@ -177,6 +178,9 @@ impl Backend {
             None => saule_semantic::ModuleSeed::default(),
         };
         let _ = saule_semantic::analyze_with_seed(&module, seed);
+        // What follows a `.` depends on what the value is, and a value
+        // annotated with a `type` alias is what the alias stands for.
+        let module = saule_semantic::aliases::written_out(&module);
 
         let Some(found) = Walk::run(&module) else {
             // Nothing in the tree stands for the caret. An interface body is
@@ -234,8 +238,8 @@ impl Backend {
         // Dependencies declared in `saule.config`. These live outside the
         // workspace (`../json`) and are not under the project's own
         // `src_dirs`, so the workspace scan below never reaches them — without
-        // this, a dependency you can import is a dependency you get no
-        // suggestion for.
+        // this, a dependency that can be imported is a dependency with no
+        // suggestion for it.
         for dep in saule_project::get()
             .map(|p| p.dependencies)
             .unwrap_or_default()
@@ -296,7 +300,7 @@ impl Backend {
 
         // Workspace files, relative to this file's folder first, then to the
         // project's `src_dirs`. A folder holding `init.sau` is offered as the
-        // folder itself, since that is what you import.
+        // folder itself, since that is what is imported.
         let src_dirs: Vec<std::path::PathBuf> = saule_project::get()
             .map(|p| p.src_dirs.clone())
             .unwrap_or_default();

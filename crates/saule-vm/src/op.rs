@@ -652,6 +652,20 @@ define_ops! {
     /// Appended after `GETPAY`, never inserted: the numbering is the chunk
     /// ABI.
     CALLSELF: Abc,
+
+    // ---- §15.12 Nullability (continued) ----------------------------------
+    /// `v is T` — `R[A] := R[B] is cast_types[C]`, a boolean.
+    ///
+    /// The test [`CASTCHK`](Op::CASTCHK) makes, answering with whether it
+    /// held instead of with the value. It cannot be spelled as `CASTCHK`
+    /// and a compare against nil: `nil is string?` is true, and `CASTCHK`
+    /// hands back the `nil` it was given, which reads as a failure.
+    ///
+    /// `v is not T` is this and a `NOT`.
+    ///
+    /// Appended after `CALLSELF`, never inserted: the numbering is the
+    /// chunk ABI.
+    ISTYPE: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

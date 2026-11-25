@@ -1,8 +1,8 @@
 //! Child-process handles backing `Value::Process`.
 //!
 //! `Os.execute` and `Os.capture` both block until the child is finished,
-//! which makes them useless for a child you mean to *talk to*: a language
-//! server, a formatter you feed on stdin, an editor embedded in a window.
+//! which makes them useless for a child that is to be *talked to*: a language
+//! server, a formatter fed on stdin, an editor embedded in a window.
 //! This is the handle for that case — the child runs while the program does,
 //! and reads never block.
 //!

@@ -12,13 +12,13 @@ sidebar:
 
 A `Permissions` flag set that unions, intersects and flips with the bitwise operators and prints like `rwx`, plus an RGBA colour packed into one `integer` with shifts and masks. Shows the Lua 5.3 spellings (`~` is xor, because `^` is already exponentiation), the precedence that makes `bits & flag != 0` need no parentheses, and the `Op*` interfaces that put all six operators on a class.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/bitwise-flags)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/bitwise-flags)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/bitwise-flags
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/bitwise-flags
 saule run
 ```
 
@@ -291,7 +291,7 @@ class Main
 		-- `>>` is a *logical* shift, as in Lua 5.3: the vacated bits are
 		-- filled with zeros rather than with the sign bit, so a negative
 		-- number comes back positive. `>>` is not "divide by a power of two"
-		-- for negative values — divide when that is what you meant.
+		-- for negative values — divide when that is what is meant.
 		printf("-8 >> 1           = %d\n", -8 >> 1)
 		printf("-8 / 2            = %d\n", -8 / 2)
 

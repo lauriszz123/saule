@@ -16,7 +16,7 @@
 //!
 //! `table<T>` is checked **elementwise**: `t as table<integer>` walks every
 //! entry and fails if any is not an integer. That is O(n) per cast, and it
-//! is the only way the resulting `table<integer>` can be honest — `type()`
+//! is the only way the resulting `table<integer>` can be honest — `typeof()`
 //! reports every table as just `"table"`, so a shallow check would hand back
 //! a container whose element type is a lie.
 //!
@@ -126,7 +126,7 @@ fn matches_named(value: &Value, name: &str) -> bool {
                 let inst = inst.borrow();
                 let mut cls = Some(inst.class.clone());
                 while let Some(c) = cls {
-                    if c.name == other {
+                    if c.name == other || c.interfaces.iter().any(|i| i == other) {
                         return true;
                     }
                     cls = c.parent.clone();

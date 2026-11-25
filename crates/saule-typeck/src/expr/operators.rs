@@ -350,8 +350,8 @@ pub(crate) fn check_equality_compat(
     };
     let lb = strip_nullable(lt.clone());
     let rb = strip_nullable(rt.clone());
-    // `nil` on either side is legitimate — `x == nil` is how you check
-    // nullability.
+    // `nil` on either side is legitimate — `x == nil` is how nullability
+    // is checked.
     if matches!(&lb, Type::Named(n) if n == "nil") || matches!(&rb, Type::Named(n) if n == "nil") {
         return;
     }

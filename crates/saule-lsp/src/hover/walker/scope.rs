@@ -264,6 +264,14 @@ impl<'a> Cx<'a> {
         // no source text — pull any `---` block from the doc index so a
         // hover on a *usage* reads the same as one on the declaration.
         let doc = self.imports.docs.get(name);
+        // An alias first: in an annotation that is what the name means.
+        // Shown with what it stands for, since that is the whole of it.
+        if let Some(alias) = saule_semantic::lookup_alias(name) {
+            return Some(with_doc(
+                crate::hover::render::render_alias(name, &alias.type_params, &alias.ty),
+                doc,
+            ));
+        }
         if let Some(info) = with_classes(|r| r.get(name).cloned()) {
             return Some(with_doc(render_class_full(name, &info), doc));
         }

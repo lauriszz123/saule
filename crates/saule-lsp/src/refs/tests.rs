@@ -1493,3 +1493,60 @@ end
         }
     );
 }
+
+// ─── `type` aliases ──────────────────────────────────────────────────────
+
+const ALIASED: &str = "\
+type Handler = fn(string) -> nil
+class Bus
+  last: Handler? = nil
+  fn on(handler: Handler) -> Handler
+    return handler
+  end
+end
+local h: Handler? = nil
+";
+
+#[test]
+fn an_alias_resolves_from_its_declaration_and_from_a_use() {
+    let at_decl = resolve(ALIASED, "Handler =");
+    assert_eq!(at_decl, Symbol::TypeAlias("Handler".into()));
+    let at_use = resolve(ALIASED, "Handler) ->");
+    assert_eq!(at_use, Symbol::TypeAlias("Handler".into()));
+}
+
+#[test]
+fn goto_definition_on_an_alias_lands_on_its_declaration() {
+    let sym = Symbol::TypeAlias("Handler".into());
+    let span = def_span(ALIASED, &sym);
+    assert_eq!(&ALIASED[span.clone()], "Handler");
+    assert_eq!(span.start, ALIASED.find("Handler").unwrap());
+}
+
+#[test]
+fn references_to_an_alias_are_found_in_annotations() {
+    let sym = Symbol::TypeAlias("Handler".into());
+    let hits = defs_and_refs(ALIASED, &sym);
+    let uses = hits.iter().filter(|h| !h.is_def).count();
+    // The field, the parameter, the result and the local.
+    assert!(uses >= 4, "expected the four uses, got {hits:?}");
+    assert!(hits.iter().all(|h| &ALIASED[h.span.clone()] == "Handler"));
+}
+
+/// A type named on an alias's right-hand side is a reference to that type.
+#[test]
+fn a_class_named_in_an_alias_is_a_reference_to_the_class() {
+    let src = "class Event\nend\ntype Handler = fn(Event) -> nil\n";
+    let sym = resolve(src, "Event)");
+    assert_eq!(sym, Symbol::Class("Event".into()));
+    assert_eq!(ref_count(src, &sym), 1);
+}
+
+/// Where a name is both, an annotation means the alias.
+#[test]
+fn an_alias_is_not_mistaken_for_another_kind_of_symbol() {
+    let src = "type Size = integer\nfn Size() -> integer\n  return 1\nend\nlocal s: Size = Size()\n";
+    // The third `Size` is the local's annotation; the fourth is the call.
+    assert_eq!(resolve_ident(src, "Size", 2), Symbol::TypeAlias("Size".into()));
+    assert_eq!(resolve_ident(src, "Size", 3), Symbol::Function("Size".into()));
+}

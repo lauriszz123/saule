@@ -178,14 +178,14 @@ end
 <summary><code class="api-sig"><span class="sig-fn">Table.len</span><span class="sig-punct">&lt;</span><span class="sig-type">V</span><span class="sig-punct">&gt;</span><span class="sig-punct">(</span><span class="sig-param">t</span><span class="sig-punct">:</span> <span class="sig-type">table</span><span class="sig-punct">&lt;</span><span class="sig-type">V</span><span class="sig-punct">&gt;</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">integer</span></code></summary>
 
 
-The array length — the same number `#t` gives, as a value you can pass
+The array length — the same number `#t` gives, as a value that can be passed
 around.
 
 ```saule
 println(Table.len({1, 2, 3}))        -- 3
 println(Table.len({}))               -- 0
 
--- `#` is the operator form; this is the one you can hand to something else.
+-- `#` is the operator form; this is the one that can be handed to something else.
 local sizes: table<integer> = Iter.map({{1}, {1, 2}}, t => Table.len(t))
 println(Table.concat(sizes, ","))    -- 1,2
 ```

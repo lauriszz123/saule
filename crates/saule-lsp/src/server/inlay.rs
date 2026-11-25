@@ -58,6 +58,9 @@ impl Backend {
             None => saule_semantic::ModuleSeed::default(),
         };
         let _ = saule_semantic::analyze_with_seed(&module, seed);
+        // A hint is the type of a value, and a value annotated with a
+        // `type` alias has the type the alias stands for.
+        let module = saule_semantic::aliases::written_out(&module);
 
         let mut cx = Cx {
             source: &source,

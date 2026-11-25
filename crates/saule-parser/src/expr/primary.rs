@@ -77,8 +77,54 @@ impl Parser {
                     Ok(inner)
                 }
             }
+            // `type` and `is` where a value belongs: a name from before the
+            // two were reserved, most often the old `type(v)` function.
+            Token::Type | Token::Is => self.reserved_as_value(&tok),
             _ => self.error_expr(),
         }
+    }
+
+    /// `type` or `is` written where an expression was expected.
+    ///
+    /// Both used to be ordinary names — `type(v)` was a prelude function —
+    /// so this is the error a program written before then meets first, and
+    /// it says what to write now. Recovery reads the word as the name it
+    /// was meant as and carries on, so that one stale call is one
+    /// diagnostic and the rest of the line is still checked.
+    fn reserved_as_value(&mut self, tok: &Spanned<Token>) -> Result<Spanned<Expr>, ParseError> {
+        let word = tok.value.lexeme().unwrap_or("type");
+        let called = matches!(self.peek_at(1).value, Token::LParen);
+        let help = match (&tok.value, called) {
+            (Token::Type, true) => {
+                "`type(v)` is no longer a function. To ask whether a value is some type, \
+                 write `v is T` — `if v is string then … end` — and for the name of its \
+                 type as text, `typeof(v)`"
+            }
+            (Token::Type, false) => {
+                "`type` begins a `type Name = T` declaration and cannot name a variable; \
+                 choose another name"
+            }
+            _ => {
+                "`is` is the type test, `v is T`, and cannot name a variable or a function; \
+                 choose another name"
+            }
+        };
+        let err = ParseError::Expected {
+            expected: "an expression".into(),
+            found: format!("keyword `{word}`").into(),
+            help: Some(help.to_string()),
+            span: tok.span.clone(),
+            label: format!("`{word}` is a reserved word").into(),
+        };
+        if !self.recovering() {
+            return Err(err);
+        }
+        self.record(err);
+        self.advance();
+        // `typeof` for the old call, so the checker sees a function that
+        // exists and the one mistake is reported once.
+        let name = if called && word == "type" { "typeof" } else { word };
+        Ok(Spanned::new(Expr::Ident(name.to_string()), tok.span.clone()))
     }
 
     pub(crate) fn parse_table_literal(&mut self) -> Result<Spanned<Expr>, ParseError> {
@@ -133,6 +179,26 @@ impl Parser {
             self.advance(); // `:`
             let key_span = name_tok.span.clone();
             let key = Spanned::new(Expr::Str(name), key_span);
+            let value = self.parse_expression()?;
+            return Ok(TableEntry::Field { key, value });
+        }
+        // `keyword :` field — `{type: "click"}`. A reserved word cannot
+        // name a variable, but a key is not one: it is the string `"type"`,
+        // read back with `t.type`, where the same words are allowed. Nothing
+        // that begins an expression is a keyword followed by `:`, so this
+        // takes nothing from the positional form. The literals and `self`
+        // are left out: `{nil: 1}` is far more likely a mistake than a key.
+        if self.peek().value.is_keyword()
+            && !matches!(
+                self.peek().value,
+                Token::Nil | Token::True | Token::False | Token::Self_ | Token::Super
+            )
+            && matches!(self.peek_at(1).value, Token::Colon)
+            && let Some(word) = self.peek().value.lexeme()
+        {
+            let name_tok = self.advance();
+            self.advance(); // `:`
+            let key = Spanned::new(Expr::Str(word.to_string()), name_tok.span);
             let value = self.parse_expression()?;
             return Ok(TableEntry::Field { key, value });
         }

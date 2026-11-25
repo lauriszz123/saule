@@ -1,0 +1,13 @@
+-- Aliases are declared at the top level of a module, beside its classes
+-- and functions, where every declaration in the file can read them.
+
+fn total(items: table<integer>) -> integer
+	type Sum = integer
+	local sum: Sum = 0
+	for item in items do
+		sum += item
+	end
+	return sum
+end
+
+println(total({1, 2}))

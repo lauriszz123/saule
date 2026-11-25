@@ -155,7 +155,7 @@ function completionFor(e: Entry, label: string): Completion {
 	return {
 		label,
 		type: 'function',
-		// The parameter list, which is the thing you actually need while
+		// The parameter list, which is the thing actually needed while
 		// typing a call. The return type trails it, as in the signature.
 		detail: `(${e.params})${e.returns ? ` -> ${e.returns}` : ''}`,
 		info: () => infoDom(e),

@@ -37,8 +37,8 @@ impl Project {
     /// Every source file under `src_dirs`, sorted and deduplicated.
     ///
     /// `check` walks all of them rather than following imports from the entry
-    /// point: a file no one imports yet is exactly the file whose errors you
-    /// want to hear about before you import it.
+    /// point: a file no one imports yet is exactly the file whose errors are
+    /// worth hearing about before it is imported.
     pub fn source_files(&self) -> Vec<PathBuf> {
         saule_project::scan_all(&self.src_dirs)
     }

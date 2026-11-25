@@ -28,7 +28,7 @@ a public git repo with a `saule.config`. The CLI is the whole system: it creates
 projects, installs and removes dependencies, repairs broken installs, and
 publishes.
 
-Each step below states what it delivers, what to do, and how you know it's
+Each step below states what it delivers, what to do, and how to tell it's
 finished. Steps 1–4 get a public, installable language; 5–9 get the package
 manager. Design detail that would clutter a step lives in the appendices.
 
@@ -71,7 +71,7 @@ resolves it into the same `Dependency` a relative path produces today.
 [module.rs](crates/saule-runtime/src/module.rs) is untouched.
 
 The third point is what makes an index unnecessary. *Where* a package lives
-(`github.com/lauriszz123/uikit`) is decoupled from *what you type to import it*
+(`github.com/lauriszz123/uikit`) is decoupled from *what is typed to import it*
 (`uikit`). A global name registry exists to bind those two together; Saule
 doesn't need one because the package declares its own import name.
 
@@ -466,7 +466,7 @@ saule add lauriszz123/uikit
   import uikit
 ```
 
-That last line is deliberate: the command ends by telling you the exact thing
+That last line is deliberate: the command ends by saying the exact thing
 to type next.
 
 Atomicity, fetching, and the `SAULE_HOME` layout are in
@@ -504,7 +504,7 @@ component that means nothing. Worth settling before the first package exists.
 `min_saule_version` compares cleanly against either scheme —
 `saule_version::version_at_least` is a plain numeric dotted compare.
 
-**Done when** you can publish a package you wrote and install it on another
+**Done when** a package can be published and installed on another
 machine, and `saule doctor --fix` recovers from a deleted `packages/` entry.
 
 ---
@@ -530,7 +530,7 @@ plan.** It's the motivating package for the whole source-package path and the
 first real test of publishing. Steps 5–8 shipped without it, so the package
 manager works and has nothing to point at: `saule install lauriszz123/uikit`,
 the example used throughout this document, resolves to a repository that does
-not exist. Publishing a package you wrote is the only way to find out whether
+not exist. Publishing a real package is the only way to find out whether
 the flow is actually seamless.
 
 ~~**`examples/json_usage` currently fails to typecheck**~~ — **fixed.**
@@ -591,13 +591,13 @@ Resolution order per entry, first match wins:
 ### No version ranges
 
 `@ver` is **a single exact version** — `1.2.0` or `v1.2.0`, both accepted as
-tag spellings — or omitted, meaning the latest stable tag at the time you ran
-`saule add`. There is no `^`, no `~`, no `>=`.
+tag spellings — or omitted, meaning the latest stable tag at the time
+`saule add` was run. There is no `^`, no `~`, no `>=`.
 
 Ranges look load-bearing and aren't, because `saule.lock` already pins a SHA. A
 project with `uikit@^1.2` and a lock installs exactly what the lock says; it
-does *not* pick up 1.2.1 on the next build. A range only takes effect when you
-re-resolve, and re-resolving is `saule update` — a command the user ran on
+does *not* pick up 1.2.1 on the next build. A range only takes effect on
+re-resolving, and re-resolving is `saule update` — a command the user ran on
 purpose, producing a reviewable diff. **The caret is a range operator smuggled
 into a data file; `saule update` is the same operator as a command, and the
 command is the better spelling.**
@@ -666,7 +666,7 @@ With no ranges, the rule that satisfies that constraint is one line:
 > A version in a config is a **minimum**. For each package, install the highest
 > version any dependency asked for.
 
-Your project pins `uikit 1.2.0`, `toolkit` pins `uikit 1.3.0` → install 1.3.0.
+The project pins `uikit 1.2.0`, `toolkit` pins `uikit 1.3.0` → install 1.3.0.
 Deterministic, order-independent, computable in a single pass with no
 backtracking. Adding a dependency can only ever raise a version, never lower
 one, so a new dep cannot silently change an unrelated part of the graph.
@@ -726,7 +726,7 @@ applies the unambiguous ones.
 
 `saule remove <pkg>` always succeeds, even if the package is broken or missing
 on disk — it edits config and lock, and never depends on the thing it's
-removing being loadable. A package manager you can't uninstall from when it's
+removing being loadable. A package manager that can't uninstall when it's
 broken is the worst failure mode there is.
 
 ## Appendix D — `SAULE_HOME` layout

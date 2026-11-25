@@ -1484,7 +1484,7 @@ fn go() -> string
   gen.resume()
   local sameYielder: string = tostring(gen.resume())
   local y: any = seen[1]
-  return type(gen) .. "," .. type(y) .. "," .. tostring(gen) .. "," .. tostring(y) .. ","
+  return typeof(gen) .. "," .. typeof(y) .. "," .. tostring(gen) .. "," .. tostring(y) .. ","
     .. tostring(gen == gen) .. "," .. tostring(gen == other) .. "," .. sameYielder
 end
 go()

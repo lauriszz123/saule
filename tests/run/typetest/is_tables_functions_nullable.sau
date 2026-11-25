@@ -1,0 +1,54 @@
+-- Beyond the scalar types. A parameterised table type is tested element by
+-- element; a function type asks whether the value can be called; and a
+-- nullable type is its type or nil.
+
+-- `table` alone is any table. `table<T>` looks inside.
+local numbers: any = {1, 2, 3}
+local mixed: any = {1, "two", 3}
+local scores: any = {ann: 3, bob: 4}
+local empty: any = {}
+
+assert(numbers is table)
+assert(numbers is table<integer>)
+assert(numbers is not table<string>)
+assert(mixed is table)
+assert(mixed is not table<integer>)        -- one element is a string
+assert(scores is table<string, integer>)
+assert(scores is not table<string, string>)
+assert(scores is not table<integer>)       -- it has string keys
+assert(empty is table<integer>)            -- nothing in it says otherwise
+assert(empty is table<string, boolean>)
+
+-- Nested, to any depth.
+local grid: any = {{1, 2}, {3, 4}}
+assert(grid is table<table<integer>>)
+assert(grid is not table<table<string>>)
+
+-- A function type: is it callable. The signature is the checker's to
+-- hold, and is not recorded on the value.
+local action: any = fn() -> nil end
+assert(action is fn() -> nil)
+assert(numbers is not fn() -> nil)
+
+-- A nullable type admits nil; the plain type does not.
+local missing: any? = nil
+local present: any = "here"
+assert(missing is string?)
+assert(missing is not string)
+assert(present is string?)
+assert(present is string)
+assert(missing is table<integer>?)
+assert(missing is not table<integer>)
+
+-- Which is what makes this the test for "a string, or nothing at all".
+fn optionalName(v: any) -> string
+	if v is string? then
+		return v ?? "anonymous"
+	end
+	return "invalid"
+end
+
+println(optionalName("Ann"), optionalName(nil), optionalName(3))
+assert(optionalName("Ann") == "Ann")
+assert(optionalName(nil) == "anonymous")
+assert(optionalName(3) == "invalid")

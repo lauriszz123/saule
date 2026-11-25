@@ -1,0 +1,11 @@
+-- `v is not T` says nothing about what `v` *is* inside its own branch:
+-- there the value is known only not to be a string.
+
+fn shout(text: string?) -> string
+	if text is not string then
+		return String.upper(text)
+	end
+	return ""
+end
+
+println(shout(nil))

@@ -1,0 +1,56 @@
+-- An alias may stand for a nullable type, and then a value of it has to be
+-- narrowed like any other `T?`. Writing `?` after an alias that already
+-- allows nil adds nothing: there is one layer of "or nil", not two.
+
+type MaybeName = string?
+type Opt<T> = T?
+type Lookup = fn(string) -> MaybeName
+
+class Directory
+	entries: table<string, string> = {}
+
+	fn find(key: string) -> MaybeName
+		return self.entries[key]
+	end
+end
+
+fn greeting(name: MaybeName) -> string
+	if name == nil then
+		return "hello, stranger"
+	end
+	return "hello, " .. name      -- narrowed: `name` is a string here
+end
+
+fn length(name: MaybeName) -> integer
+	return #(name ?? "")
+end
+
+fn first<T>(items: table<T>) -> Opt<T>
+	return items[1]
+end
+
+local directory = Directory()
+directory.entries["a"] = "Ann"
+
+local lookup: Lookup = fn(key: string) -> MaybeName
+	return directory.find(key)
+end
+
+local found: MaybeName = lookup("a")
+local missing: MaybeName = lookup("z")
+local again: MaybeName? = found          -- the same type as `MaybeName`
+local same: string? = again
+
+println(greeting(found), greeting(missing), length(same), length(missing))
+assert(greeting(found) == "hello, Ann")
+assert(greeting(missing) == "hello, stranger")
+assert(length(same) == 3)
+assert(length(missing) == 0)
+
+local head: Opt<integer> = first({4, 5})
+local nothing: Opt<integer> = first({})
+local nested: Opt<MaybeName> = first({"x"})   -- still just `string?`
+println(head, nothing, nested, head! + 1)
+assert(head == 4)
+assert(nothing == nil)
+assert(nested == "x")

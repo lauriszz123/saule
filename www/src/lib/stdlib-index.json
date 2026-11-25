@@ -49,16 +49,16 @@
 			"href": "/stdlib/prelude-always-in-scope/#tostring"
 		},
 		{
-			"label": "type",
+			"label": "typeof",
 			"owner": null,
-			"name": "type",
+			"name": "typeof",
 			"method": false,
-			"signature": "type(v: any) -> string",
+			"signature": "typeof(v: any) -> string",
 			"params": "v: any",
 			"returns": "string",
-			"detail": "The runtime type name: `\"integer\"`, `\"float\"`, `\"string\"`, `\"boolean\"`, `\"nil\"`, `\"function\"`, `\"table\"`, or the class name for an instance.",
+			"detail": "The name of what a value is, as text: `\"integer\"`, `\"float\"`, `\"string\"`, `\"boolean\"`, `\"nil\"`, `\"function\"`, `\"table\"`, or the class name for an instance.",
 			"section": "Inspecting a value",
-			"href": "/stdlib/prelude-always-in-scope/#type"
+			"href": "/stdlib/prelude-always-in-scope/#typeof"
 		},
 		{
 			"label": "assert",
@@ -77,10 +77,10 @@
 			"owner": null,
 			"name": "error",
 			"method": false,
-			"signature": "error(msg: string) -> nil",
-			"params": "msg: string",
+			"signature": "error(msg: string, level: integer?) -> nil",
+			"params": "msg: string, level: integer?",
 			"returns": "nil",
-			"detail": "Raises `msg` as a runtime error, ending the program. Present for familiarity with Lua.",
+			"detail": "Raises `msg` as a runtime error, ending the program. The message is shown exactly as written, followed by the stack trace. Present for familiarity with Lua.",
 			"section": "Failing",
 			"href": "/stdlib/prelude-always-in-scope/#error"
 		},
@@ -128,7 +128,7 @@
 			"signature": "String.len(s: string) -> integer",
 			"params": "s: string",
 			"returns": "integer",
-			"detail": "The number of **characters**, which is not the number of bytes. `#s` is not defined for a string — use this, and use `#Bytes.fromString(s)` when the byte count is what you want.",
+			"detail": "The number of **characters**, which is not the number of bytes. `#s` is not defined for a string — use this, and use `#Bytes.fromString(s)` when the byte count is what is wanted.",
 			"section": "Length and slicing",
 			"href": "/stdlib/string/#string-len"
 		},
@@ -452,7 +452,7 @@
 			"signature": "Bytes.len(b: bytes) -> integer",
 			"params": "b: bytes",
 			"returns": "integer",
-			"detail": "The byte count. `#b` is the same thing, as a value you can pass around.",
+			"detail": "The byte count. `#b` is the same thing, as a value that can be passed around.",
 			"section": "Inspecting",
 			"href": "/stdlib/bytes/#bytes-len"
 		},
@@ -944,7 +944,7 @@
 			"signature": "Table.len<V>(t: table<V>) -> integer",
 			"params": "t: table<V>",
 			"returns": "integer",
-			"detail": "The array length — the same number `#t` gives, as a value you can pass around.",
+			"detail": "The array length — the same number `#t` gives, as a value that can be passed around.",
 			"section": "Reading a table",
 			"href": "/stdlib/table/#table-len"
 		},
@@ -1352,7 +1352,7 @@
 			"signature": "gen.iter() -> fn() -> T?",
 			"params": "",
 			"returns": "fn() -> T?",
-			"detail": "A step closure that resumes the coroutine once per call — what `for v in gen do` uses, so you rarely call it yourself. A coroutine is an `Iterable<T>`, and the loop variable is a `T`.",
+			"detail": "A step closure that resumes the coroutine once per call — what `for v in gen do` uses, so it is rarely called by hand. A coroutine is an `Iterable<T>`, and the loop variable is a `T`.",
 			"section": "Coroutine methods",
 			"href": "/stdlib/prelude-always-in-scope/#gen-iter"
 		},
@@ -1472,7 +1472,7 @@
 			"signature": "f.lines() -> fn() -> string?",
 			"params": "",
 			"returns": "fn() -> string?",
-			"detail": "A step closure over the handle's remaining lines. The same as `Io.lines`, for a file you have already opened — which is what you want when the handle was opened in a particular mode, or when some of it has already been read.",
+			"detail": "A step closure over the handle's remaining lines. The same as `Io.lines`, for a file that is already open — which is what is wanted when the handle was opened in a particular mode, or when some of it has already been read.",
 			"section": "File methods",
 			"href": "/stdlib/io-file/#f-lines"
 		},
@@ -1484,7 +1484,7 @@
 			"signature": "f.seek(whence: IoSeek?, offset: integer?) -> integer?",
 			"params": "whence: IoSeek?, offset: integer?",
 			"returns": "integer?",
-			"detail": "Moves the read/write position and answers the new position, counted in bytes from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so answers where you are.",
+			"detail": "Moves the read/write position and answers the new position, counted in bytes from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so answers where the handle is.",
 			"section": "File methods",
 			"href": "/stdlib/io-file/#f-seek"
 		},
@@ -1712,7 +1712,7 @@
 			"signature": "Os.tmpname() -> string",
 			"params": "",
 			"returns": "string",
-			"detail": "A path under the system temp directory that nothing is using yet. It is a **name**, not a file: nothing is created until you create it.",
+			"detail": "A path under the system temp directory that nothing is using yet. It is a **name**, not a file: nothing is created until the program creates it.",
 			"section": "Filesystem",
 			"href": "/stdlib/os/#os-tmpname"
 		},
@@ -1787,6 +1787,18 @@
 			"detail": "Starts `program` and answers a handle **while it runs**, so the program can write to it, read what came back, and carry on in between. `nil` when it cannot be started.",
 			"section": "Process",
 			"href": "/stdlib/os/#os-spawn"
+		},
+		{
+			"label": "Os.spawnPty",
+			"owner": "Os",
+			"name": "spawnPty",
+			"method": false,
+			"signature": "Os.spawnPty(program: string, args: table<string>?) -> Pty?",
+			"params": "program: string, args: table<string>?",
+			"returns": "Pty?",
+			"detail": "Starts `program` behind a **pseudo-terminal**, the way a terminal emulator runs a shell. Where `Os.spawn` gives the child plain pipes, this gives it a real terminal: it can ask for its size, switch to raw mode, get Ctrl-C as a signal and do job control. Everything it writes comes back through `read` — escape codes included, for a terminal emulator to interpret — and `write` sends it keystrokes. `nil` when it cannot be started.",
+			"section": "Process",
+			"href": "/stdlib/os/#os-spawnpty"
 		},
 		{
 			"label": "Os.exit",

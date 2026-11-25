@@ -1,0 +1,48 @@
+-- `typeof(v)` is the name of what a value is, as text: for a message, or
+-- to compare two values' types with each other. Asking whether a value is
+-- one particular type is `v is T`, which the checker can follow.
+
+class Point
+	x: integer = 0
+end
+
+class Pixel extends Point
+end
+
+enum Colour
+	Red
+end
+
+local names: table<string> = {}
+for v in {1, 1.5, "s", true, {}, println, Point(), Pixel(), Colour.Red} do
+	Table.insert(names, typeof(v))
+end
+Table.insert(names, typeof(nil))
+
+println(String.join(" ", names))
+-- An enum variant answers `enum`: its own enum is what `is` is for.
+assert(String.join(" ", names) == "integer float string boolean table function Point Pixel enum nil")
+assert(Colour.Red is Colour)
+
+-- An instance answers with its own class, not a parent's — which is the
+-- question `is` cannot ask: are these two the same kind of thing?
+fn sameKind(a: any, b: any) -> boolean
+	return typeof(a) == typeof(b)
+end
+
+assert(sameKind(Point(), Point()))
+assert(not sameKind(Point(), Pixel()))
+assert(Pixel() is Point)                   -- while `is` follows the hierarchy
+assert(sameKind(1, 2))
+assert(not sameKind(1, 2.0))
+
+-- In a message.
+fn expectString(v: any) -> string
+	if v is string then
+		return v
+	end
+	return "expected a string, got " .. typeof(v)
+end
+
+println(expectString("fine"), "|", expectString(3))
+assert(expectString(3) == "expected a string, got integer")

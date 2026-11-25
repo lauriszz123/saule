@@ -9,6 +9,7 @@ pub(crate) mod infer;
 mod narrow;
 mod operators;
 mod pipe;
+pub(crate) mod type_test;
 
 pub(crate) use calls::*;
 pub(crate) use compat::*;
@@ -235,6 +236,10 @@ pub(super) fn check_expr(expr: &Spanned<Expr>, scope: &Scope, errors: &mut Vec<T
         // the body: it stands for whatever the caller chose), a conversion
         // when it can. The two error rules are the ends of that spectrum:
         // a cast that would do nothing, and one with no reading at all.
+        Expr::Is { value, ty, .. } => {
+            check_expr(value, scope, errors);
+            type_test::check(expr, value, ty, scope, errors);
+        }
         Expr::Cast { value, ty, .. } => {
             check_expr(value, scope, errors);
             // `x as function` used to be a bare callability test. The target

@@ -1,0 +1,7 @@
+-- An alias cannot take the name of a built-in type. `type integer = float`
+-- would change what every annotation in the file means.
+
+type integer = float
+
+local n: integer = 1
+println(n)

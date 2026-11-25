@@ -22,6 +22,7 @@ pub(super) fn unqualified_symbol(symbol: Symbol) -> Symbol {
         Symbol::Class(n) => Symbol::Class(bare(n)),
         Symbol::Interface(n) => Symbol::Interface(bare(n)),
         Symbol::Enum(n) => Symbol::Enum(bare(n)),
+        Symbol::TypeAlias(n) => Symbol::TypeAlias(bare(n)),
         Symbol::Function(n) => Symbol::Function(bare(n)),
         Symbol::EnumVariant { enum_name, variant } => Symbol::EnumVariant {
             enum_name: bare(enum_name),
@@ -253,7 +254,11 @@ pub(super) fn is_workspace_function_name(name: &str) -> bool {
 /// primitives, generic type parameters, and anything else the semantic
 /// registries don't know.
 pub(super) fn type_name_symbol(name: &str) -> Option<Symbol> {
-    if with_classes(|r| r.contains_key(name)) {
+    // An alias first, as the checker reads it: where a name is both, the
+    // alias is what an annotation means.
+    if saule_semantic::with_aliases(|r| r.contains_key(name)) {
+        Some(Symbol::TypeAlias(name.to_string()))
+    } else if with_classes(|r| r.contains_key(name)) {
         Some(Symbol::Class(name.to_string()))
     } else if with_interfaces(|r| r.contains_key(name)) {
         Some(Symbol::Interface(name.to_string()))
@@ -270,19 +275,40 @@ pub(super) fn declared_name(d: &Decl) -> &str {
         | Decl::Class { name, .. }
         | Decl::Interface { name, .. }
         | Decl::Enum { name, .. }
-        | Decl::Variable { name, .. } => name,
+        | Decl::Variable { name, .. }
+        | Decl::TypeAlias { name, .. } => name,
         Decl::Import { .. } => "",
     }
 }
 
 pub(super) fn named_type(ty: &Type) -> Option<String> {
     match ty {
-        Type::Named(n) => Some(n.clone()),
+        Type::Named(n) => Some(behind_alias(n)),
         Type::Nullable(inner) => named_type(inner),
         // A `Box<integer>` is an instance of `Box`.
-        Type::Generic(g) => Some(g.name.clone()),
+        Type::Generic(g) => Some(behind_alias(&g.name)),
         _ => None,
     }
+}
+
+/// The type a value annotated `name` is an instance of: `name` itself, or
+/// when it is a `type` alias, the type that stands for.
+///
+/// One step and no further. What an alias stands for has no alias left in
+/// it, and a name in it that happens to be an alias *here* means whatever
+/// it meant in the module that declared it.
+fn behind_alias(name: &str) -> String {
+    fn head(ty: &Type) -> Option<String> {
+        match ty {
+            Type::Named(n) => Some(n.clone()),
+            Type::Nullable(inner) => head(inner),
+            Type::Generic(g) => Some(g.name.clone()),
+            _ => None,
+        }
+    }
+    saule_semantic::lookup_alias(name)
+        .and_then(|alias| head(&alias.ty))
+        .unwrap_or_else(|| name.to_string())
 }
 
 pub(super) fn strip_nullable(ty: Type) -> Type {

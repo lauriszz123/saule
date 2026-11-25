@@ -37,7 +37,7 @@
 //! `Vec<T>` → `table<T>`, `HashMap<K, V>`/`BTreeMap<K, V>` → `table<K, V>`,
 //! `SValue` → `any`, `()` → `nil`, a `#[saule_class]` or `#[saule_enum]`
 //! type → itself. A class is taken as `&T` / `&mut T` (borrowed for the
-//! call) or `SObject<T>` (a shared handle you may keep), and returned as `T`
+//! call) or `SObject<T>` (a shared handle that may be kept), and returned as `T`
 //! (moved into a new object) or `SObject<T>` (an existing one). A return may
 //! be `Result<T, E>` (an `Err` becomes a Saule runtime error) or a tuple
 //! `(A, B, …)` (a multi-value return).

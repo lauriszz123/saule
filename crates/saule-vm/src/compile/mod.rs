@@ -841,6 +841,8 @@ fn top_level_declared_names(stmt: &saule_ast::Spanned<saule_ast::Stmt>) -> Vec<S
             | Decl::Interface { name, .. }
             | Decl::Enum { name, .. }
             | Decl::Variable { name, .. } => out.push(name.clone()),
+            // Not a value: a `type` alias has no slot to read.
+            Decl::TypeAlias { .. } => {}
             Decl::Import { names, .. } => match names {
                 ImportNames::All | ImportNames::Namespace(_) => {}
                 ImportNames::List(items) => {

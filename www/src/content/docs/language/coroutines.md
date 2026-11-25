@@ -63,7 +63,7 @@ it: the body cannot resume itself, and outside code cannot yield it.
 
 ### Where `T` Comes From
 
-You rarely write `T` twice. The checker learns it from where the coroutine
+`T` is rarely written twice. The checker learns it from where the coroutine
 goes, so the body's `co` needs no annotation:
 
 ```saule
@@ -117,8 +117,8 @@ another loop picks up after the last value the loop saw.
 
 ### Stackful: Yield from Anywhere
 
-The yielder is an ordinary value. Pass it into any function, as deep as you
-like, and that function can yield on the coroutine's behalf — the whole call
+The yielder is an ordinary value. Pass it into any function, at any
+depth, and that function can yield on the coroutine's behalf — the whole call
 stack in between is suspended with it:
 
 ```saule
@@ -256,7 +256,7 @@ A worked tour of all of this — lazy stream combinators that are themselves
 coroutines, a tokenizer that yields from inside the functions it calls, a
 parser that pulls one token at a time, and a cooperative scheduler whose tasks
 interleave on one thread — is in
-[`examples/coroutines`](/saule/examples/coroutines/).
+[`coroutines`](/saule/examples/coroutines/).
 
 See the [`Coroutine` reference](/saule/stdlib/coroutine/) for every method.
 

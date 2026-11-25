@@ -40,6 +40,6 @@ native-packages = ["saule-runtime/native-packages"]
 # call-heavy benchmarks through code layout, without a single profiling
 # instruction executing. A profile is a development activity; a 2-3% tax on
 # every user's programs to keep it one flag away is the wrong trade.
-# Build it when you want it:
+# Build it when it is wanted:
 #     cargo build --release --features profile -p saule-cli
 profile = []

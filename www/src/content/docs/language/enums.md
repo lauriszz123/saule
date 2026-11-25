@@ -62,7 +62,7 @@ println(w.y)                    -- 1
 
 ### Generic Enums
 
-An enum takes type parameters the same way, and a variant's payload may be typed by one. This is what makes a `Result` worth writing: the arm that matches `Ok` binds a real `T`, not an `any` you have to cast:
+An enum takes type parameters the same way, and a variant's payload may be typed by one. This is what makes a `Result` worth writing: the arm that matches `Ok` binds a real `T`, not an `any` that has to be cast:
 
 ```saule
 enum Result<T>

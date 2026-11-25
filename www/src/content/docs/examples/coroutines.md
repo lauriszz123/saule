@@ -12,13 +12,13 @@ sidebar:
 
 A six-part tour of coroutines: lazy stream combinators over infinite sources, a tokenizer that yields from two frames below the coroutine body, a recursive-descent parser that pulls one token at a time, and a cooperative scheduler whose tasks interleave on one thread — one of which fails without taking the others with it. Shows `Coroutine<T>` and `Yielder<T>`, where `T` is learned from, stackful yielding through ordinary function calls, laziness that is counted rather than claimed, and the dynamic two-way form.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/coroutines)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/coroutines)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/coroutines
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/coroutines
 saule run
 ```
 
@@ -492,7 +492,7 @@ end
 -- A coroutine is a task that decides for itself when to give the CPU back.
 -- There are no threads here and nothing runs in parallel: `resume()` transfers
 -- control into a task, and the task's next `yield` transfers it back. That is
--- enough to interleave as many jobs as you like — a loading screen, a game's
+-- enough to interleave any number of jobs — a loading screen, a game's
 -- actors, a batch of downloads — with no locks, because between two yields a
 -- task has the whole program to itself.
 --

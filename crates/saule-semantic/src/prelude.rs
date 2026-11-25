@@ -12,7 +12,7 @@
 //!
 //! If no provider is installed, the registry is empty and the resolver
 //! treats every otherwise-unknown bare ident as undefined — which is what
-//! you want in a stand-alone "language only" build.
+//! is wanted in a stand-alone "language only" build.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;

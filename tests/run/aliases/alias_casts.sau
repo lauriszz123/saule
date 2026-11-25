@@ -1,0 +1,70 @@
+-- An alias is written out before anything runs, so where a type is read at
+-- run time — the checked `as`, a `catch` clause — it behaves as the type it
+-- stands for. Nothing called `Count` or `Failure` exists when this runs.
+
+class Failure
+	reason: string
+
+	fn init(reason: string)
+		self.reason = reason
+	end
+end
+
+class Timeout extends Failure
+	fn init()
+		self.super("timed out")
+	end
+end
+
+type Count = integer
+type Label = string
+type Problem = Failure
+type Late = Timeout
+
+fn count(value: any) -> integer
+	local n = value as Count          -- `integer?`: nil when it is not one
+	return n ?? -1
+end
+
+fn label(value: any) -> string
+	return (value as Label) ?? "?"
+end
+
+fn reason(value: any) -> string
+	local problem = value as Problem
+	if problem != nil then
+		return problem.reason
+	end
+	return "none"
+end
+
+fn attempt(what: integer) -> string
+	try
+		if what == 1 then
+			throw Timeout()
+		elseif what == 2 then
+			throw Failure("refused")
+		end
+		return "fine"
+	catch late: Late
+		return "late: " .. late.reason
+	catch problem: Problem
+		return "problem: " .. problem.reason
+	end
+end
+
+println(count(3), count("three"), label("a"), label(1))   -- 3  -1  a  ?
+assert(count(3) == 3)
+assert(count("three") == -1)
+assert(label("a") == "a")
+assert(label(1) == "?")
+
+println(reason(Failure("broken")), reason(Timeout()), reason(7))
+assert(reason(Failure("broken")) == "broken")
+assert(reason(Timeout()) == "timed out")
+assert(reason(7) == "none")
+
+println(attempt(0), attempt(1), attempt(2))
+assert(attempt(0) == "fine")
+assert(attempt(1) == "late: timed out")
+assert(attempt(2) == "problem: refused")

@@ -26,6 +26,7 @@ impl Parser {
             Token::Class => self.parse_class_decl(true)?,
             Token::Interface => self.parse_interface_decl(true)?,
             Token::Enum => self.parse_enum_decl(true)?,
+            Token::Type => self.parse_type_alias(true)?,
             Token::From => self.parse_from_import(true)?,
             Token::Import => {
                 let tok = self.peek().clone();
@@ -50,6 +51,52 @@ impl Parser {
             }
         };
         Ok(stmt_decl(decl))
+    }
+
+    /// `type Name = T` or `type Name<A, B> = T`: another name for a type.
+    ///
+    /// The parameters take no bounds. An alias declares nothing an argument
+    /// could fail to be — it is replaced by its right-hand side wherever it
+    /// is used, and a bound belongs on the function or class written there.
+    pub(crate) fn parse_type_alias(&mut self, exported: bool) -> Result<Spanned<Decl>, ParseError> {
+        let kw = self.advance(); // `type`
+        let (name, name_span) = self.expect_ident("the alias's name")?;
+        let type_params = if self.check(&Token::Lt) {
+            let at = self.peek().clone();
+            let generics = self.parse_generic_params()?;
+            if !generics.bounds.is_empty() {
+                return Err(ParseError::Expected {
+                    expected: "a plain name for each of the alias's type parameters".into(),
+                    found: "a bound".into(),
+                    help: Some(
+                        "an alias only stands for the type on its right; put the bound on \
+                         the function or class that uses it"
+                            .to_string(),
+                    ),
+                    span: at.span.start..self.last_consumed_end(),
+                    label: "a type alias's parameters take no bounds".into(),
+                });
+            }
+            generics.names
+        } else {
+            Vec::new()
+        };
+        self.expect(&Token::Assign, "`=` and the type this is another name for")?;
+        let ty_start = self.peek().span.start;
+        let ty = self.parse_type()?;
+        let ty_span = self.span_to_here(ty_start);
+        let end = ty_span.end;
+        Ok(Spanned::new(
+            Decl::TypeAlias {
+                exported,
+                name,
+                name_span,
+                type_params,
+                ty,
+                ty_span,
+            },
+            kw.span.start..end,
+        ))
     }
 
     /// `name: T = expr`, the body of an `export`ed module variable. The
@@ -98,7 +145,7 @@ impl Parser {
         // Strict — see `parse_class_member`: a `fn` with no identifiable
         // name would open a body running to the next `end`, taking every
         // declaration after it down with the one bad line.
-        let (name, _) = self.expect_ident("function name")?;
+        let (name, _) = self.expect_callable_name("function name")?;
         // Optional generic parameter list.
         let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
@@ -223,7 +270,7 @@ impl Parser {
                 // the whole class for the price of one bad line. Failing
                 // here instead hands the member loop a chance to
                 // resynchronise on the next `fn`.
-                let (name, _) = self.expect_ident("method name")?;
+                let (name, _) = self.expect_callable_name("method name")?;
                 let generics = if self.check(&Token::Lt) {
                     self.parse_generic_params()?
                 } else {
@@ -246,7 +293,9 @@ impl Parser {
                     span: m_start..end.max(m_start),
                 })
             }
-            Token::Identifier(_) if !has_local => {
+            // `type` and `is` too, so that a field left with one of those
+            // names from before they were reserved is one clear error.
+            Token::Identifier(_) | Token::Type | Token::Is if !has_local => {
                 // Public field: `name: T [= default]` (also works after `static`).
                 let (name, _) = self.expect_ident_recover("field name")?;
                 self.expect_recover(&Token::Colon, "`:` and type on field")?;
@@ -264,7 +313,7 @@ impl Parser {
                     default,
                 }
             }
-            Token::Identifier(_) if has_local => {
+            Token::Identifier(_) | Token::Type | Token::Is if has_local => {
                 // Private field: `local name: T [= default]`.
                 let (name, _) = self.expect_ident_recover("field name")?;
                 self.expect_recover(&Token::Colon, "`:` and type on field")?;
@@ -384,7 +433,7 @@ impl Parser {
             }
         }
         self.expect(&Token::Fn, "`fn` in interface body")?;
-        let (name, _) = self.expect_ident("method name")?;
+        let (name, _) = self.expect_callable_name("method name")?;
         let generics = if self.check(&Token::Lt) {
             self.parse_generic_params()?
         } else {
@@ -453,7 +502,7 @@ impl Parser {
             self.advance();
             // Strict for the same reason as class methods — see
             // `parse_class_member`.
-            let (mname, _) = self.expect_ident("method name")?;
+            let (mname, _) = self.expect_callable_name("method name")?;
             let params = self.parse_param_list()?;
             let return_ty = self.parse_return_type_opt()?;
             let body = self.parse_block_until(&[Token::End])?;

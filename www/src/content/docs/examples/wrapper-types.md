@@ -12,13 +12,13 @@ sidebar:
 
 A `Text` built straight from a string literal and a `Settings` with full control of every read and write. Shows `Assignable<T>` target-typed construction and `OpIndex` / `OpNewIndex` as Saule's `__index` / `__newindex` — with nothing injected: a wrapper declares every method it exposes, calling the `String` class explicitly.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/wrapper-types)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/wrapper-types)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/wrapper-types
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/wrapper-types
 saule run
 ```
 
@@ -44,7 +44,7 @@ min_saule_version: "26.1"
 -- injected, and there is no mapping from the `string` type to the `String`
 -- class anywhere in the language.
 --
--- That is the whole point of a wrapper: you choose the surface. `Text` has
+-- That is the whole point of a wrapper: its author chooses the surface. `Text` has
 -- `words()`, which `String` does not, and deliberately does not expose
 -- `String.rep` or `String.byte`.
 

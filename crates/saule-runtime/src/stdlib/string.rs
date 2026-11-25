@@ -71,6 +71,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     static_fields.insert("gsub".to_string(), native_multi("String.gsub", str_gsub));
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "String".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.

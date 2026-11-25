@@ -10,7 +10,7 @@ class Dog extends Animal
 end
 
 fn describe(y: any) -> string
-	match type(y)
+	match typeof(y)
 		case "integer" then
 			return "int " .. tostring(y as integer ?? 0)
 		case "string" then
@@ -30,7 +30,7 @@ class Main
 		local wrong: any = "not a number"
 		println(wrong as integer ?? -1)  -- -1
 
-		-- `!` turns it back into a throw when you know better.
+		-- `!` turns it back into a throw when the value is known to be there.
 		local boxed: any = 42
 		local n: integer = (boxed as integer)!
 		println(n)  -- 42

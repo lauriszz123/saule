@@ -12,8 +12,8 @@
 //!   by zero, force-unwrap of `nil`, uncaught `throw`, file-I/O, etc.
 //!
 //! The variants below are the residual set after semantic + typeck have run.
-//! Anything caught by an earlier pass has been removed; if you find yourself
-//! about to add a new variant here, consider whether semantic or typeck is
+//! Anything caught by an earlier pass has been removed; before
+//! adding a new variant here, consider whether semantic or typeck is
 //! the more appropriate owner first.
 
 use miette::Diagnostic;

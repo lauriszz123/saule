@@ -5,20 +5,20 @@ sidebar:
   order: 3
   badge:
     text: "Simple"
-    variant: tip
+    variant: success
 ---
 
 <!-- Generated from examples/todo-app by `npm run sync-docs`. Edit the example, not this file. -->
 
 A complete command-line application: argument parsing with `Os.args()`, JSON persistence through the `json` library declared in `dependencies:`, `match` over subcommands, and rendering split into its own module.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/todo-app)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/todo-app)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/todo-app
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/todo-app
 saule run -- add "write some Saule"
 saule run -- list
 ```
@@ -217,12 +217,12 @@ export class Storage
 			return false
 		end
 
-		if type(data) != "table" then
+		if data is not table then
 			return false
 		end
 
 		for _, entry in data do
-			if type(entry) != "table" then
+			if entry is not table then
 				return false
 			end
 

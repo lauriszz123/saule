@@ -1,0 +1,10 @@
+-- An instance is never a string, whatever class it is.
+
+class Point
+	x: integer = 0
+end
+
+local p = Point()
+if p is string then
+	println("never")
+end

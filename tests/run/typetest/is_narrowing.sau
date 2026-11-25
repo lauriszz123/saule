@@ -1,0 +1,120 @@
+-- Where `v is T` held, `v` *is* a `T`: the checker narrows a local inside
+-- the branch the test guards, so its members and operators are available
+-- with no cast. `v is not T` narrows the other way round, past a guard.
+
+class Animal
+	name: string
+
+	fn init(name: string)
+		self.name = name
+	end
+end
+
+class Dog extends Animal
+	fn init(name: string)
+		self.super(name)
+	end
+
+	fn bark() -> string
+		return self.name .. " says woof"
+	end
+end
+
+class Cat extends Animal
+	lives: integer = 9
+
+	fn init(name: string)
+		self.super(name)
+	end
+end
+
+-- From `any`: each branch sees the type it tested for.
+fn double(v: any) -> string
+	if v is integer then
+		return tostring(v * 2)              -- integer arithmetic
+	elseif v is float then
+		return tostring(v * 2.0)            -- float arithmetic
+	elseif v is string then
+		return v .. v                       -- concatenation; `#v` works too
+	elseif v is table<integer> then
+		return tostring(#v * 2)
+	end
+	return "?"
+end
+
+-- From a parent class: the subclass's members appear.
+fn sound(animal: Animal) -> string
+	if animal is Dog then
+		return animal.bark()
+	elseif animal is Cat then
+		return animal.name .. " has " .. animal.lives .. " lives"
+	end
+	return animal.name .. " is quiet"
+end
+
+-- The guard form: past an early return on `is not`, the value is narrowed
+-- for the rest of the function.
+fn length(v: any) -> integer
+	if v is not string then
+		return -1
+	end
+	return #v
+end
+
+-- Composed with `and`: the right-hand side already sees the narrowing.
+fn isLongName(v: any) -> boolean
+	return v is string and #v > 5
+end
+
+-- A nullable is narrowed like any other: the test rules nil out.
+fn shout(text: string?) -> string
+	if text is string then
+		return String.upper(text)
+	end
+	return "(nothing)"
+end
+
+-- A test for a wider type takes nothing away: a `Dog` that `is Animal` is
+-- still a `Dog`.
+fn stillADog(dog: Dog) -> string
+	if dog is Animal then
+		return dog.bark()
+	end
+	return ""
+end
+
+-- In a loop condition, for as long as it holds.
+fn countDogs(animals: table<Animal>) -> integer
+	local i = 1
+	local n = 0
+	local current: Animal? = animals[1]
+	while current is Dog do
+		n += 1
+		i += 1
+		current = animals[i]
+	end
+	return n
+end
+
+println(double(21), double(1.5), double("ab"), double({1, 2, 3}), double(true))
+assert(double(21) == "42")
+assert(double(1.5) == "3.0")
+assert(double("ab") == "abab")
+assert(double({1, 2, 3}) == "6")
+assert(double(true) == "?")
+
+println(sound(Dog("Rex")), "|", sound(Cat("Tom")), "|", sound(Animal("Bob")))
+assert(sound(Dog("Rex")) == "Rex says woof")
+assert(sound(Cat("Tom")) == "Tom has 9 lives")
+assert(sound(Animal("Bob")) == "Bob is quiet")
+
+assert(length("four") == 4)
+assert(length(4) == -1)
+assert(isLongName("Alexander"))
+assert(not isLongName("Al"))
+assert(not isLongName(123456))
+assert(shout("hi") == "HI")
+assert(shout(nil) == "(nothing)")
+assert(stillADog(Dog("Rex")) == "Rex says woof")
+assert(countDogs({Dog("a"), Dog("b"), Cat("c"), Dog("d")}) == 2)
+println("ok")

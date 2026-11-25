@@ -348,7 +348,7 @@ impl<'a> Cx<'a> {
                     self.visit_expr(v);
                 }
             }
-            Decl::Interface { .. } | Decl::Import { .. } => {}
+            Decl::Interface { .. } | Decl::TypeAlias { .. } | Decl::Import { .. } => {}
         }
     }
 
@@ -380,7 +380,7 @@ impl<'a> Cx<'a> {
         match &e.value {
             // A recovery hole has no children to walk.
             Expr::Error => {}
-            Expr::Cast { value, .. } => self.visit_expr(value),
+            Expr::Cast { value, .. } | Expr::Is { value, .. } => self.visit_expr(value),
             Expr::Call { callee, args, .. } => {
                 self.visit_expr(callee);
                 let params = self.callee_params(&callee.value);

@@ -1,0 +1,4 @@
+-- The type after `is` has to exist, like any other annotation.
+
+local v: any = 1
+println(v is Widget)

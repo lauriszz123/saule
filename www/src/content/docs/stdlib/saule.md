@@ -1,16 +1,16 @@
 ---
 title: "Saule"
-description: "The version of the toolchain running your code. Distinct from Project, which is the version of the code being run: upgrade the compiler and…"
+description: "The version of the toolchain running the code. Distinct from Project, which is the version of the code being run: upgrade the compiler and…"
 sidebar:
   order: 10
 ---
 
 <!-- Generated from DOCS.md by `npm run sync-docs`. Edit that file, not this one. -->
 
-The version of the **toolchain** running your code. Distinct from
+The version of the **toolchain** running the code. Distinct from
 [`Project`](/saule/stdlib/project/), which is the version of the code being run: upgrade
 the compiler and `Saule.version` moves, while `Project.version` only moves
-when you edit your own config.
+when the project's own config is edited.
 
 Saule versions are `<two-digit year>.<build number>` — `26.7` is the seventh
 release cut in 2026. There is no patch component; a fix is simply the next
@@ -45,7 +45,7 @@ components, so `"26.7"` satisfies `"26"` and `"26.7"` but not `"26.8"`.
 
 A development build reports the version it is *heading toward*, not the last
 one released — so `26.8-dev` satisfies `atLeast("26.8")`. That is deliberate:
-it lets you write and test code against a feature before its release exists.
+it lets code be written and tested against a feature before its release exists.
 
 ```saule
 println(Saule.atLeast("26"))           -- true
@@ -63,7 +63,7 @@ end
 `atLeast` is the runtime counterpart to `min_saule_version` in `saule.config`.
 The two use the same comparison but answer different questions:
 `min_saule_version` refuses to run the project at all on an old toolchain,
-whereas `atLeast` lets code degrade. Reach for `min_saule_version` when your
+whereas `atLeast` lets code degrade. Reach for `min_saule_version` when the
 project simply cannot work without a version, and `atLeast` when it can.
 
 </details>

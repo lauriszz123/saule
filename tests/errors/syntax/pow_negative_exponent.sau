@@ -1,5 +1,5 @@
 -- `integer ^ integer` stays an integer, so a negative exponent has no
--- answer to give. Use floats when you want a fractional result.
+-- answer to give. Use floats when a fractional result is wanted.
 class Main
 	static fn main()
 		local n: integer = 2 ^ -3

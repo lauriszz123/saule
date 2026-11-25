@@ -80,6 +80,19 @@ impl Resolver {
                     self.expr(v);
                 }
             }
+            // An alias is read by every module-level declaration, wherever
+            // in the file it stands, so it belongs beside them: one declared
+            // inside a block would be in scope outside it.
+            Decl::TypeAlias {
+                name, name_span, ..
+            } => {
+                if self.funcs.len() > 1 || self.funcs[0].blocks.len() > 1 {
+                    self.errors.push(SemanticError::AliasNotAtTopLevel {
+                        name: name.clone(),
+                        span: to_source_span(name_span.clone()),
+                    });
+                }
+            }
             // Interface declarations carry only signatures; no body to walk.
             // Import declarations don't host expressions.
             Decl::Interface { .. } | Decl::Import { .. } => {}

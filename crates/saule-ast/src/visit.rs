@@ -181,7 +181,7 @@ fn walk_decl<V: Visitor>(d: &Spanned<Decl>, v: &mut V) {
             }
         }
         Decl::Variable { value, .. } => walk_opt(value, v),
-        Decl::Import { .. } => {}
+        Decl::TypeAlias { .. } | Decl::Import { .. } => {}
     }
 }
 
@@ -228,7 +228,7 @@ fn walk_expr<V: Visitor>(e: &Spanned<Expr>, v: &mut V) {
             walk_args(args, v);
         }
         Expr::ForceUnwrap(inner) => walk_expr(inner, v),
-        Expr::Cast { value, .. } => walk_expr(value, v),
+        Expr::Cast { value, .. } | Expr::Is { value, .. } => walk_expr(value, v),
         Expr::Table(entries) => {
             for entry in entries {
                 match entry {

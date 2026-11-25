@@ -71,6 +71,8 @@ impl<'a> Cx<'a> {
                 let source = self.infer_init_type(&value.value);
                 Some(saule_typeck::casts::resolve(source.as_ref(), ty).result(ty))
             }
+            // `v is T` is a yes or a no.
+            Expr::Is { .. } => Some(Type::Named("boolean".into())),
             Expr::Call { callee, args, .. } => {
                 if let Expr::Ident(name) = &callee.value {
                     if with_classes(|r| r.contains_key(name)) {

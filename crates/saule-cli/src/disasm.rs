@@ -29,7 +29,7 @@
 //!
 //! So it now builds a [`saule_vm::program::Program`] rooted at the target,
 //! exactly as `saule run` does, and prints chunks out of it. The target's own
-//! chunk is what you asked for; `--deps` adds the modules it imports, and a
+//! chunk is what was asked for; `--deps` adds the modules it imports, and a
 //! directory disassembles the whole project.
 
 use std::collections::BTreeSet;

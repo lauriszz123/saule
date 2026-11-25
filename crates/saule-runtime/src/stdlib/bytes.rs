@@ -8,7 +8,7 @@
 //! `Bytes` is the counterpart: every index here is a **byte** index, and
 //! nothing converts to or from text implicitly. [`bytes_to_string`] returns
 //! `string?` because there is no total function from bytes to text, which is
-//! the mistake `Os.capture`'s `from_utf8_lossy` makes for you.
+//! the mistake `Os.capture`'s `from_utf8_lossy` makes silently.
 
 use crate::fxhash::fxmap;
 use std::cell::RefCell;
@@ -72,6 +72,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     );
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "Bytes".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.
@@ -113,7 +114,7 @@ pub fn register_sigs() {
         vec![t_nullable(t_named("byte"))],
     );
     // The bridge to and from the elementwise form, for the times a loop
-    // over `byte[]` is what you want. Separate functions rather than an
+    // over `byte[]` is what is wanted. Separate functions rather than an
     // implicit conversion, because the two representations have very
     // different costs: a `bytes` is one byte per byte, a `byte[]` is a
     // boxed value per byte.

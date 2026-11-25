@@ -166,7 +166,7 @@ fn a_prelude_name_in_a_value_position_folds() {
     // `Io.stdout` is an object, not one of the scalars `prelude_member`
     // folds, so the bare `Io` had to become a value of its own. The prelude
     // is fixed before a program runs, so it is one `LOADK`.
-    must_agree("tostring(type(Io)) .. tostring(type(Math))");
+    must_agree("tostring(typeof(Io)) .. tostring(typeof(Math))");
 }
 
 #[test]

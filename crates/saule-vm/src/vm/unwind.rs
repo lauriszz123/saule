@@ -120,10 +120,22 @@ impl Vm {
             TypeDesc::Nullable(inner) => {
                 matches!(v, Value::Nil) || self.value_matches(chunk, v, *inner)
             }
-            // A name from another module: compare by class name, which is
-            // what the tree-walker's `catch` test does too.
+            // A name with no class index here: an interface, or a class
+            // from a module this one did not import. Answered by name, up
+            // the instance's chain — its own class, each one above it, and
+            // the interfaces any of them implements — which is the test
+            // `v is T` and `v as T` make.
             TypeDesc::Named(n) => match v {
-                Value::Instance(i) => i.borrow().class.name == n.as_ref(),
+                Value::Instance(i) => {
+                    let mut class = Some(Rc::clone(&i.borrow().class));
+                    while let Some(c) = class {
+                        if c.name == n.as_ref() || c.interfaces.iter().any(|i| i == n.as_ref()) {
+                            return true;
+                        }
+                        class = c.parent.clone();
+                    }
+                    false
+                }
                 Value::EnumVariant(ev) => ev.enum_name == n.as_ref(),
                 _ => false,
             },

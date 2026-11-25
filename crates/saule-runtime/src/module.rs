@@ -8,10 +8,11 @@
 //!
 //! * [`resolve_import_path`] — the file (or native-package sentinel) an
 //!   `import` names;
-//! * [`collect_import_seed`] and friends — the classes, interfaces and enums
-//!   an import brings into scope, read from the imported file's source so a
+//! * [`collect_import_seed`] and friends — the classes, interfaces, enums
+//!   and `type` aliases an import brings into scope, read from the imported file's source so a
 //!   module can be checked without running anything.
 
+mod aliases;
 mod resolve;
 mod seed;
 #[cfg(test)]
@@ -58,6 +59,11 @@ fn exported_name(decl: &Decl) -> Option<&str> {
             ..
         }
         | Decl::Variable {
+            exported: true,
+            name,
+            ..
+        }
+        | Decl::TypeAlias {
             exported: true,
             name,
             ..

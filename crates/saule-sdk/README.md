@@ -1,10 +1,10 @@
 # saule-sdk
 
-Write a Saule native package in ordinary Rust. You annotate structs,
-`impl` blocks, enums and functions; the SDK generates every `extern "C"`
+Write a Saule native package in ordinary Rust. Structs,
+`impl` blocks, enums and functions are annotated; the SDK generates every `extern "C"`
 shim and compiles a description of the package — its classes, every
-signature, your doc comments — **into the library itself**. The one file you
-build is the whole package: copy it into `~/.saule/native_packages/` and
+signature, the doc comments — **into the library itself**. The one file that is
+built is the whole package: copy it into `~/.saule/native_packages/` and
 Saule programs can import it, fully typed, with editor completion and hover.
 
 ```rust
@@ -61,7 +61,7 @@ copy.fill("red")                        -- error: expects `integer`, got `string
 ```
 
 When the last Saule value holding an `Image` goes away, the `Image` is
-dropped — its `Drop` runs in your package.
+dropped — its `Drop` runs in the package.
 
 ## The pieces
 
@@ -72,7 +72,7 @@ dropped — its `Drop` runs in your package.
 | `#[saule_class]` | A struct as a Saule class whose objects programs hold. |
 | `#[saule_methods]` | Exports the `pub fn`s of a class's `impl`. See below. |
 | `#[saule_enum]` | A fieldless enum as a Saule enum with the same variants. |
-| `SObject<T>` | A shared handle to an object: take one to keep an object past the call, return one to hand out an object you also keep. |
+| `SObject<T>` | A shared handle to an object: take one to keep an object past the call, return one to hand out an object that is also kept. |
 | `SAnyObject` | An object of some class of this package, as read out of a table or a callback's result; narrow it with `downcast`. |
 | `STable`, `SFunction`, `SValue`, … | Saule tables and callbacks, worked on in place through the host. |
 
@@ -161,7 +161,7 @@ cp target/release/libgfx.dylib ~/.saule/native_packages/   # .so / .dll elsewher
 That is all: there is no manifest to generate. Saule reads the package's
 description out of the file without loading it, so a program that imports
 it is type-checked — and the editor completes and documents it — before any
-of your code runs. A package built against a different `saule-sdk` ABI is
+of the package's code runs. A package built against a different `saule-sdk` ABI is
 refused at its `import`, with both versions named.
 
 ### One macOS caveat
@@ -174,7 +174,7 @@ the library at all:
 mis-aligned LINKEDIT string pool, fileOffset=0x000FAEE4
 ```
 
-This is a linker bug, not anything about your code: it happens when the
+This is a linker bug, not anything about the package's code: it happens when the
 library's indirect symbol table has an odd number of entries, so whether a
 build is affected changes with any edit. Saule says so explicitly if it hits
 one. Repair the library after building it, with
@@ -186,7 +186,7 @@ cargo build --release
 python3 align_macho_strtab.py target/release/libgfx.dylib   # no-op if fine
 ```
 
-Run it over every macOS artifact you publish — it pads the string table and
+Run it over every published macOS artifact — it pads the string table and
 re-signs ad-hoc, and does nothing to a library that came out aligned or to a
 non-Mach-O file. `--check` reports without changing anything, for a CI gate.
 

@@ -19,7 +19,7 @@ impl<'a> ResolveCx<'a> {
         match &e.value {
             // A recovery hole has no children to walk.
             Expr::Error => {}
-            Expr::Cast { value, .. } => self.visit_expr(value),
+            Expr::Cast { value, .. } | Expr::Is { value, .. } => self.visit_expr(value),
             Expr::Ident(name) => {
                 if let Some(local) = self.lookup_local(name) {
                     self.record(

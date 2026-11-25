@@ -12,13 +12,13 @@ sidebar:
 
 A `Vec2` that adds, negates, compares and prints like a built-in number, plus a `Path` where `#` counts points and concatenation joins two paths. Shows how each operator is an interface whose method supplies both the behaviour and the result type.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/vector-math)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/vector-math)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/vector-math
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/vector-math
 saule run
 ```
 
