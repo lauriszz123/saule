@@ -9,6 +9,13 @@
  * properties; the indicator itself, and its transition, stay in CSS.
  */
 import Default from '@astrojs/starlight/components/Head.astro';
+
+/**
+ * `blocking="render"` on a script: the page is not drawn until it has run.
+ * Spread onto the element, because Astro's types for `<script>` do not know
+ * the attribute yet.
+ */
+const renderBlocking = { blocking: 'render' };
 ---
 
 <Default {...Astro.props}><slot /></Default>
@@ -90,7 +97,20 @@ import Default from '@astrojs/starlight/components/Head.astro';
 	}
 </script>
 
-<script>
+<!--
+	Render-blocking, and so written as it is served (`is:inline`: plain
+	JavaScript, not passed through the bundler, which would drop the
+	attribute).
+
+	A module script runs once the page has been parsed, and by then the
+	browser may have drawn it: with the groups as the server sent them,
+	then again with the ones the reader had open. Between two pages that
+	first drawing is also what the page transition shows, held still for
+	the length of the fade — a sidebar with a few groups, a pause, and then
+	the rest. `blocking="render"` keeps the first drawing until this has
+	run, so there is only ever the sidebar as it was left.
+-->
+<script type="module" is:inline {...renderBlocking}>
 	/**
 	 * Remember which sidebar groups the reader left open.
 	 *
@@ -101,17 +121,19 @@ import Default from '@astrojs/starlight/components/Head.astro';
 	 */
 	const KEY = 'saule:sidebar-open';
 
-	function readOpen(): string[] {
+	/** @returns {string[]} */
+	function readOpen() {
 		try {
 			const raw = localStorage.getItem(KEY);
-			const parsed: unknown = raw ? JSON.parse(raw) : [];
-			return Array.isArray(parsed) ? parsed.filter((l): l is string => typeof l === 'string') : [];
+			const parsed = raw ? JSON.parse(raw) : [];
+			return Array.isArray(parsed) ? parsed.filter((l) => typeof l === 'string') : [];
 		} catch {
 			return [];
 		}
 	}
 
-	function writeOpen(labels: string[]) {
+	/** @param {string[]} labels */
+	function writeOpen(labels) {
 		try {
 			localStorage.setItem(KEY, JSON.stringify(labels));
 		} catch {
@@ -121,7 +143,7 @@ import Default from '@astrojs/starlight/components/Head.astro';
 	}
 
 	function initSidebar() {
-		const groups = document.querySelectorAll<HTMLDetailsElement>('.sidebar-content details');
+		const groups = document.querySelectorAll('.sidebar-content details');
 		if (groups.length === 0) return;
 		const open = new Set(readOpen());
 
@@ -142,16 +164,15 @@ import Default from '@astrojs/starlight/components/Head.astro';
 		}
 	}
 
-	if (document.readyState === 'loading') {
-		document.addEventListener('DOMContentLoaded', initSidebar);
-	} else {
-		initSidebar();
-	}
+	// A module script runs after the whole page has been parsed: the
+	// sidebar is there.
+	initSidebar();
 </script>
 
 <script>
 	/**
-	 * Reveal the home page's segments as they arrive.
+	 * Mark the pieces of the home page's segments that are revealed as
+	 * they come into view.
 	 *
 	 * The markup stays plain: nothing is hidden in the stylesheet by
 	 * default, because a page that hides its own content and relies on
@@ -204,11 +225,9 @@ import Default from '@astrojs/starlight/components/Head.astro';
 		};
 		requestAnimationFrame(hold);
 
-		if (!('IntersectionObserver' in window)) return;
-
 		for (const pane of panes) {
-			// What arrives one after another. A grid of cards staggers card
-			// by card; anything else staggers as the block it is.
+			// What arrives piece by piece. A grid of cards arrives card by
+			// card; anything else arrives as the block it is.
 			const inner = pane.querySelector(':scope > .pane-inner');
 			const items: HTMLElement[] = [];
 			for (const child of Array.from(inner?.children ?? [])) {
@@ -225,72 +244,30 @@ import Default from '@astrojs/starlight/components/Head.astro';
 			});
 		}
 
-		/** The sticky header's height, in pixels, for the observer's root. */
-		const navHeight = Math.round(
-			parseFloat(
-				getComputedStyle(document.documentElement).getPropertyValue('--sl-nav-height')
-			) * parseFloat(getComputedStyle(document.documentElement).fontSize) || 64
-		);
-
-		/**
-		 * Which way the reader is going.
+		/*
+		 * Where a segment is a screen and the browser can tie an animation
+		 * to the scroll, that is the reveal, and the stylesheet has all of
+		 * it (see "The reveal" in `theme.css`); what follows is ignored.
 		 *
-		 * A segment arriving from below should rise into place; one
-		 * arriving from above should come down into it. Animating both the
-		 * same way means half of every journey has the content moving
-		 * against the scroll, which reads as a stutter rather than as
-		 * arrival.
+		 * Elsewhere, each segment arrives once, when it is first seen, and
+		 * stays. It is not hidden again when it leaves: a segment re-armed
+		 * behind you plays its entrance again when you come back to it,
+		 * which is the page looking as if it were loading a second time.
 		 */
-		let heading: 1 | -1 = 1;
-		let lastY = window.scrollY;
-		window.addEventListener(
-			'scroll',
-			() => {
-				const y = window.scrollY;
-				// Ignore the sub-pixel noise a snap settle produces, which
-				// would otherwise flip the direction at the end of a scroll.
-				if (Math.abs(y - lastY) > 2) heading = y > lastY ? 1 : -1;
-				lastY = y;
-			},
-			{ passive: true }
-		);
+		if (!('IntersectionObserver' in window)) {
+			for (const pane of panes) pane.classList.add('is-visible');
+			return;
+		}
 
 		const seen = new IntersectionObserver(
 			(entries) => {
 				for (const entry of entries) {
-					const pane = entry.target as HTMLElement;
-					const showing = entry.intersectionRatio;
-
-					/*
-					 * Two thresholds, not one boundary.
-					 *
-					 * A pane is a viewport tall *less the header*, so the
-					 * one you just left keeps a sliver on screen behind
-					 * that header and never reaches zero. Resetting only
-					 * at zero meant a segment re-armed one segment late —
-					 * which is why going back up played nothing until you
-					 * had gone down twice.
-					 *
-					 * The gap between the two is what stops a pane parked
-					 * on a snap boundary from flickering between states.
-					 */
-					if (showing <= 0.15) {
-						pane.classList.remove('is-visible');
-						continue;
-					}
-					if (showing < 0.35) continue;
-					if (pane.classList.contains('is-visible')) continue;
-
-					pane.style.setProperty('--reveal-from', heading > 0 ? '1.25rem' : '-1.25rem');
-					pane.classList.add('is-visible');
+					if (!entry.isIntersecting) continue;
+					entry.target.classList.add('is-visible');
+					seen.unobserve(entry.target);
 				}
 			},
-			{
-				threshold: [0, 0.15, 0.35, 0.6, 1],
-				// Discount the strip hidden behind the sticky header, so
-				// "on screen" means what the reader can actually see.
-				rootMargin: `-${navHeight}px 0px 0px 0px`,
-			}
+			{ threshold: 0.2 }
 		);
 
 		for (const pane of panes) seen.observe(pane);
@@ -301,4 +278,22 @@ import Default from '@astrojs/starlight/components/Head.astro';
 	} else {
 		initPanes();
 	}
+</script>
+
+<script>
+	/**
+	 * Say when the page has settled, so that links within it can travel
+	 * (`scroll-behavior` in `theme.css`) without the page's own arrival at
+	 * a heading — on load, or restored by Back — being seen as a scroll.
+	 */
+	const settle = () => {
+		// Two frames on: after the browser has put the page where it goes.
+		requestAnimationFrame(() =>
+			requestAnimationFrame(() => {
+				document.documentElement.dataset.settled = '';
+			})
+		);
+	};
+	if (document.readyState === 'complete') settle();
+	else window.addEventListener('load', settle, { once: true });
 </script>

@@ -668,18 +668,50 @@ body:has(.pane) .hero {
 /*
  * The reveal.
  *
- * `[data-reveal]` is written by the observer in `Head.astro`, which also
- * sets `--step`. Doing it from script rather than in CSS is what keeps the
- * page readable with JavaScript off: nothing is hidden until something is
- * there to show it again.
+ * Tied to the scroll, not set off by it. Each piece of a segment fades and
+ * rises in over the stretch of scrolling that brings it into view, and
+ * leaves the same way off the top: the motion is a place on the page, not
+ * an event. Scrolling back up runs it backwards — the page has no memory of
+ * which way you came, so nothing ever plays twice, or late, or against the
+ * direction you are going. A reveal that fires when a segment arrives has
+ * to be re-armed when it leaves, and re-armed reveals are what made going
+ * back up look like the page reloading.
+ *
+ * `[data-reveal]` is written by the script in `Head.astro`. Doing it from
+ * script rather than in CSS is what keeps the page readable with
+ * JavaScript off: nothing is hidden until something is there to show it.
+ */
+@keyframes saule-arrive {
+	from {
+		opacity: 0;
+		transform: translateY(2rem);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@keyframes saule-leave {
+	from {
+		opacity: 1;
+		transform: none;
+	}
+	to {
+		opacity: 0;
+		transform: translateY(-1.5rem);
+	}
+}
+
+/*
+ * First, the plain version: each segment arrives once, the first time it
+ * is seen, and stays (`.is-visible`, from the script). This is what a
+ * browser that cannot tie an animation to the scroll shows, and what a
+ * small screen shows — see below for why.
  */
 .pane [data-reveal] {
 	opacity: 0;
-	/* `--reveal-from` is set per pane as it arrives: positive when the
-	   reader is going down, so the content rises into place, negative when
-	   they are coming back up, so it settles downward. Against the scroll
-	   it would read as a stutter. */
-	transform: translateY(var(--reveal-from, 1.25rem));
+	transform: translateY(1.25rem);
 	transition:
 		opacity var(--saule-slow) var(--saule-ease),
 		transform var(--saule-slow) var(--saule-ease);
@@ -689,6 +721,44 @@ body:has(.pane) .hero {
 .pane.is-visible [data-reveal] {
 	opacity: 1;
 	transform: none;
+}
+
+/*
+ * Then the one tied to the scroll, where a segment is a screen: the same
+ * sizes at which the page snaps (above 50rem wide and 40rem tall). There
+ * every piece fits in the window, so "arriving" ends with it whole on
+ * screen. On a phone a code sample is taller than the window, and tied to
+ * the scroll it would stay half faded for as long as it took to scroll its
+ * whole length — so there it just arrives.
+ */
+@supports (animation-timeline: view()) {
+	@media (min-width: 50rem) and (min-height: 40rem) and (prefers-reduced-motion: no-preference) {
+		/*
+		 * `forwards`, not `both`: an animation that also filled backwards
+		 * would hold its first frame before its range began, and the
+		 * leaving one — later in the list, so the winner — would pin
+		 * every piece at full opacity while it was still arriving.
+		 *
+		 * Each piece is its own timeline (`view()`): how far it has come
+		 * into the window, and later how far it has gone out of the top.
+		 * Nothing here is a length of time, and nothing depends on a
+		 * variable: were the timeline ever not to apply, these would be
+		 * two zero-length animations, the second of which ends invisible.
+		 */
+		.pane [data-reveal],
+		.pane.is-visible [data-reveal] {
+			opacity: 1;
+			transform: none;
+			transition: none;
+			animation:
+				saule-arrive linear forwards,
+				saule-leave linear forwards;
+			animation-timeline: view(), view();
+			animation-range:
+				entry 0% entry 100%,
+				exit 0% exit 100%;
+		}
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -768,6 +838,94 @@ body:has(.pane) .hero {
 
 	.pane {
 		padding-block: 2rem;
+	}
+}
+
+/* ── Between pages ───────────────────────────────────────────────────────
+ * Going from one page to another, the frame stays and the page changes
+ * inside it. The header and the sidebar are the same on every page of the
+ * documentation, so they are named and carried across: only what differs
+ * is redrawn — one article fades into the next — instead of the whole
+ * window blinking to white and back.
+ *
+ * The browser does this between two ordinary page loads; nothing is
+ * intercepted, and where it is not supported a link is simply a link.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	@view-transition {
+		navigation: auto;
+	}
+
+	.page > .header {
+		view-transition-name: saule-header;
+	}
+
+	#starlight__sidebar {
+		view-transition-name: saule-sidebar;
+	}
+
+	.right-sidebar-panel {
+		view-transition-name: saule-contents;
+	}
+
+	/* Everything not named above: one page fading into the next, in
+	   place. Not moved: a page left halfway down and one arriving at its
+	   top are in different places, and sliding between the two is a lurch. */
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation-duration: var(--saule-mid);
+		animation-timing-function: var(--saule-ease);
+	}
+
+	::view-transition-group(saule-header),
+	::view-transition-group(saule-sidebar),
+	::view-transition-group(saule-contents) {
+		animation-duration: var(--saule-mid);
+	}
+}
+
+/* ── Within a page ───────────────────────────────────────────────────────
+ * A link to a heading travels there instead of cutting to it, so where it
+ * went is something you saw. Not on the home page, whose segments snap,
+ * and not until the page has settled (`data-settled`, from `Head.astro`):
+ * a page opened at a heading far down a long reference should be there,
+ * not be seen scrolling to it.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	html[data-settled]:not(:has(.pane)) {
+		scroll-behavior: smooth;
+	}
+}
+
+/*
+ * A group in the sidebar, or any `<details>`, opens to its height and
+ * closes back from it. `interpolate-size` is what lets a height run to
+ * `auto`; without it the group simply opens, as before.
+ *
+ * Only once the page has settled (`data-settled`): the groups a reader
+ * left open are opened again as the page loads, and that is the page
+ * being put back as it was, not something to watch happen.
+ */
+@media (prefers-reduced-motion: no-preference) {
+	:root {
+		interpolate-size: allow-keywords;
+	}
+
+	html[data-settled] .sidebar-content details::details-content,
+	html[data-settled] .sl-markdown-content details::details-content {
+		block-size: 0;
+		overflow-y: clip;
+		opacity: 0;
+		transition:
+			block-size var(--saule-mid) var(--saule-ease),
+			opacity var(--saule-mid) var(--saule-ease),
+			content-visibility var(--saule-mid) allow-discrete;
+	}
+
+	html[data-settled] .sidebar-content details[open]::details-content,
+	html[data-settled] .sl-markdown-content details[open]::details-content {
+		block-size: auto;
+		opacity: 1;
 	}
 }
 
