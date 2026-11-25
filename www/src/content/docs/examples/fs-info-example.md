@@ -5,7 +5,7 @@ sidebar:
   order: 2
   badge:
     text: "Simple"
-    variant: tip
+    variant: success
 ---
 
 <!-- Generated from examples/fs-info-example by `npm run sync-docs`. Edit the example, not this file. -->

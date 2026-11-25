@@ -841,6 +841,77 @@ body:has(.pane) .hero {
 	}
 }
 
+/* ── Sidebar chips ───────────────────────────────────────────────────────
+ * The difficulty beside each example: Simple, Intermediate, Advanced.
+ *
+ * Starlight's badge is a bordered box of monospace type set inline after
+ * the label, so it sits wherever the label happens to end — beside a short
+ * name, on a line of its own under a long one — and the list has no edge.
+ * Here every entry is a row: the name on the left, wrapping within its own
+ * space if it must, and the chip against the right edge, level with the
+ * name's first line. The chips make a column, and the names read as a list.
+ *
+ * The chip itself is a tint, not an outline: the level's colour as the
+ * text, and the same colour faintly behind it. Three outlined boxes in
+ * three saturated colours were the loudest thing in the sidebar, for the
+ * least important thing in it.
+ */
+.sidebar-content a:has(> .sl-badge) {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.sidebar-content a > .sl-badge {
+	flex: none;
+	margin-inline: 0;
+	padding: 0.2em 0.6em;
+	border: 0;
+	border-radius: 999px;
+	font-family: inherit;
+	font-size: 0.6875rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	line-height: 1.3;
+	white-space: nowrap;
+	/* The level's own colour: lightened for the text on a dark page,
+	   deepened on a light one, and a wash of it behind. */
+	color: color-mix(in oklab, var(--saule-chip) 72%, var(--sl-color-white));
+	background-color: color-mix(in oklab, var(--saule-chip) 16%, transparent);
+}
+
+.sidebar-content a > .sl-badge.success {
+	--saule-chip: var(--sl-color-green);
+}
+
+.sidebar-content a > .sl-badge.note {
+	--saule-chip: var(--sl-color-blue);
+}
+
+.sidebar-content a > .sl-badge.caution {
+	--saule-chip: var(--sl-color-orange);
+}
+
+.sidebar-content a > .sl-badge.tip {
+	--saule-chip: var(--sl-color-purple);
+}
+
+.sidebar-content a > .sl-badge.danger {
+	--saule-chip: var(--sl-color-red);
+}
+
+.sidebar-content a > .sl-badge.default {
+	--saule-chip: var(--sl-color-accent);
+}
+
+/* The page you are on is a filled row in the accent: its chip is that
+   row's own ink, a shade darker behind, rather than a fourth colour. */
+.sidebar-content a[aria-current='page'] > .sl-badge {
+	color: inherit;
+	background-color: rgb(0 0 0 / 0.14);
+}
+
 /* ── Between pages ───────────────────────────────────────────────────────
  * Going from one page to another, the frame stays and the page changes
  * inside it. The header and the sidebar are the same on every page of the

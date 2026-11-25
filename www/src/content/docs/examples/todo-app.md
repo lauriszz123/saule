@@ -5,7 +5,7 @@ sidebar:
   order: 3
   badge:
     text: "Simple"
-    variant: tip
+    variant: success
 ---
 
 <!-- Generated from examples/todo-app by `npm run sync-docs`. Edit the example, not this file. -->

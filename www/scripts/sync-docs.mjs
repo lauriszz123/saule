@@ -674,12 +674,13 @@ function write(plans, index) {
  */
 /**
  * The tiers, in the order they are read. `badge` is the Starlight variant
- * the sidebar paints the label with.
+ * the sidebar paints the label with: green, blue, then a warm red — easy to
+ * hard, as a trail map marks its runs (see "Sidebar chips" in `theme.css`).
  */
 const TIERS = [
 	{
 		name: 'Simple',
-		badge: 'tip',
+		badge: 'success',
 		intro:
 			'Ordinary programs: arguments, files, tables and `match`, with nothing exotic in them.',
 	},
