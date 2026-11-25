@@ -241,36 +241,66 @@ const renderBlocking = { blocking: 'render' };
 				// after the reader has got there, which reads as lag rather
 				// than as sequence.
 				el.style.setProperty('--step', String(Math.min(i, 7)));
+				// The same, counted from the end: the order they leave in
+				// when the entrance is run backwards.
+				el.style.setProperty('--back', String(Math.min(items.length - 1 - i, 7)));
 			});
 		}
 
 		/*
-		 * Where a segment is a screen and the browser can tie an animation
-		 * to the scroll, that is the reveal, and the stylesheet has all of
-		 * it (see "The reveal" in `theme.css`); what follows is ignored.
+		 * Which segment is on screen, and so where each one is: `before` it,
+		 * `current`, or `after` it. The stylesheet hides the ones `after`,
+		 * and brings their pieces in as they become current (see "The
+		 * reveal" in `theme.css`).
 		 *
-		 * Elsewhere, each segment arrives once, when it is first seen, and
-		 * stays. It is not hidden again when it leaves: a segment re-armed
-		 * behind you plays its entrance again when you come back to it,
-		 * which is the page looking as if it were loading a second time.
+		 * A segment is current once its top is above the middle of the
+		 * window: it has more of the screen than the one before it. Decided
+		 * from where the page is, not from an event, so scrolling up is the
+		 * same thing as scrolling down, the other way round — and with no
+		 * segment's top above the middle, the hero is on screen and every
+		 * segment is `after`.
 		 */
-		if (!('IntersectionObserver' in window)) {
-			for (const pane of panes) pane.classList.add('is-visible');
-			return;
-		}
+		const list = Array.from(panes);
+		// Which way the page last moved. Going up, a segment stops being
+		// the current one as soon as it has started down the window (its
+		// top past a quarter of the way), not when it is half gone: its
+		// pieces leave while it is still in view. By the middle it
+		// is most of the way out of the window, and an animation started
+		// then plays where nobody is looking.
+		let goingUp = false;
+		let lastY = window.scrollY;
+		const place = () => {
+			const y = window.scrollY;
+			if (Math.abs(y - lastY) > 2) goingUp = y < lastY;
+			lastY = y;
+			const middle = window.innerHeight * (goingUp ? 0.25 : 0.5);
+			const seenBy = window.innerHeight * 0.85;
+			let current = -1;
+			list.forEach((pane, i) => {
+				const top = pane.getBoundingClientRect().top;
+				if (top < middle) current = i;
+				// For where segments are not screens: seen once, shown for good.
+				if (top < seenBy) pane.classList.add('is-seen');
+			});
+			list.forEach((pane, i) => {
+				const state = i < current ? 'before' : i > current ? 'after' : 'current';
+				if (pane.dataset.state !== state) pane.dataset.state = state;
+			});
+		};
 
-		const seen = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					if (!entry.isIntersecting) continue;
-					entry.target.classList.add('is-visible');
-					seen.unobserve(entry.target);
-				}
-			},
-			{ threshold: 0.2 }
-		);
-
-		for (const pane of panes) seen.observe(pane);
+		// Once a frame at most, however fast the scroll events come.
+		let queued = false;
+		const onScroll = () => {
+			if (queued) return;
+			queued = true;
+			requestAnimationFrame(() => {
+				queued = false;
+				place();
+			});
+		};
+		place();
+		window.addEventListener('scroll', onScroll, { passive: true });
+		window.addEventListener('resize', onScroll, { passive: true });
 	}
 
 	if (document.readyState === 'loading') {

@@ -604,6 +604,18 @@ body:has(.pane) .hero {
 	line-height: 1.6;
 }
 
+/*
+ * The icon beside a card's title, a third larger. Scaled rather than
+ * sized: a larger box would push the title along and the card's lines
+ * down, and the text is where it should be. It grows from its left edge,
+ * which stays in line with the paragraph under it, into the gap before
+ * the title.
+ */
+.pane .card .icon {
+	transform: scale(1.35);
+	transform-origin: left center;
+}
+
 .pane .sl-markdown-content :is(h2, .pane-inner > h2) {
 	font-size: clamp(1.6rem, 3.2vh, 2.5rem);
 }
@@ -672,87 +684,50 @@ body:has(.pane) .hero {
  * screen, waiting), `current`, or `before` (above it, already read). The
  * script in `Head.astro` says which, from where the page is scrolled to.
  *
- * `[data-reveal]` is written by the script in `Head.astro`. Doing it from
- * script rather than in CSS is what keeps the page readable with
- * JavaScript off: nothing is hidden until something is there to show it.
- */
-@keyframes saule-arrive {
-	from {
-		opacity: 0;
-		transform: translateY(2rem);
-	}
-	to {
-		opacity: 1;
-		transform: none;
-	}
-}
-
-@keyframes saule-leave {
-	from {
-		opacity: 1;
-		transform: none;
-	}
-	to {
-		opacity: 0;
-		transform: translateY(-1.5rem);
-	}
-}
-
-/*
- * First, the plain version: each segment arrives once, the first time it
- * is seen, and stays (`.is-visible`, from the script). This is what a
- * browser that cannot tie an animation to the scroll shows, and what a
- * small screen shows — see below for why.
+ * Only `after` is hidden. Coming down to a segment, its pieces rise in one
+ * after another. Going back up, that same motion runs backwards: the
+ * segment being left sinks away piece by piece, last in first out,
+ * and the one above is simply there, as it was left — an entrance played
+ * again for something already read is the page looking as if it were
+ * loading a second time.
+ *
+ * `data-state` and `[data-reveal]` are written by the script. Without it
+ * nothing is hidden: the page is simply all there.
  */
 .pane [data-reveal] {
-	opacity: 0;
-	transform: translateY(1.25rem);
 	transition:
-		opacity var(--saule-slow) var(--saule-ease),
-		transform var(--saule-slow) var(--saule-ease);
+		opacity var(--saule-reveal) var(--saule-ease),
+		transform var(--saule-reveal) var(--saule-ease);
+	/* Arriving is staggered; see below for leaving. */
 	transition-delay: calc(var(--step, 0) * 70ms);
+	--saule-reveal: 520ms;
 }
 
-.pane.is-visible [data-reveal] {
-	opacity: 1;
-	transform: none;
+@media (min-width: 50rem) and (min-height: 40rem) {
+	.pane[data-state='after'] [data-reveal] {
+		opacity: 0;
+		transform: translateY(2rem);
+		/* Going back up, the entrance runs backwards: the same length, the
+		   last piece in the first one out (`--back` counts from the end),
+		   and the easing turned round — the curve above, mirrored — so a
+		   piece that arrived fast and settled now eases away and goes. */
+		transition-timing-function: cubic-bezier(0.64, 0, 0.78, 0);
+		/* Quicker than it arrived: the segment is on its way out of the
+		   window, and the whole of this has to happen before it has gone. */
+		transition-duration: 300ms;
+		transition-delay: calc(var(--back, 0) * 40ms);
+	}
 }
 
 /*
- * Then the one tied to the scroll, where a segment is a screen: the same
- * sizes at which the page snaps (above 50rem wide and 40rem tall). There
- * every piece fits in the window, so "arriving" ends with it whole on
- * screen. On a phone a code sample is taller than the window, and tied to
- * the scroll it would stay half faded for as long as it took to scroll its
- * whole length — so there it just arrives.
+ * Where a segment is not a screen — a phone, a short window: see below —
+ * there is no "the one on screen". Each arrives once, the first time it is
+ * seen (`.is-seen`), and stays.
  */
-@supports (animation-timeline: view()) {
-	@media (min-width: 50rem) and (min-height: 40rem) and (prefers-reduced-motion: no-preference) {
-		/*
-		 * `forwards`, not `both`: an animation that also filled backwards
-		 * would hold its first frame before its range began, and the
-		 * leaving one — later in the list, so the winner — would pin
-		 * every piece at full opacity while it was still arriving.
-		 *
-		 * Each piece is its own timeline (`view()`): how far it has come
-		 * into the window, and later how far it has gone out of the top.
-		 * Nothing here is a length of time, and nothing depends on a
-		 * variable: were the timeline ever not to apply, these would be
-		 * two zero-length animations, the second of which ends invisible.
-		 */
-		.pane [data-reveal],
-		.pane.is-visible [data-reveal] {
-			opacity: 1;
-			transform: none;
-			transition: none;
-			animation:
-				saule-arrive linear forwards,
-				saule-leave linear forwards;
-			animation-timeline: view(), view();
-			animation-range:
-				entry 0% entry 100%,
-				exit 0% exit 100%;
-		}
+@media not ((min-width: 50rem) and (min-height: 40rem)) {
+	.pane[data-state]:not(.is-seen) [data-reveal] {
+		opacity: 0;
+		transform: translateY(1.25rem);
 	}
 }
 
@@ -763,6 +738,9 @@ body:has(.pane) .hero {
 
 	.pane [data-reveal] {
 		transition-property: opacity;
+	}
+
+	.pane[data-state] [data-reveal] {
 		transform: none;
 	}
 }
