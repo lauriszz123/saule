@@ -270,7 +270,7 @@ function rewriteLinks(body, index, { file, section }) {
  * is redundant once Starlight generates the sidebar.
  *
  * "Quick Reference" and "Grammar" are reference material rather than parts of
- * the language guide — they are things you come back to, not things you read
+ * the language guide — they are things to come back to, not things read
  * once — so they are routed out of `language/` into `reference/`.
  */
 const SKIP = new Set(['Table of Contents']);
@@ -356,7 +356,7 @@ function planDocument({ file, dir, sourcePath }) {
  * The standard library's reference tables are the pages people *use*, and a
  * two-column table of inline code is the wrong shape for them: the signature
  * wraps mid-type, nothing is highlighted, and every description is expanded
- * at once whether or not it is the one you came for.
+ * at once whether or not it is the one that was wanted.
  *
  * These turn each row into an expandable entry with a highlighted signature.
  * Done here, at generation time, rather than in the browser: the markup is
@@ -665,7 +665,7 @@ function write(plans, index) {
  *
  * `tier` is the difficulty heading the index groups the project under, and
  * the badge the sidebar shows next to it: a project is tiered by the features
- * you need to know to read it, not by how long it is. The array is kept in
+ * needed to read it, not by how long it is. The array is kept in
  * tier order, because that order is also the sidebar's.
  *
  * Projects are left out of this list on purpose when they exist only as a
@@ -881,7 +881,7 @@ function writeExamples() {
 	});
 
 	// A hand-written index that links the generated pages, so the Examples
-	// section has a landing page rather than dropping you into whichever
+	// section has a landing page rather than landing on whichever
 	// example happens to sort first.
 	const knownDirs = new Set(EXAMPLES.map((e) => e.dir));
 	const extras = readdirSync(examplesRoot, { withFileTypes: true })
@@ -891,7 +891,7 @@ function writeExamples() {
 	const index = [
 		'---',
 		'title: Overview',
-		'description: "Complete Saule projects you can clone and run, grouped simple to advanced."',
+		'description: "Complete Saule projects to clone and run, grouped simple to advanced."',
 		'sidebar:',
 		'  order: 1',
 		'---',
@@ -900,9 +900,9 @@ function writeExamples() {
 		'',
 		`Every example here is a real project in the [examples repository](${examplesRepo}) —`,
 		'the code on each page is read straight from it, so it always matches what',
-		'you get when you clone and run.',
+		'a clone gives when it is run.',
 		'',
-		'They are grouped by what you need to know to read one, not by how long it',
+		'They are grouped by what needs to be known to read one, not by how long it',
 		'is, and each group is in reading order.',
 		'',
 		// One table per tier. A tier with nothing in it is left out rather

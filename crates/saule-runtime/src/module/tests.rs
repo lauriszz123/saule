@@ -116,7 +116,7 @@ fn an_overlay_supersedes_the_on_disk_copy_of_an_import() {
     // The language-server case: the editor holds an unsaved buffer whose
     // contents differ from the file. The importer's analysis has to see the
     // buffer, not the stale file — otherwise renaming a class in one file
-    // leaves every importer reporting against the old name until you save.
+    // leaves every importer reporting against the old name until the file is saved.
     let root = tmp("seed-overlay");
     let src = root.join("src");
     std::fs::create_dir_all(&src).unwrap();

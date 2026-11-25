@@ -6,7 +6,7 @@ sidebar:
 ---
 
 :::tip[Just want to try the language?]
-The [playground](/saule/play/) runs Saule in your browser with nothing to
+The [playground](/saule/play/) runs Saule in the browser with nothing to
 install.
 :::
 
@@ -30,17 +30,17 @@ Then open a new terminal:
 saule --version
 ```
 
-The installer picks the right build for your machine, verifies it against the
+The installer picks the right build for the machine, verifies it against the
 release's `SHA256SUMS`, installs both binaries into `~/.saule/bin`
-(`%USERPROFILE%\.saule\bin` on Windows), and puts that directory on your
+(`%USERPROFILE%\.saule\bin` on Windows), and puts that directory on the
 `PATH`. Running it again upgrades in place.
 
 ## Two channels
 
 That command installs the **stable** channel, which is the one to want unless
-you have a reason otherwise.
+there is a reason otherwise.
 
-| Channel | What you get |
+| Channel | What it installs |
 |---|---|
 | `stable` | The newest release that has been blessed as stable. Moves only when somebody decides it should. **The default.** |
 | `latest` | The newest release of any kind — whatever the last push to `main` built. New features arrive here first, and so do new bugs. |
@@ -64,13 +64,13 @@ SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh |
 $env:SAULE_CHANNEL='latest'; irm https://lauriszz123.github.io/saule/install.ps1 | iex
 ```
 
-Your choice is remembered in `~/.saule/channel`, so **re-running the installer
-upgrades you within the channel you picked** rather than quietly moving you to
-the other one. To switch, set `SAULE_CHANNEL` again. To see which one you are
-on, read that file — and `saule --version` reports the version either way.
+The choice is remembered in `~/.saule/channel`, so **re-running the installer
+upgrades within the chosen channel** rather than quietly moving to
+the other one. To switch, set `SAULE_CHANNEL` again. To see which one is
+in use, read that file — and `saule --version` reports the version either way.
 
-:::caution[Which should I report bugs against?]
-Say which channel you are on. "The latest" means two different builds
+:::caution[Reporting a bug]
+Say which channel is in use. "The latest" means two different builds
 depending on the answer, and that is usually the first thing worth knowing.
 :::
 
@@ -90,9 +90,9 @@ Both installers are configured by environment variables.
 | Variable | Effect |
 |---|---|
 | `SAULE_CHANNEL` | `stable` (the default) or `latest` — see [Two channels](#two-channels) |
-| `SAULE_VERSION` | Install one exact version, e.g. `26.7`. Overrides `SAULE_CHANNEL`, and does **not** change the channel you are remembered as being on |
+| `SAULE_VERSION` | Install one exact version, e.g. `26.7`. Overrides `SAULE_CHANNEL`, and does **not** change the remembered channel |
 | `SAULE_HOME` | Install root. Used **verbatim** — it *is* the directory, not a parent to append `.saule` to. Defaults to `~/.saule` |
-| `SAULE_NO_MODIFY_PATH=1` | Install the binaries but leave your shell profile and `PATH` alone |
+| `SAULE_NO_MODIFY_PATH=1` | Install the binaries but leave the shell profile and `PATH` alone |
 
 ```sh
 SAULE_VERSION=26.7 curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
@@ -106,7 +106,7 @@ SAULE_VERSION=26.7 curl -fsSL https://lauriszz123.github.io/saule/install.sh | s
 | `saule-lsp` | The language server, used by every editor plugin |
 
 Both, always. The editor plugins find the language server on `PATH` or in
-`~/.saule/bin`. Without `saule-lsp` installed you get syntax highlighting and
+`~/.saule/bin`. Without `saule-lsp` installed there is syntax highlighting and
 indentation (which are client-side) but no formatting, hover, or diagnostics.
 
 ## Installing by hand
@@ -136,7 +136,7 @@ Supported triples:
 | Windows x86-64 | `x86_64-pc-windows-msvc` |
 
 :::caution[macOS quarantine]
-If you downloaded the archive in a browser rather than with `curl`, macOS
+If the archive was downloaded in a browser rather than with `curl`, macOS
 flags it: `xattr -dr com.apple.quarantine ~/.saule/bin`. The one-line
 installer is not affected, because `curl` does not set the flag.
 :::
@@ -153,7 +153,7 @@ cargo build --release -p saule-cli -p saule-lsp
 ```
 
 That produces both binaries in `target/release/`. Copy them into
-`~/.saule/bin`, or add `target/release` to your `PATH`.
+`~/.saule/bin`, or add `target/release` to the `PATH`.
 
 :::caution[macOS GUI applications]
 The plugins also look in `~/.saule/bin` directly, so an IDE started from the Dock
@@ -165,8 +165,8 @@ or Finder finds the toolchain even though it never read `~/.zshrc`.
 To update, run the install command again.
 
 To uninstall, delete `~/.saule` (on Windows, `%USERPROFILE%\\.saule`), which also
-removes every installed package. Then remove the line the installer added to your
-shell profile, such as `~/.zshrc`, or on Windows remove `.saule\\bin` from your user
+removes every installed package. Then remove the line the installer added to the
+shell profile, such as `~/.zshrc`, or on Windows remove `.saule\\bin` from the user
 `Path`.
 
 ## Editor support
@@ -179,4 +179,4 @@ Each editor plugin has its own repository —
 
 ## Next steps
 
-Write something: **[Your First Program](/saule/guides/first-program/)**.
+Write something: **[A First Program](/saule/guides/first-program/)**.

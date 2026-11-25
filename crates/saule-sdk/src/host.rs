@@ -18,7 +18,7 @@
 //!
 //! A handle is only valid for the duration of the native call that produced
 //! it (including nested host callbacks). Do not stash an `STable` / `SFunction`
-//! in a `static` and use it after your export returns.
+//! in a `static` and use it after the export returns.
 
 use core::sync::atomic::{AtomicPtr, Ordering};
 

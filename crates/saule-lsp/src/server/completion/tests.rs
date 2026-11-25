@@ -842,7 +842,7 @@ end
 }
 
 /// A half-typed declaration keyword at the start of a statement completes to
-/// the keyword — the very first thing you write in an empty file.
+/// the keyword — the very first thing written in an empty file.
 #[test]
 fn a_statement_start_completes_declaration_keywords() {
     for (src, want) in [

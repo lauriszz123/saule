@@ -3,12 +3,12 @@
 Everything CI does for Saule, and the one-time setup behind it. The pipeline
 itself is [.circleci/config.yml](.circleci/config.yml), which is commented at
 least as heavily as this file — read it for *why* a job is shaped the way it
-is; this is *what you have to click once*.
+is; this is *what has to be clicked once*.
 
 | Concern | Lives on | Why |
 |---|---|---|
 | Code, issues, pull requests | **GitHub** | Source of truth |
-| CI (`cargo test`, fixtures, lints) | **CircleCI**, Docker | Free, no machine of yours involved |
+| CI (`cargo test`, fixtures, lints) | **CircleCI**, Docker | Free, no local machine involved |
 | Release builds — Linux ×3 | **CircleCI**, Docker | aarch64 is cross-compiled and qemu-verified |
 | Release builds — macOS ×2, Windows | **CircleCI**, hosted macOS and Windows | Both are on the free plan's credits |
 | Release archives | **GitHub** Releases | What `install.sh` downloads |
@@ -113,7 +113,7 @@ only one that needs a credential.
    - Repository access: **only** `lauriszz123/saule`
    - Permissions → Repository → **Contents: Read and write** (this is what
      creates tags and releases). Nothing else.
-   - Expiry: whatever you will actually remember to rotate.
+   - Expiry: whatever will actually be remembered and rotated.
 2. CircleCI → **Organization Settings → Contexts → Create Context**, named
    **`saule-release`** (the name is in `config.yml`; change both or neither).
 3. Add an environment variable to it:
@@ -191,7 +191,7 @@ gh release edit v26.22 --prerelease=false --latest
 ```
 
 `--latest` is passed explicitly because GitHub otherwise picks its "latest
-release" by creation date; stating it keeps the pointer under your control.
+release" by creation date; stating it keeps the pointer under control.
 Always bless **forward** — blessing an older build than the current stable
 would move users backwards.
 
@@ -235,7 +235,7 @@ involved**:
 
 So the list of published tags *is* the version state. Nothing writes a version
 into `Cargo.toml`, and CI never pushes a commit — a CI that commits to the
-branch that triggers it is how you get a pipeline that triggers itself.
+branch that triggers it is how a pipeline ends up triggering itself.
 `[workspace.package] version = "26.0.0"` in `Cargo.toml` carries exactly one
 piece of information, the **year**, and it is the one line to change each
 January.
@@ -260,7 +260,7 @@ curl -X POST https://circleci.com/api/v2/project/gh/lauriszz123/saule/pipeline \
 
 A dry run builds and verifies all six platforms and publishes nothing. From
 the CircleCI UI: **Trigger Pipeline**, add parameter `dry-run` = `true`, and
-pick whichever branch you want built. It works from `develop` too, which is
+pick whichever branch is to be built. It works from `develop` too, which is
 the way to prove a change on all six platforms before merging.
 
 The classic API form, for a project on the GitHub OAuth integration:
@@ -297,7 +297,7 @@ Release exists for that tag: **a published version is never rebuilt.**
 # 2. Merge to main and let it publish, then confirm the installer sees it:
 curl -sI https://github.com/lauriszz123/saule/releases/latest | grep -i location
 
-# 3. Install into a scratch directory rather than over your real toolchain:
+# 3. Install into a scratch directory rather than over the real toolchain:
 SAULE_HOME=/tmp/saule-test SAULE_NO_MODIFY_PATH=1 \
   sh -c 'curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh'
 /tmp/saule-test/bin/saule --version
@@ -367,7 +367,7 @@ nothing in the output says which clippy spoke. `cargo clippy --version` is the
 check: it must print the pinned version, not the system one.
 
 Note also that a repeated `cargo clippy` replays cached results instead of
-re-linting. Point it at a scratch `--target-dir` when you need a real answer.
+re-linting. Point it at a scratch `--target-dir` when a real answer is needed.
 
 - **`cargo fmt --all --check` does not fail the build.** The tree carries
   formatting drift that predates any CI, and `main` publishes — a blocking

@@ -180,7 +180,7 @@ local name: string = match c   -- ERROR: non-exhaustive, missing `Color.Blue`
 end
 ```
 
-Add the missing variant or a wildcard arm to fix it. For nullables, both `nil` and a binding (or `_`) must be covered. Guards never count toward exhaustiveness — if every arm has a guard, you still need a wildcard fallback.
+Add the missing variant or a wildcard arm to fix it. For nullables, both `nil` and a binding (or `_`) must be covered. Guards never count toward exhaustiveness — if every arm has a guard, a wildcard fallback is still needed.
 
 ### As an Expression
 

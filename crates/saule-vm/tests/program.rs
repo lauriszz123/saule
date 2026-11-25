@@ -381,7 +381,7 @@ fn an_override_of_an_imported_method_is_inherited_by_its_own_subclass() {
     // Single-module hierarchies never showed it: there the parent's slot is
     // still a placeholder at Pass 1, so the sweep does the right thing. It
     // needs an ancestor that has already been compiled, which is exactly
-    // what an `import` gives you.
+    // what an `import` gives.
     //
     // What made it *visible* was a crash — `A`'s proto index was past the
     // end of `C`'s module's proto vector. With a longer module it would have

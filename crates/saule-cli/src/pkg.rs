@@ -138,7 +138,7 @@ fn install_target(raw: &str) -> Result<Target, String> {
 ///
 /// Nothing is copied and nothing is fetched: a path dependency is used
 /// **where it lies**, so edits to it are visible to this project immediately,
-/// which is what makes this the right shape for a library you are developing
+/// which is what makes this the right shape for a library being developed
 /// alongside its consumer. Recording the path is therefore the whole install.
 ///
 /// Written into `dependencies:` relative to the project root wherever one
@@ -601,7 +601,7 @@ pub(crate) fn cmd_update(target: Option<String>, check: bool) {
         .collect();
 
     // Naming one package narrows the work to it, matched the way `saule
-    // remove` matches — so whatever you know the package by works here too,
+    // remove` matches — so whatever the package is known by works here too,
     // including the import name it was installed under.
     if let Some(needle) = &target {
         let one = find_package(&root, needle)

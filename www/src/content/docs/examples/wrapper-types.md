@@ -44,7 +44,7 @@ min_saule_version: "26.1"
 -- injected, and there is no mapping from the `string` type to the `String`
 -- class anywhere in the language.
 --
--- That is the whole point of a wrapper: you choose the surface. `Text` has
+-- That is the whole point of a wrapper: its author chooses the surface. `Text` has
 -- `words()`, which `String` does not, and deliberately does not expose
 -- `String.rep` or `String.byte`.
 

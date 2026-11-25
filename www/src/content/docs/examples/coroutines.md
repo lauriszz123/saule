@@ -492,7 +492,7 @@ end
 -- A coroutine is a task that decides for itself when to give the CPU back.
 -- There are no threads here and nothing runs in parallel: `resume()` transfers
 -- control into a task, and the task's next `yield` transfers it back. That is
--- enough to interleave as many jobs as you like — a loading screen, a game's
+-- enough to interleave any number of jobs — a loading screen, a game's
 -- actors, a batch of downloads — with no locks, because between two yields a
 -- task has the whole program to itself.
 --

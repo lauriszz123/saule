@@ -22,13 +22,13 @@ Saule has 10 primitive types, inherited from Lua's type system but statically de
 | `table<T>` | The only data structure, typed generically. Also written `T[]` — see [Array Suffixes](/saule/language/tables/#array-suffixes) |
 | `any` | A value of unknown type. Anything may be assigned **to** an `any`; getting a value back **out** requires a checked [`as` cast](/saule/language/types/#escaping-any-with-as) |
 
-Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what you wrote. A variable cannot be `nil` unless its type is marked nullable with `?`.
+Parameters and fields must declare their type; on a local or a return type the annotation is optional and inferred from what was written. A variable cannot be `nil` unless its type is marked nullable with `?`.
 
 ### `bytes` vs `string`
 
 A `string` is text. It is always valid UTF-8, `String.len` counts codepoints,
 and `String.sub` slices on codepoint boundaries. That is what application code
-wants, and it is why `String.char(0x80)` gives you the two-byte UTF-8 encoding
+wants, and it is why `String.char(0x80)` gives the two-byte UTF-8 encoding
 of U+0080 rather than the single byte `0x80`.
 
 A `bytes` is everything else: an image, a digest, a compressed blob, a frame off
@@ -121,7 +121,7 @@ Where it shows up: `Bytes.byte(b, i)` returns `byte?`, so a byte read out of a
 buffer needs no re-checking, and `Bytes.of(...byte)` takes them — so
 `Bytes.of(0x89, 0x50)` is checked where it is written, and `Bytes.of(300)` is
 a compile error rather than a runtime one. `Bytes.toArray` / `Bytes.fromArray` convert
-between a `bytes` and a `byte[]` when a loop over elements is what you want —
+between a `bytes` and a `byte[]` when a loop over elements is what is wanted —
 two functions rather than an implicit conversion, because the representations
 cost very differently: a `bytes` is one byte per byte, a `byte[]` a boxed
 value per byte. Reach for `bytes` to hold or move bytes, `byte[]` only to work
@@ -329,7 +329,7 @@ invisible in source — a control character, a zero-width or bidi character —
 and unescapes the ones that are perfectly readable, so `"\x41"` comes back as
 `"A"`.
 
-`saule fmt` leaves the choice alone. It reads the delimiter back out of your
+`saule fmt` leaves the choice alone. It reads the delimiter back out of the
 source, so formatting never rewrites `'hello'` into `"hello"` — in a string
 literal, a pattern, a table key or an import path.
 
@@ -342,7 +342,7 @@ local q: integer = 7 / 2     -- 3 (truncated, not 3.5)
 local r: integer = 7 % 2     -- 1
 ```
 
-If you want the real-number quotient, convert one operand first:
+For the real-number quotient, convert one operand first:
 
 ```saule
 local q: float = (7 as float) / 2.0    -- 3.5
@@ -365,7 +365,7 @@ local big: integer = 9223372036854775807
 println(big + 1)             -- -9223372036854775808, not an error
 ```
 
-This is the one place Saule does not catch a numeric mistake for you. It is a deliberate trade — a check on every add costs more than it saves for a language used at this scale — but it means a counter or an accumulator that could plausibly reach 2⁶³ needs its own bound. Use `float` when a value's magnitude is genuinely unbounded and precision matters more than exactness.
+This is the one place Saule does not catch a numeric mistake. It is a deliberate trade — a check on every add costs more than it saves for a language used at this scale — but it means a counter or an accumulator that could plausibly reach 2⁶³ needs its own bound. Use `float` when a value's magnitude is genuinely unbounded and precision matters more than exactness.
 
 ### Exponentiation
 
@@ -378,7 +378,7 @@ local neg: integer = -2 ^ 2         -- -4, i.e. -(2 ^ 2)
 local root: float = 2.0 ^ 0.5       -- 1.4142135623730951
 ```
 
-Like `/`, `^` follows the type of its operands rather than promoting: `integer ^ integer` stays an `integer`. A negative exponent has no integer answer, so it is an error — convert first if you want one:
+Like `/`, `^` follows the type of its operands rather than promoting: `integer ^ integer` stays an `integer`. A negative exponent has no integer answer, so it is an error — convert first to get one:
 
 ```saule
 local half: float = 2.0 ^ -1.0      -- 0.5
@@ -487,7 +487,7 @@ Two rules keep a cast from ever being decoration:
   `n as integer` on an `integer` does nothing, so the compiler says so.
 - **A pair not in the table is an error too.** There is no `integer as
   boolean`: which of `0` and `""` counts as false is a convention, not a
-  fact, so the language makes you write the one you meant.
+  fact, so the language requires the one that is meant to be written out.
 
 A cast off a nullable value converts the payload and passes `nil` through,
 so `maybeFloat as integer` is `integer?` — nil in, nil out.
@@ -537,7 +537,7 @@ through a test.
   is O(n); an empty table satisfies any element type.
 - The two readings never blur into each other. A `3.9` that arrives inside
   an `any` is **not** an integer, and `x as integer` says `nil` rather than
-  silently truncating it — the truncation is what you get when you cast a
+  silently truncating it — the truncation is what happens on casting a
   value the checker already knows is a `float`.
 - Every cast is explicit — Saule **never** converts on its own.
 

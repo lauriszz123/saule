@@ -2,8 +2,8 @@
 //!
 //! Only one rule for now, and it's the one that catches real bugs: an
 //! `@param` naming a parameter that doesn't exist. That fires on typos
-//! (`@param widht`) and, more usefully, on renames — you change a
-//! parameter and the stale tag lights up instead of quietly describing
+//! (`@param widht`) and, more usefully, on renames — a
+//! parameter changes and the stale tag lights up instead of quietly describing
 //! something that is no longer there.
 //!
 //! The reverse check — a parameter with no `@param` — is deliberately

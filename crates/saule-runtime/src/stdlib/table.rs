@@ -86,6 +86,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     static_fields.insert("clear".to_string(), native_multi("Table.clear", tbl_clear));
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "Table".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.
@@ -232,8 +233,8 @@ pub fn register_sigs() {
     // `Table.slice<V>(t, from, to?) -> table<V>` — a new table holding the
     // 1-based range `[from, to]`, `to` defaulting to the end. Negative
     // indices count from the end, as they do in `String.sub`, and an
-    // out-of-range slice is empty rather than an error: slicing is how you
-    // ask for "up to n items", and that question has an answer when there
+    // out-of-range slice is empty rather than an error: slicing is how
+    // "up to n items" is asked for, and that question has an answer when there
     // are fewer.
     register_g(
         "Table.slice",
@@ -628,8 +629,8 @@ fn tbl_clear(args: &[Value]) -> Result<Vec<Value>, String> {
 
 /// `Table.slice(t, from, to?)` — a new table over the 1-based range.
 ///
-/// Out-of-range is empty, not an error. Slicing is how you write "up to the
-/// first n", and that has a sensible answer when there are fewer than n —
+/// Out-of-range is empty, not an error. Slicing is how "up to the
+/// first n" is written, and that has a sensible answer when there are fewer than n —
 /// unlike `Table.concat`, whose range is a claim about content that *should*
 /// be checked. Negative indices count from the end, matching `String.sub`.
 fn tbl_slice(args: &[Value]) -> Result<Vec<Value>, String> {

@@ -320,7 +320,7 @@ Os.remove(path)
 
 
 A step closure over the handle's remaining lines. The same as `Io.lines`, for
-a file you have already opened — which is what you want when the handle was
+a file that is already open — which is what is wanted when the handle was
 opened in a particular mode, or when some of it has already been read.
 
 ```saule
@@ -351,7 +351,7 @@ Os.remove(path)
 
 Moves the read/write position and answers the new position, counted in bytes
 from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so
-answers where you are.
+answers where the handle is.
 
 `nil` when the handle cannot seek — a pipe, or a closed file.
 

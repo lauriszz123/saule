@@ -30,16 +30,16 @@ Each plugin lives in its own repository:
 ## Install the server first
 
 All three plugins need the binary, and the
-[installer](/saule/guides/installation/) puts it on your `PATH` along with the
+[installer](/saule/guides/installation/) puts it on the `PATH` along with the
 `saule` CLI:
 
 ```sh
 curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
 ```
 
-Plugins find it on your `PATH`, then in `~/.saule/bin`. They do not run a binary
-from the project you open, because a repository can contain a
-`target/debug/saule-lsp` of its own. If you work on Saule itself and want your own
+Plugins find it on the `PATH`, then in `~/.saule/bin`. They do not run a binary
+from the open project, because a repository can contain a
+`target/debug/saule-lsp` of its own. To work on Saule itself with a local
 build, turn on the setting for it: `saule.allowProjectBuild` in VS Code,
 `vim.g.saule_use_project_build = true` in Neovim, or *Run the binaries from a
 project's own target/ folder* in IntelliJ.
@@ -95,7 +95,7 @@ vim.lsp.enable("saule")
 ```
 
 With nvim-lspconfig (including NvChad), register it through the helper instead,
-which picks up your shared `on_attach` and `capabilities`:
+which picks up the shared `on_attach` and `capabilities`:
 
 ```lua
 require("saule.lsp").setup()

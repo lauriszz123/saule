@@ -343,8 +343,8 @@ pub fn register_member(qname: &str) {
 /// Register `Module.member` as a typed **constant** — a member that holds
 /// a value rather than a callable (`Math.pi`, `Os.sep`, `Io.stdout`).
 ///
-/// This is the counterpart to [`register`]: use that for things you call,
-/// this for things you read. Registering a constant through `register`
+/// This is the counterpart to [`register`]: use that for things that are called,
+/// this for things that are read. Registering a constant through `register`
 /// with an empty parameter list makes the checker believe it's a zero-arg
 /// function, which then fails both ways — bare use can't be typed, and the
 /// call the signature invites blows up at runtime on a non-callable value.
@@ -629,7 +629,7 @@ pub fn is_value_type(name: &str) -> bool {
 }
 
 /// Collect every recorded member of `module`. Used to power
-/// "did-you-mean" hints on unknown-member diagnostics.
+/// the closest-name hints on unknown-member diagnostics.
 pub fn module_members(module: &str) -> Vec<String> {
     ensure_registered();
     let module = resolve_module(module);

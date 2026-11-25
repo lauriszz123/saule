@@ -812,7 +812,7 @@ fn update_can_name_one_package() {
     );
 }
 
-/// The import name is what `saule install` told you to type, so it has to be
+/// The import name is what `saule install` said to type, so it has to be
 /// a way to name a package here too — the same rule `saule remove` follows.
 #[test]
 fn update_accepts_the_import_name() {

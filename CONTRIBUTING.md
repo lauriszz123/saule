@@ -5,13 +5,13 @@ issue first, so nobody spends time on a change that does not fit.
 
 ## Reporting a bug
 
-Include what you ran, what you expected, what happened, and the output of
+Include what was run, what was expected, what happened, and the output of
 `saule --version`. The smallest program that shows the problem helps most. For a
 security problem, see [SECURITY.md](SECURITY.md) instead.
 
 ## Building and testing
 
-You need [Rust](https://rustup.rs) 1.98 or newer.
+Building needs [Rust](https://rustup.rs) 1.98 or newer.
 
 The example projects live in a repository of their own,
 [saule-examples](https://github.com/lauriszz123/saule-examples), which this
@@ -20,7 +20,7 @@ the tests, so fetch them too:
 
 ```sh
 git clone --recurse-submodules https://github.com/lauriszz123/saule.git
-# or, in a clone you already have:
+# or, in an existing clone:
 git submodule update --init
 ```
 
@@ -36,7 +36,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets
 ```
 
-To use your build in an editor, turn on the plugin's setting for a project's own
+To use a local build in an editor, turn on the plugin's setting for a project's own
 build. See each plugin's README.
 
 ## Where things go
@@ -54,6 +54,6 @@ build. See each plugin's README.
 Open them against `develop`. Tests must pass on Linux, macOS and Windows. `main`
 is the release branch, and every push to it publishes a release.
 
-By contributing, you agree that your work is licensed under the
+A contribution is licensed under the
 [MIT License](LICENSE). Everyone taking part is expected to follow the
 [Code of Conduct](CODE_OF_CONDUCT.md).

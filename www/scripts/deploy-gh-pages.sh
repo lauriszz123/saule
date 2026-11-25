@@ -4,7 +4,7 @@
 # This is how the site is published. There is no CI path: the repository has no
 # GitHub Actions workflows, and CircleCI checks the site (samples compile,
 # generated docs are in sync, Astro builds) without publishing it — see
-# CIRCLECI.md. Your machine does the building, and `gh-pages` is the result.
+# CIRCLECI.md. The local machine does the building, and `gh-pages` is the result.
 #
 # Usage:
 #   www/scripts/deploy-gh-pages.sh            # build, commit, and push
@@ -64,7 +64,7 @@ rm -rf "$WORKTREE"
 # that hosts the GitHub repository. An explicit `PAGES_REMOTE` always wins;
 # otherwise prefer a remote named `github` and fall back to `origin`, which is
 # what a checkout with a single remote calls it. Getting this wrong is not a
-# harmless failure: `ls-remote` against a remote you cannot read fails
+# harmless failure: `ls-remote` against a remote that cannot be read fails
 # identically to "the branch does not exist", so
 # the fallback below would quietly rebuild `gh-pages` from HEAD and bury the
 # published site under the entire source history.

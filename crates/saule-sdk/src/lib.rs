@@ -3,7 +3,7 @@
 //! A native package is a `cdylib` the Saule interpreter loads at runtime.
 //! Everything Saule needs to know about it — its classes, every method's
 //! signature, the doc comments the editor shows — is compiled *into the
-//! library* by the macros here, so the one file you build is the whole
+//! library* by the macros here, so the one file that is built is the whole
 //! package. There is no manifest to generate or keep in sync.
 //!
 //! ```ignore
@@ -128,7 +128,7 @@
 //!   properties.
 //! - [`#[saule_enum]`](saule_enum) — a fieldless enum as a Saule enum.
 //! - [`SObject<T>`] — a shared handle to an object, to keep one beyond a
-//!   call or return one you also keep.
+//!   call or return one that is also kept.
 //! - The `S*` [`types`] — Saule tables and callbacks, worked on in place.
 //!
 //! See [`convert`] for how Rust types map to Saule types. A function may

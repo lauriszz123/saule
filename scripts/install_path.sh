@@ -4,7 +4,7 @@
 # Both binaries are installed. `saule-lsp` matters as much as `saule`: the
 # editor plugins look for the language server in the project's `target/`
 # directory first and fall back to PATH, so without it on PATH the LSP only
-# works inside this repo — in any other project you get syntax highlighting
+# works inside this repo — in any other project there is syntax highlighting
 # and indentation (both client-side) but no formatting, hover or diagnostics.
 set -euo pipefail
 

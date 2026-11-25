@@ -234,8 +234,8 @@ impl Backend {
         // Dependencies declared in `saule.config`. These live outside the
         // workspace (`../json`) and are not under the project's own
         // `src_dirs`, so the workspace scan below never reaches them — without
-        // this, a dependency you can import is a dependency you get no
-        // suggestion for.
+        // this, a dependency that can be imported is a dependency with no
+        // suggestion for it.
         for dep in saule_project::get()
             .map(|p| p.dependencies)
             .unwrap_or_default()
@@ -296,7 +296,7 @@ impl Backend {
 
         // Workspace files, relative to this file's folder first, then to the
         // project's `src_dirs`. A folder holding `init.sau` is offered as the
-        // folder itself, since that is what you import.
+        // folder itself, since that is what is imported.
         let src_dirs: Vec<std::path::PathBuf> = saule_project::get()
             .map(|p| p.src_dirs.clone())
             .unwrap_or_default();

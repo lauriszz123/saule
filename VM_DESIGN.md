@@ -239,7 +239,7 @@ help nearly as much as it does in a dynamic language, because:
   holds an `Rc` is a non-atomic increment plus a potential cache-line write to a
   shared control block. NaN-boxing does not remove a single one.
 - **`i64` does not fit.** Saule's `integer` is a full 64-bit signed value
-  (`README.md`, "Types"). NaN-boxing gives you 51 bits of payload. Lua 5.4
+  (`README.md`, "Types"). NaN-boxing gives 51 bits of payload. Lua 5.4
   abandoned NaN-boxing for exactly this reason when it introduced a distinct
   integer type. Saule has the same constraint, and Saule's integers are *more*
   load-bearing than Lua's.

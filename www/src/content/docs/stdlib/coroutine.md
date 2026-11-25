@@ -9,7 +9,7 @@ sidebar:
 
 A coroutine is a function that can stop part-way — **yield** a value — and
 later be **resumed** exactly where it stopped, with its locals and its whole
-call stack intact. `Coroutine<T>` is the handle you resume; the body is handed
+call stack intact. `Coroutine<T>` is the handle that is resumed; the body is handed
 a `Yielder<T>`, the one thing that can yield it. The language guide's
 [Coroutines](/saule/language/coroutines/) section explains the model; this is the
 reference.
@@ -176,7 +176,7 @@ println(gen.error() ?? "")     -- out of data
 
 
 A step closure that resumes the coroutine once per call — what
-`for v in gen do` uses, so you rarely call it yourself. A coroutine is an
+`for v in gen do` uses, so it is rarely called by hand. A coroutine is an
 `Iterable<T>`, and the loop variable is a `T`.
 
 Unlike `resume`, iterating **raises** if the coroutine fails part-way: a loop

@@ -7,7 +7,7 @@ sidebar:
 
 <!-- Generated from LANGUAGE.md by `npm run sync-docs`. Edit that file, not this one. -->
 
-Saule uses `try / catch` for unexpected runtime errors. For expected, recoverable failures — missing data, invalid input, parse errors — prefer **nullable return types** (`-> T?`) and let null safety carry the failure through the type system. A user-defined `Result<T>` class is trivial to write on top of classes and generics if you want richer error payloads.
+Saule uses `try / catch` for unexpected runtime errors. For expected, recoverable failures — missing data, invalid input, parse errors — prefer **nullable return types** (`-> T?`) and let null safety carry the failure through the type system. A user-defined `Result<T>` class is trivial to write on top of classes and generics when richer error payloads are wanted.
 
 ### Throwing Errors
 

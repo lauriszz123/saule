@@ -39,7 +39,7 @@ pub type SourceOverlay<'a> = &'a dyn Fn(&Path) -> Option<String>;
 /// Where an imported module's parse *tree* comes from.
 ///
 /// Returning `Some(tree)` skips reading and parsing that file entirely;
-/// `None` means "do it yourself".
+/// `None` means "read and parse it as usual".
 ///
 /// This exists because the walk is the same walk for every file in a
 /// project, and the modules near the root of the import graph are therefore

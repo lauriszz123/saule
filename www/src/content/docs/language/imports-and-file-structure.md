@@ -9,7 +9,7 @@ sidebar:
 
 ### Importing
 
-An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](/saule/language/imports-and-file-structure/#folder-modules-initsau)), and the path is relative to the importing file's directory, then the project's `src_dirs`. The module comes first, so an editor knows what it can offer before you type a name.
+An import names either a single `.sau` file or a folder module (a directory with an `init.sau` — see [Folder Modules](/saule/language/imports-and-file-structure/#folder-modules-initsau)), and the path is relative to the importing file's directory, then the project's `src_dirs`. The module comes first, so an editor knows what it can offer before a name is typed.
 
 ```saule
 -- one name, several, or one under another name

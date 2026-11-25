@@ -389,9 +389,9 @@ print(new >= old)    -- true
 
 **`nil` never reaches an overload.** `v == nil` stays the nullability check it looks like rather than calling `equals(other: Vec2)` with nothing in hand — the same restriction Lua puts on `__eq`.
 
-**`OpToString` also drives `..`.** A class with `OpToString` but no `OpConcat` can sit on either side of `..` and renders itself into the resulting string; `OpConcat` takes over when you want `..` to build something other than a string.
+**`OpToString` also drives `..`.** A class with `OpToString` but no `OpConcat` can sit on either side of `..` and renders itself into the resulting string; `OpConcat` takes over when `..` should build something other than a string.
 
-**`OpConcat` takes `..` over completely.** Because `..` is right-associative and dispatches left, writing `"path = " .. somePath` puts the class on the left of a string and calls its `concat`, which is a type error when `concat` expects its own type. Reach for `tostring(somePath)` in that case. This only affects classes that implement `OpConcat` — one with just `OpToString` interpolates the way you'd expect.
+**`OpConcat` takes `..` over completely.** Because `..` is right-associative and dispatches left, writing `"path = " .. somePath` puts the class on the left of a string and calls its `concat`, which is a type error when `concat` expects its own type. Reach for `tostring(somePath)` in that case. This only affects classes that implement `OpConcat` — one with just `OpToString` interpolates the way one would expect.
 
 **Overloads are inherited.** A subclass gets its parent's operators, and can override any of them by redefining the method.
 

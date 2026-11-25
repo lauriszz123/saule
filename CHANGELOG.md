@@ -262,7 +262,7 @@ history.
   alongside it.
 - **The examples are tiered, and there are ten more of them.** Both the
   playground picker and the Examples index group their programs as *Simple*,
-  *Intermediate* and *Advanced* — by the features you need to know to read
+  *Intermediate* and *Advanced* — by the features needed to read
   one, not by length — and each example page carries its tier as a sidebar
   badge. The playground gains strings and text, tables, loops and control
   flow, functions (defaults, named arguments, multiple returns, variadics),
@@ -482,7 +482,7 @@ history.
   its parameter's type, an `if`, `while` or `until` condition puts booleans
   first, and a type reached through a namespace (`uikit.ThemeData`) fits a slot
   declared with the bare name. Where no type applies, names spelled the way
-  you started typing come first: `f` reaches `fn`, `for` and your locals before
+  the typing started come first: `f` reaches `fn`, `for` and the locals before
   the `FlowStack` class.
 
 ## 26.23
@@ -491,8 +491,8 @@ history.
 
 - **Imports name the module first.** `from shine import Window, Button as Btn`
   and `from "uikit" import *` replace `import Window from shine` and
-  `import * from "uikit"`, so the editor knows what it can offer before you type
-  a name. The old form is now a syntax error that says what to write instead.
+  `import * from "uikit"`, so the editor knows what it can offer before
+  a name is typed. The old form is now a syntax error that says what to write instead.
 - **Re-exports are written out.** `export from shapes import *` passes names on,
   from any file. An `init.sau` no longer re-exports whatever it imports: a plain
   `from … import` keeps its names private there too. Turn each import in a
@@ -581,7 +581,7 @@ history.
 
 ### Fixed
 
-- **`saule fmt` keeps what you wrote.** `string[]` no longer becomes
+- **`saule fmt` keeps what was written.** `string[]` no longer becomes
   `table<integer, string>`, and neither do `T[,]`, `T[]?` or `(fn() -> T)[]`. String
   escapes stay escapes, `["key"]` keeps its brackets, and `(a) | (b) | c` gains no
   extra parentheses. A comment at the top of a lambda argument stays inside it, and

@@ -4,7 +4,7 @@
 //! fields and enum variants nested as children.
 //!
 //! Symbol *ranges* cover the entire declaration span (so clicking on
-//! the outline takes you to the start of the decl); *selection ranges*
+//! the outline goes to the start of the decl); *selection ranges*
 //! cover just the name token, recovered by scanning the source for the
 //! first occurrence of the name inside the decl span.
 

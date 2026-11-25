@@ -26,7 +26,7 @@ use super::{Closure, VmShared};
 /// and `vtable`. They used to be left empty, on the reasoning that dispatch
 /// goes through the vtable rather than the map — true for `CALLM`, and false
 /// for everything that asks a *class* a question from outside the VM.
-/// `display_value` asking "do you have a `toString`?" got `no` and printed
+/// `display_value` asking "is there a `toString`?" got `no` and printed
 /// `<instance of Money>` with no error at all.
 ///
 /// Protos are ordered parents-first by Pass 1, so a parent is always
@@ -113,7 +113,10 @@ pub(crate) fn build_classes(
             .map(|(name, s)| (name.to_string(), s.slot))
             .collect();
 
+        let interfaces: Vec<String> = proto.interfaces.iter().map(|i| i.to_string()).collect();
+
         let class = Rc::new(ClassObject {
+            interfaces,
             name: proto.name.to_string(),
             parent,
             layout: Rc::clone(&proto.layout),

@@ -14,7 +14,7 @@ this suite compared against were removed deliberately, so a fixture that
 fails for the wrong reason now passes — which is the trap described at the
 bottom of this file, reopened on purpose. The fixture's name and its leading
 comment are the only statement of what it should say; run it and read the
-message when you touch one.
+message when touching one.
 
 Both trees are split into the same areas, so a feature's passing and failing
 fixtures sit at mirrored paths: `tests/run/generics/` and
@@ -78,7 +78,7 @@ long time:
 
 So when adding or editing a fixture: **run it and read the message.** "It
 fails" is not the assertion; "it fails with *this* diagnostic, at *this*
-span" is — and with nothing recorded, you are the only thing checking it.
+span" is — and with nothing recorded, the person changing it is the only thing checking it.
 
 A fixture whose message is the generic `cannot determine the type of this
 expression` is a signal, not a pass — it usually means the precise check the

@@ -223,7 +223,7 @@ impl Parser {
     /// own end, or — when it was never written — as far as parsing got.
     ///
     /// This is the single highest-value recovery in the parser. Code is
-    /// written top-down, so the `end` of the block you are inside is almost
+    /// written top-down, so the `end` of the block being written is almost
     /// always the thing that hasn't been typed yet; treating that as fatal
     /// throws away the entire declaration the cursor is in, which is exactly
     /// the declaration the editor is being asked about.

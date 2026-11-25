@@ -319,7 +319,7 @@ saule remove [--purge] <PACKAGE>
 
 The installed copy is otherwise kept, because other projects may use it. The
 package may be named as `owner@repo:v1`, `owner@repo`, just `repo`, or the name
-you import it under.
+it is imported under.
 
 ## `saule list`
 

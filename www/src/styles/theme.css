@@ -210,7 +210,7 @@ a[data-saule-play]::after {
 /* Reserve the scrollbar's gutter on every page, whether or not that page
  * scrolls. Without it the viewport is a scrollbar narrower on a long page
  * than on a short one, so the header and the centred content shift sideways
- * as you navigate — and on the home page, which always scrolls, the whole
+ * from page to page — and on the home page, which always scrolls, the whole
  * layout sits offset from the window edge by that much.
  *
  * `stable` keeps the space even when nothing overflows, which is what makes
@@ -308,7 +308,7 @@ html {
 /* ── Links and navigation ────────────────────────────────────────────────
  * Sidebar entries and the table of contents shift a hair on hover. Only the
  * colour is animated on prose links: moving body text under the pointer is
- * distracting where moving a nav item is a target growing toward you.
+ * distracting where moving a nav item is a target growing toward the pointer.
  */
 a {
 	transition: color var(--saule-fast) var(--saule-ease);
@@ -454,7 +454,7 @@ site-search dialog[open]::backdrop {
 /* ── The home page, in segments ──────────────────────────────────────────
  * Four full-height panes — the hero, why, what it looks like, how to get
  * it — rather than one long scroll. Each fills the viewport and arrives as
- * you reach it.
+ * it is reached.
  *
  * Snapping is `mandatory` and `scroll-snap-stop: always`: one segment per
  * screen, and a flick advances exactly one rather than skipping past two.
@@ -546,8 +546,8 @@ body:has(.pane) .hero {
 	padding-block: clamp(2rem, 6vh, 5rem);
 }
 
-/* A hairline between segments, so the boundary is visible before you reach
-   it rather than only once it has snapped. */
+/* A hairline between segments, so the boundary is visible before it is
+   reached rather than only once it has snapped. */
 .pane + .pane {
 	border-top: 1px solid var(--sl-color-gray-6);
 }
@@ -668,14 +668,9 @@ body:has(.pane) .hero {
 /*
  * The reveal.
  *
- * Tied to the scroll, not set off by it. Each piece of a segment fades and
- * rises in over the stretch of scrolling that brings it into view, and
- * leaves the same way off the top: the motion is a place on the page, not
- * an event. Scrolling back up runs it backwards — the page has no memory of
- * which way you came, so nothing ever plays twice, or late, or against the
- * direction you are going. A reveal that fires when a segment arrives has
- * to be re-armed when it leaves, and re-armed reveals are what made going
- * back up look like the page reloading.
+ * Every segment is in one of three places: `after` (below the one on
+ * screen, waiting), `current`, or `before` (above it, already read). The
+ * script in `Head.astro` says which, from where the page is scrolled to.
  *
  * `[data-reveal]` is written by the script in `Head.astro`. Doing it from
  * script rather than in CSS is what keeps the page readable with
@@ -905,7 +900,7 @@ body:has(.pane) .hero {
 	--saule-chip: var(--sl-color-accent);
 }
 
-/* The page you are on is a filled row in the accent: its chip is that
+/* The current page is a filled row in the accent: its chip is that
    row's own ink, a shade darker behind, rather than a fourth colour. */
 .sidebar-content a[aria-current='page'] > .sl-badge {
 	color: inherit;
@@ -957,7 +952,7 @@ body:has(.pane) .hero {
 
 /* ── Within a page ───────────────────────────────────────────────────────
  * A link to a heading travels there instead of cutting to it, so where it
- * went is something you saw. Not on the home page, whose segments snap,
+ * went is something that was seen. Not on the home page, whose segments snap,
  * and not until the page has settled (`data-settled`, from `Head.astro`):
  * a page opened at a heading far down a long reference should be there,
  * not be seen scrolling to it.

@@ -452,7 +452,7 @@
 			"signature": "Bytes.len(b: bytes) -> integer",
 			"params": "b: bytes",
 			"returns": "integer",
-			"detail": "The byte count. `#b` is the same thing, as a value you can pass around.",
+			"detail": "The byte count. `#b` is the same thing, as a value that can be passed around.",
 			"section": "Inspecting",
 			"href": "/stdlib/bytes/#bytes-len"
 		},
@@ -944,7 +944,7 @@
 			"signature": "Table.len<V>(t: table<V>) -> integer",
 			"params": "t: table<V>",
 			"returns": "integer",
-			"detail": "The array length — the same number `#t` gives, as a value you can pass around.",
+			"detail": "The array length — the same number `#t` gives, as a value that can be passed around.",
 			"section": "Reading a table",
 			"href": "/stdlib/table/#table-len"
 		},
@@ -1352,7 +1352,7 @@
 			"signature": "gen.iter() -> fn() -> T?",
 			"params": "",
 			"returns": "fn() -> T?",
-			"detail": "A step closure that resumes the coroutine once per call — what `for v in gen do` uses, so you rarely call it yourself. A coroutine is an `Iterable<T>`, and the loop variable is a `T`.",
+			"detail": "A step closure that resumes the coroutine once per call — what `for v in gen do` uses, so it is rarely called by hand. A coroutine is an `Iterable<T>`, and the loop variable is a `T`.",
 			"section": "Coroutine methods",
 			"href": "/stdlib/prelude-always-in-scope/#gen-iter"
 		},
@@ -1472,7 +1472,7 @@
 			"signature": "f.lines() -> fn() -> string?",
 			"params": "",
 			"returns": "fn() -> string?",
-			"detail": "A step closure over the handle's remaining lines. The same as `Io.lines`, for a file you have already opened — which is what you want when the handle was opened in a particular mode, or when some of it has already been read.",
+			"detail": "A step closure over the handle's remaining lines. The same as `Io.lines`, for a file that is already open — which is what is wanted when the handle was opened in a particular mode, or when some of it has already been read.",
 			"section": "File methods",
 			"href": "/stdlib/io-file/#f-lines"
 		},
@@ -1484,7 +1484,7 @@
 			"signature": "f.seek(whence: IoSeek?, offset: integer?) -> integer?",
 			"params": "whence: IoSeek?, offset: integer?",
 			"returns": "integer?",
-			"detail": "Moves the read/write position and answers the new position, counted in bytes from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so answers where you are.",
+			"detail": "Moves the read/write position and answers the new position, counted in bytes from the start. Defaults to `(IoSeek.Cur, 0)`, which moves nothing and so answers where the handle is.",
 			"section": "File methods",
 			"href": "/stdlib/io-file/#f-seek"
 		},
@@ -1712,7 +1712,7 @@
 			"signature": "Os.tmpname() -> string",
 			"params": "",
 			"returns": "string",
-			"detail": "A path under the system temp directory that nothing is using yet. It is a **name**, not a file: nothing is created until you create it.",
+			"detail": "A path under the system temp directory that nothing is using yet. It is a **name**, not a file: nothing is created until the program creates it.",
 			"section": "Filesystem",
 			"href": "/stdlib/os/#os-tmpname"
 		},

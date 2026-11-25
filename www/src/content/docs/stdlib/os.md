@@ -464,7 +464,7 @@ Os.remove(b)
 
 
 A path under the system temp directory that nothing is using yet. It is a
-**name**, not a file: nothing is created until you create it.
+**name**, not a file: nothing is created until the program creates it.
 
 ```saule
 local path: string = Os.tmpname()
@@ -532,8 +532,8 @@ Os.remove(path)
 ### `FsKind` variants
 
 `File` (`"file"`), `Dir` (`"dir"`), `Symlink` (`"symlink"`) and `Other`
-(`"other"`). Match on the variant rather than comparing `.value` when you
-want the compiler to check you have covered every case.
+(`"other"`). Match on the variant rather than comparing `.value` when
+the compiler should check that every case is covered.
 
 ```saule
 local info: FsInfo = Os.fsInfo(Os.cwd())!
@@ -696,7 +696,7 @@ escape codes included, for a terminal emulator to interpret — and `write`
 sends it keystrokes. `nil` when it cannot be started.
 
 The terminal starts at 80×24; `resize` changes it, and the program is told.
-The environment is inherited, so set `TERM` (with `Os.setenv`) to what your
+The environment is inherited, so set `TERM` (with `Os.setenv`) to what the
 emulator understands before starting the shell.
 
 | Method | |
@@ -784,7 +784,7 @@ Two properties shape everything below. **Reads never block**: each captured
 stream is drained on a thread of its own into a buffer, and `read` takes
 whatever has arrived so far. And **reads are `bytes`, not `string`**: a
 child's output is not promised to be text, and a `string` is always valid
-UTF-8 — use `Bytes.toString` where you expect text, which returns `string?`
+UTF-8 — use `Bytes.toString` where text is expected, which returns `string?`
 precisely because that is where it can fail.
 
 ```saule
@@ -1058,7 +1058,7 @@ it — call `kill` or `wait`.
 ### Failure conventions
 
 The filesystem calls disagree about how they report trouble, and it is worth
-knowing which is which before you write the error handling:
+knowing which is which before writing the error handling:
 
 - `Os.remove` / `Os.rename` / `Os.chdir` / `Os.mkdir` return `boolean`.
 - `Os.fsInfo` and `Os.getenv` return `T?`.

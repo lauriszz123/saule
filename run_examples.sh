@@ -3,7 +3,7 @@
 # Runs every project under `examples/` and checks its **exit status**.
 #
 # The projects themselves are the tests: `examples/bf`, `examples/todo-app`,
-# `examples/json_usage` — ordinary multi-module Saule programs you can read
+# `examples/json_usage` — ordinary multi-module Saule programs that can be read
 # and run by hand. There is nothing else to look at; the recorded outputs this
 # script used to compare against were removed deliberately, so what a project
 # prints is no longer gated, only whether it ran.
@@ -72,7 +72,7 @@ else
 fi
 
 # Projects this harness cannot run, each with a reason. Counted and printed
-# at the end, because an exclusion you cannot see is just a test you stopped
+# at the end, because an exclusion nobody can see is just a test that stopped
 # running.
 # What `saule run` is expected to answer for each project. Everything runs
 # cleanly except `json`, which is a library: it has no entry point, so `run`

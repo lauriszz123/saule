@@ -14,7 +14,7 @@ A handful of patterns repeat across the stdlib:
   it makes sense.
 - **`?` means "may not happen".** Lookups that can miss (`String.find`,
   `Io.open`, `Os.getenv`) return nullable types so the typechecker forces
-  you to handle the absence with `?.`, `??`, `!`, or a `match`.
+  the absence to be handled with `?.`, `??`, `!`, or a `match`.
 - **Multi-return is a tuple.** Functions like `String.find` and `Os.capture`
   return `(integer?, integer?)` / `(integer, string, string)`. Destructure
   with `local s, e = ...` or pattern-match.

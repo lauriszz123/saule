@@ -2,8 +2,8 @@
 --
 -- A Saule `string` is always valid UTF-8, so both forms name a **codepoint**
 -- rather than a raw byte: `\x80` is U+0080, two bytes on the wire, and not a
--- lone 0x80, which would not be text at all. `Bytes.of(0x80)` is how you
--- write that byte.
+-- lone 0x80, which would not be text at all. `Bytes.of(0x80)` is how
+-- that byte is written.
 
 class Main
 	static fn main()

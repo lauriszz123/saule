@@ -102,7 +102,7 @@ pub(super) fn install(module: &Module) {
             // author wrote, and only for the module's *own* functions —
             // imported ones, which come from the registry above, would
             // keep theirs. Same function, two answers, depending on which
-            // file you called it from.
+            // file it was called from.
             let declared = return_ty.clone().or_else(|| {
                 map.get(name)
                     .filter(|_| return_ty.is_none())

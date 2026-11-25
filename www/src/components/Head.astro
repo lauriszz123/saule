@@ -151,7 +151,7 @@ const renderBlocking = { blocking: 'render' };
 			const label = group.querySelector('summary')?.textContent?.trim();
 			if (!label) continue;
 			// A group holding the current page stays open whatever was saved:
-			// collapsing the section you are reading hides where you are.
+			// collapsing the section being read hides where the reader is.
 			const here = group.querySelector('a[aria-current="page"]') !== null;
 			if (!here) group.open = open.has(label);
 
@@ -181,7 +181,7 @@ const renderBlocking = { blocking: 'render' };
 	 * exists once there is something to undo it.
 	 *
 	 * The hero is deliberately not included. It animates on load — the
-	 * first thing anyone sees — and re-running that every time you scroll
+	 * first thing anyone sees — and re-running that on every scroll
 	 * back up would make the page feel like it was reloading.
 	 */
 	function initPanes() {
@@ -192,7 +192,7 @@ const renderBlocking = { blocking: 'render' };
 		 * Start at the top, every time.
 		 *
 		 * A browser restores the scroll position on reload, and it does not
-		 * re-snap afterwards — so a refresh landed wherever you happened to
+		 * re-snap afterwards — so a refresh landed wherever the page happened to
 		 * be, which on a snapped page means halfway between two segments
 		 * with neither of them whole. On a page whose first screen is the
 		 * thing it exists to show, resuming is the wrong behaviour anyway.

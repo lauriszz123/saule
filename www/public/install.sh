@@ -128,8 +128,8 @@ detect_triple() {
 # which is a plain numeric dotted compare.
 #
 # A channel is remembered in `$SAULE_HOME/channel`, so re-running the
-# installer upgrades you within the channel you chose instead of silently
-# moving you to the other one.
+# installer upgrades within the chosen channel instead of silently
+# moving to the other one.
 resolve_channel() {
     saule_home="${SAULE_HOME:-$HOME/.saule}"
     if [ -n "${SAULE_CHANNEL:-}" ]; then
@@ -350,7 +350,7 @@ main() {
 
     # Remembered so the next run of this script stays on the same channel. An
     # explicit SAULE_VERSION does not change it: pinning one build is not a
-    # decision to leave the channel you are on.
+    # decision to leave the current channel.
     if [ -z "${SAULE_VERSION:-}" ]; then
         printf '%s\n' "$channel" > "$saule_home/channel" 2>/dev/null || true
     fi
@@ -358,7 +358,7 @@ main() {
     say "installed to $saule_home/bin"
 
     # Both binaries matter. `saule-lsp` is the language server every editor
-    # plugin uses; without it on PATH you get syntax highlighting and
+    # plugin uses; without it on PATH there is syntax highlighting and
     # indentation but no diagnostics, hover or formatting.
     got="$("$saule_home/bin/saule" --version 2>/dev/null || true)"
     [ "$got" = "saule $version" ] \

@@ -94,7 +94,7 @@ pub struct StdlibEntry {
     pub kind: EntryKind,
 }
 
-/// Whether an entry is something you call or something you read.
+/// Whether an entry is something that is called or something that is read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     /// A function or method, documented by a `####` signature heading.

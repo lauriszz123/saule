@@ -16,8 +16,8 @@
  *     `localStorage`, since there is no server behind this site.
  *
  * The picker holds two kinds of program. Examples ship with the site and
- * are read-only in the sense that editing one never overwrites it — you
- * fork it into a script of your own. Scripts are what the visitor writes;
+ * are read-only in the sense that editing one never overwrites it — it is
+ * forked into a script of the visitor's own. Scripts are what the visitor writes;
  * they autosave, rename and delete, and share by link exactly as examples
  * do.
  */
@@ -68,7 +68,7 @@
 	<div class="pg-main">
 		<!--
 			Tabs on the left, actions on the right, as IntelliJ's toolbar is
-			laid out: what is open and what you can do to it belong on the
+			laid out: what is open and what can be done to it belong on the
 			same line, above the thing they act on.
 		-->
 		<div class="pg-toolbar">
@@ -249,7 +249,7 @@
 		<div class="pg-keybar" data-keybar role="toolbar" aria-label="Insert into the editor" hidden></div>
 
 		<!--
-			The status bar is for what is true, not for what you can do: a
+			The status bar is for what is true, not for what can be done: a
 			single thin line of readings, the way an IDE's is. The one
 			control on it is the stripe button that opens Problems, which is
 			itself a statement that there are some.
@@ -330,10 +330,10 @@
 		<dl class="pg-keys" data-keys></dl>
 		<h2 class="pg-dialog-title">How it works</h2>
 		<p class="pg-dialog-body">
-			Your code runs entirely in your browser — the same compiler and VM the
+			The code runs entirely in the browser — the same compiler and VM the
 			<code>saule</code> CLI uses, built to WebAssembly. Nothing is sent to a server, so the
-			type checker, the diagnostics and the output are the ones you would get locally. The
-			runtime is fetched the first time you press Run.
+			type checker, the diagnostics and the output are the same as a local run gives. The
+			runtime is fetched the first time Run is pressed.
 		</p>
 		<p class="pg-dialog-body">
 			Programs run in single-file mode, like <code>saule run file.sau</code>: top to bottom,
@@ -417,7 +417,7 @@
 	import type { Diagnostic } from '../lib/runtime';
 
 	/** What a brand-new script starts with — enough to press Run against. */
-	const STARTER = `-- A script of your own. It saves in this browser as you type.
+	const STARTER = `-- A new script. It saves in this browser as it is typed.
 println("Hello from my script!")
 `;
 
@@ -874,7 +874,7 @@ println("Hello from my script!")
 		function renderTree() {
 			tree.replaceChildren();
 
-			// Your own files come first and are always here, listed or
+			// The visitor's own files come first and are always here, listed or
 			// not. Ten examples under four headings is enough to push a
 			// short list of scripts off the bottom of a laptop's sidebar,
 			// and the scripts are what someone came back for.
@@ -1184,12 +1184,12 @@ println("Hello from my script!")
 			const tab = activeTab();
 			resetBtn.hidden = tab?.kind !== 'example';
 			// The banner is the whole explanation for a program that is not
-			// yours, so it says which kind it is rather than leaving two
+			// the visitor's own, so it says which kind it is rather than leaving two
 			// buttons to be worked out.
 			banner.hidden = !tab || tab.kind === 'user';
 			if (tab?.kind === 'example') {
 				bannerText.textContent =
-					'An example. Editing it never overwrites it — save a copy to keep your changes.';
+					'An example. Editing it never overwrites it — save a copy to keep the changes.';
 			} else if (tab?.kind === 'shared') {
 				bannerText.textContent = 'Opened from a shared link. Save a copy to keep it.';
 			}
@@ -1276,7 +1276,7 @@ println("Hello from my script!")
 			return answer !== null;
 		}
 
-		// ---- scripts of your own ------------------------------------------------
+		// ---- the visitor's own scripts -------------------------------------------
 
 		async function newFlow() {
 			const name = await openDialog({
@@ -1825,7 +1825,7 @@ println("Hello from my script!")
 		function setRunning(active: boolean) {
 			running = active;
 			// Both stay in place and neither moves: a control that appears
-			// only once it is needed is a control you have to find under
+			// only once it is needed is a control that has to be found under
 			// time pressure, which is exactly the wrong moment. Stop is
 			// greyed out until there is something to stop, and red the
 			// instant there is.
@@ -1836,7 +1836,7 @@ println("Hello from my script!")
 		async function run() {
 			if (running) return;
 			setRunning(true);
-			// Where only one pane fits, the result is what you pressed Run to
+			// Where only one pane fits, the result is what Run was pressed to
 			// see, and the keyboard would only be covering it.
 			if (singlePane.matches) {
 				showPane('output');
@@ -1925,7 +1925,7 @@ println("Hello from my script!")
 			if (shared !== null) {
 				const named = /[#&]name=([^&]+)/.exec(window.location.hash);
 				const name = normaliseName(named ? (decode(named[1]!) ?? 'shared.sau') : 'shared.sau');
-				// Reloading a link you copied from your own script should
+				// Reloading a link copied from one of the visitor's own scripts should
 				// reopen that script, not offer to save a second copy of it.
 				const mine = listScripts().find((s) => s.name === name && s.source === shared);
 				const tab: OpenTab = mine

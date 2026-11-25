@@ -2,7 +2,7 @@
 
 **Every `.sau` file under this directory must run and exit 0.** `run_tests.sh`
 gates on that, and on nothing else: what a fixture *prints* is not compared
-against anything. Read a fixture's output yourself when you change one — and
+against anything. Read a fixture's output by hand when changing one — and
 see [`../errors/README.md`](../errors/README.md) for what this gate has missed
 before.
 

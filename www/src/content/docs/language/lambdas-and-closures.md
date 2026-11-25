@@ -121,7 +121,7 @@ When the last argument to a call is a function, it can be written after the
 closing parenthesis as a `do ... end` block:
 
 ```saule
--- Stand-ins for whatever your UI library provides.
+-- Stand-ins for whatever a UI library provides.
 fn text(s: string)
     println(s)
 end
@@ -146,7 +146,7 @@ That is sugar, nothing more — it produces the same call as writing the lambda
 out in full:
 
 ```saule
--- Stand-ins for whatever your UI library provides.
+-- Stand-ins for whatever a UI library provides.
 fn text(s: string)
     println(s)
 end
@@ -201,7 +201,7 @@ what lets it follow named arguments, even though a normal positional argument
 cannot:
 
 ```saule
--- Stand-ins for whatever your UI library provides.
+-- Stand-ins for whatever a UI library provides.
 fn text(s: string)
     println(s)
 end
@@ -223,7 +223,7 @@ Binding to the callback slot — rather than to the next unfilled one — is wha
 makes the form work with defaults in between:
 
 ```saule
--- Stand-ins for whatever your UI library provides.
+-- Stand-ins for whatever a UI library provides.
 fn text(s: string)
     println(s)
 end
@@ -264,8 +264,8 @@ end
 ```
 
 Only *free* slots are candidates. If something else already filled the callback
-parameter, the block falls through to the last parameter and you get the type
-error you asked for rather than a silently misplaced argument — which is also
+parameter, the block falls through to the last parameter and the result is the type
+error that was asked for rather than a silently misplaced argument — which is also
 how supplying the callback *and* a trailing block reads as a duplicate-argument
 error:
 
@@ -305,7 +305,7 @@ while queue.pop() do    -- the loop's `do`, not a trailing block on `pop()`
 end
 ```
 
-Parenthesise the call if you really want a trailing block inside a loop header:
+Parenthesise the call to put a trailing block inside a loop header:
 
 ```saule
 local ticks: integer = 0

@@ -146,7 +146,7 @@ fn default_branch(dir: &Path) -> Result<String, String> {
 }
 
 /// The commit a fetched tree is at. Shown when installing, because a branch
-/// name alone does not say what you got.
+/// name alone does not say what was fetched.
 pub(crate) fn short_commit(dir: &Path) -> Option<String> {
     let out = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])

@@ -77,7 +77,7 @@ npm run build:wasm
 ```
 
 `npm run dev` and `npm run build` both do this automatically (`predev` /
-`prebuild`), so the only time you need it by hand is after `cargo clean`. It
+`prebuild`), so the only time it is needed by hand is after `cargo clean`. It
 needs a Rust toolchain, the `wasm32-unknown-unknown` target, and
 `wasm-bindgen-cli` at the version pinned in `Cargo.lock` — the script says so
 explicitly if any is missing.
@@ -107,7 +107,7 @@ closures, `String`/`Math`/`Table` — behaves exactly as it does locally.
 
 ## Deployment
 
-The site is published from your machine to the `gh-pages` branch. There are no
+The site is published from a developer's machine to the `gh-pages` branch. There are no
 GitHub Actions workflows in this repository, and CI does not deploy: CircleCI
 *checks* the site on every push to `main` — the hand-written samples compile
 against the compiler from that commit, the generated pages are in sync with
@@ -134,12 +134,12 @@ pwsh -File www\scripts\deploy-gh-pages.ps1 -DryRun   # build and stage, don't pu
 pwsh -File www\scripts\deploy-gh-pages.ps1           # build, commit, push
 ```
 
-It runs on Windows PowerShell 5.1 as well, if that is what you have. `bash`
+It runs on Windows PowerShell 5.1 as well, if that is what is installed. `bash`
 still has to exist somewhere because `npm run build` shells out to
 `scripts/build-wasm.sh`; the script finds the one Git for Windows installs and
 puts it on `PATH` for the build, so a normal Git install needs no setup.
 
-Note it builds from your **working tree**, not from `HEAD`, so uncommitted
+Note it builds from the **working tree**, not from `HEAD`, so uncommitted
 edits get published (the script warns when the tree is dirty).
 
 Branch-based Pages needs a `.nojekyll` file: it runs the published files

@@ -1,12 +1,12 @@
 ---
 title: Saule
-description: A statically typed, class-oriented scripting language with Lua's simplicity and a type system that catches mistakes before you run anything.
+description: A statically typed, class-oriented scripting language with Lua's simplicity and a type system that catches mistakes before anything runs.
 template: splash
 editUrl: false
 lastUpdated: false
 hero:
   title: Lua's simplicity.<br/>Checked before it runs.
-  tagline: A statically typed, class-oriented scripting language. Familiar to anyone who knows Lua, with mistakes caught while you write rather than when you run.
+  tagline: A statically typed, class-oriented scripting language. Familiar to anyone who knows Lua, with mistakes caught while the code is written rather than when it runs.
   image:
     # The full brand lockup, wordmark and all. The header beside it uses
     # `logo.svg`, the text-free mark — they are deliberately different files,
@@ -21,7 +21,7 @@ hero:
       link: /saule/docs/
       icon: right-arrow
       variant: primary
-    - text: Try it in your browser
+    - text: Try it in the browser
       link: /saule/play/
       icon: rocket
       variant: secondary
@@ -50,21 +50,22 @@ import { Card, CardGrid, Tabs, TabItem, LinkButton } from '@astrojs/starlight/co
 ## Why Saule
 
 <CardGrid>
-	<Card title="Types you can't ignore" icon="approve-check">
-		Parameters and fields always state their type, so the boundaries of your
+	<Card title="Types that can't be ignored" icon="approve-check">
+		Parameters and fields always state their type, so the boundaries of the
 		code are never guesswork — and inside a body, inference keeps the
-		short-lived things short. What never happens is a silent conversion:
-		where two types don't line up, that's a compile error.
+		short-lived things short. Nothing converts silently: an `integer` is
+		never quietly a `float`, and a value put into an `any` has to be cast
+		back out.
 	</Card>
 	<Card title="nil is opt-in" icon="warning">
 		A variable cannot hold `nil` unless its type says so with `?`. When it
-		can, the compiler makes you deal with it — safe access, a coalescing
-		default, or a force unwrap you had to type out on purpose.
+		can, the compiler requires dealing with it — safe access, a coalescing
+		default, or a force unwrap that had to be typed out on purpose.
 	</Card>
 	<Card title="Real classes" icon="puzzle">
-		Inheritance, interfaces, access modifiers and static members are language
-		constructs with actual declarations — not metatable conventions you
-		rediscover in every codebase.
+		Inheritance, interfaces, generics, access modifiers and static members
+		are language constructs with actual declarations — not metatable
+		conventions rediscovered in every codebase.
 	</Card>
 	<Card title="Exhaustive matching" icon="list-format">
 		`match` takes a value apart and binds what it finds — variants and their
@@ -73,13 +74,14 @@ import { Card, CardGrid, Tabs, TabItem, LinkButton } from '@astrojs/starlight/co
 		compile error.
 	</Card>
 	<Card title="Familiar runtime" icon="seti:lua">
-		Tables, closures, multiple return values, coroutines. If you know Lua,
-		you already know how Saule behaves at run time.
+		Tables, closures, multiple return values, coroutines. Anyone who knows Lua
+		already knows how Saule behaves at run time. It is its own language on
+		its own VM, though: it does not run Lua code.
 	</Card>
 	<Card title="Tooling included" icon="setting">
-		A formatter and a language server ship with the compiler. Diagnostics,
-		hover, go-to-definition, inlay hints and formatting in VS Code, Neovim
-		and IntelliJ.
+		One install brings the compiler, a formatter, a test runner, a package
+		installer and a language server: diagnostics, hover, go-to-definition
+		and inlay hints in VS Code, Neovim and IntelliJ.
 	</Card>
 </CardGrid>
 
@@ -142,7 +144,7 @@ println(found?.getName() ?? "nobody")
 local len: integer = #(found?.getName() ?? "")
 println(len)
 
--- `!` forces, and you had to type it on purpose
+-- `!` forces, and it had to be typed on purpose
 local sure: User = User("Arthur")
 println(sure.getName())
 ```
@@ -209,7 +211,7 @@ local lengths: table<integer> = map<string, integer>({"a", "bb", "ccc"}, s => #s
 </Tabs>
 
 <div class="pane-actions">
-	<LinkButton href="/saule/play/" icon="rocket">Run this in your browser</LinkButton>
+	<LinkButton href="/saule/play/" icon="rocket">Run this in the browser</LinkButton>
 	<LinkButton href="/saule/examples/" variant="secondary" icon="open-book">Browse full examples</LinkButton>
 	<LinkButton href="/saule/reference/grammar/" variant="minimal" icon="document">Read the grammar</LinkButton>
 </div>

@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: "Complete Saule projects you can clone and run, grouped simple to advanced."
+description: "Complete Saule projects to clone and run, grouped simple to advanced."
 sidebar:
   order: 1
 ---
@@ -9,9 +9,9 @@ sidebar:
 
 Every example here is a real project in the [examples repository](https://github.com/lauriszz123/saule-examples) —
 the code on each page is read straight from it, so it always matches what
-you get when you clone and run.
+a clone gives when it is run.
 
-They are grouped by what you need to know to read one, not by how long it
+They are grouped by what needs to be known to read one, not by how long it
 is, and each group is in reading order.
 
 ## Simple

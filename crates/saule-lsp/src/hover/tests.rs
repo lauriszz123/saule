@@ -2087,8 +2087,8 @@ end
         hover_src_at(src, "Align.Stretch\n", "Align.".len()).as_deref(),
         Some("```saule\n(variant) Align.Stretch\n```")
     );
-    // A tuple variant shows its payload named and typed, which is what tells
-    // you the order to destructure it in.
+    // A tuple variant shows its payload named and typed, which is what says
+    // the order to destructure it in.
     assert_eq!(
         hover_src_at(src, "Event.Click(1", "Event.".len()).as_deref(),
         Some("```saule\n(variant) Event.Click(x: integer, y: integer)\n```")

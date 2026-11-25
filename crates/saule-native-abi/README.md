@@ -32,6 +32,6 @@ Strings cross as `(ptr, len)` UTF-8 pairs; the producer keeps the bytes
 alive until the consumer copies them.
 
 > Most authors never touch this crate directly — `saule-sdk` generates the
-> shims for you. This is the low-level foundation underneath it.
+> shims. This is the low-level foundation underneath it.
 
 No dependencies on other Saule crates.

@@ -12,7 +12,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 | Name | Type | What it holds |
 | --- | --- | --- |
 | `Project.name` | `string` | The project's `name:` |
-| `Project.version` | `string` | Its `version:` — the version of *your* code |
+| `Project.version` | `string` | Its `version:` — the version of the project's own code |
 | `Project.root` | `string` | Absolute path of the directory holding `saule.config` — in a program built with `saule build`, the directory its bundled files were unpacked to |
 | `Project.srcDirs` | `table<string>` | The `src_dirs:` roots as absolute paths, resolved against `root` — not the relative spellings the config used |
 
@@ -22,7 +22,7 @@ The `saule.config` of the code being run, as the loader read it at startup.
 --
 -- Project.name      is "bf"
 -- Project.version   is "0.1.0"
--- Project.root      is /home/you/code/bf
+-- Project.root      is /home/user/code/bf
 -- #Project.srcDirs  is 1
 --
 -- Run as a single file, there is no project, so every field is empty:
@@ -34,7 +34,7 @@ println(#Project.srcDirs)            -- 0
 Three things worth knowing.
 
 **They are snapshots, taken at startup.** There is no setter, and writing to
-the `srcDirs` table changes your copy rather than anything the module loader
+the `srcDirs` table changes that copy rather than anything the module loader
 will consult.
 
 **Every field is a plain `string`, never `string?`.** In **single-file mode**

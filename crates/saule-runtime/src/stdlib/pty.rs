@@ -18,7 +18,7 @@
 //! Methods:
 //!   * `Os.spawnPty(program: string, args: table<string>?) -> Pty?` — start
 //!     `program` with `args` on a new 80×24 terminal. The environment is
-//!     inherited: set `TERM` to what your emulator understands first.
+//!     inherited: set `TERM` to what the emulator understands first.
 //!   * `p.read(max: integer?) -> bytes` — what the program has written,
 //!     never blocking; empty when there is nothing yet.
 //!   * `p.write(data: bytes) -> integer` — keystrokes for the program; how

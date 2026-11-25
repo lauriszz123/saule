@@ -57,7 +57,7 @@ explist  ::= exp {',' exp}
 ```
 
 An assignment target is parsed as a full expression; whether it is something
-you can actually assign to is decided later, by the semantic pass.
+that can actually be assigned to is decided later, by the semantic pass.
 
 ### Declarations
 

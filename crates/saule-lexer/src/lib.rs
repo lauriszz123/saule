@@ -100,6 +100,8 @@ keywords! {
     "do" => Do,
     "in" => In,
     "as" => As,
+    "is" => Is,
+    "type" => Type,
     "from" => From,
     "match" => Match,
     "case" => Case,
@@ -769,7 +771,7 @@ impl<'src> Lexer<'src> {
                     // U+0041 rather than as a raw byte. A Saule `string` is
                     // always valid UTF-8, so `\x80` is U+0080 (two bytes on
                     // the wire) and not a lone 0x80, which would not be text
-                    // at all. `Bytes.of(0x80)` is how you write that byte.
+                    // at all. `Bytes.of(0x80)` is how that byte is written.
                     Some((i, 'x')) => self.hex_escape(i, &mut s),
                     // `\u{1F600}` — one to six hex digits in braces, a
                     // Unicode scalar value. Braced because a bare `\uXXXX`

@@ -21,7 +21,7 @@ TARGET="wasm32-unknown-unknown"
 
 # A machine can have both a Homebrew rust and a rustup one, and
 # `rustup target add` installs the wasm std into rustup's. Cargo takes `rustc`
-# from PATH, so if the Homebrew one wins you get a misleading
+# from PATH, so if the Homebrew one wins the result is a misleading
 # "can't find crate for `core`" that looks like a missing target.
 #
 # Ask rustup where its binaries are and pin both. `rustup run` is *not*

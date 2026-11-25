@@ -161,8 +161,8 @@ for n = 1, 20 do
 end
 println("")
 
--- \`if / elseif / else\`, and the one-line form \`and\` / \`or\` gives you when a
--- value is what you want rather than a branch.
+-- \`if / elseif / else\`, and the one-line form \`and\` / \`or\` gives when a
+-- value is what is wanted rather than a branch.
 fn describe(n: integer) -> string
     if n < 0 then
         return "negative"
@@ -202,7 +202,7 @@ end
 		blurb: 'UTF-8 text with no methods of its own: the String class does the work, visibly.',
 		source: `-- Text in Saule is a \`string\`: UTF-8, immutable, and with no methods of its
 -- own. Everything that works on one lives on the \`String\` class, so the
--- operation you are calling is always visible at the call site.
+-- operation being called is always visible at the call site.
 
 local name: string = "Ada Lovelace"
 
@@ -227,7 +227,7 @@ println(String.replace(name, " ", "_"))
 println(String.rep("-", 20))
 println(String.trim("   padded   ") .. "|")
 
--- Splitting and joining are the pair you reach for most.
+-- Splitting and joining are the pair reached for most.
 local parts: table<string> = String.split("2026-11-10", "-")
 println(#parts .. " parts: " .. String.join("/", parts))
 
@@ -251,7 +251,7 @@ end
 		blurb: 'Lua’s one data structure, typed: lists, maps, the three ways to walk one, Table vs Iter.',
 		source: `-- A \`table\` is Lua's one data structure, and Saule types it. \`table<V>\` is a
 -- list of \`V\`; \`table<K, V>\` is a map. Both halves can live in one value, as
--- they do in Lua, but the type says which half you are using.
+-- they do in Lua, but the type says which half is in use.
 
 -- A list. \`table<string>\` and the \`string[]\` suffix mean the same thing.
 local names: table<string> = {"ada", "grace", "linus"}
@@ -260,7 +260,7 @@ local scores: integer[] = {120, 340, 90}
 println(#names .. " names, first is " .. names[1])
 
 -- Appending. \`#t + 1\` is the idiom; \`Table.insert\` is the same thing with a
--- name, and takes a position when you want one.
+-- name, and takes a position when one is wanted.
 names[#names + 1] = "alan"
 Table.insert(names, "edsger")
 Table.insert(names, "grete", 1)         -- at the front
@@ -401,9 +401,9 @@ println(tick() .. ", " .. tick() .. ", " .. tick())
 		id: 'nullsafety',
 		group: 'Intermediate',
 		label: 'Null safety',
-		blurb: 'nil is opt-in, and ??, ?., ?[ ] and ! are how you handle it.',
+		blurb: 'nil is opt-in, and ??, ?., ?[ ] and ! are how it is handled.',
 		source: `-- \`nil\` is opt-in. A \`string\` can never hold it; a \`string?\` can, and the
--- checker will not let you forget which one you have.
+-- checker will not let the two be confused.
 
 local name: string = "Ada"
 local nickname: string? = nil
@@ -470,7 +470,7 @@ local missing: table<string>? = nil
 println((tags?[1] ?? "none") .. " / " .. (missing?[1] ?? "none"))
 
 -- \`!\` says "I know this is there". It is checked at runtime, so it is the
--- one that can fail — prefer \`??\` or a guard when you can.
+-- one that can fail — prefer \`??\` or a guard where possible.
 local certain: string? = "present"
 println(String.upper(certain!))
 
@@ -893,9 +893,9 @@ println(goblin.getName() .. " alive? " .. (goblin.isAlive() and "yes" or "no"))
 		id: 'iterable',
 		group: 'Intermediate',
 		label: 'Custom iterables',
-		blurb: 'Make your own class work in a for-in loop by answering a step closure.',
+		blurb: 'Make a class work in a for-in loop by answering a step closure.',
 		source: `-- \`for … in\` is a contract, not a special case for tables. Implement
--- \`Iterable<T>\` and your own class works in one — and the loop variable is a
+-- \`Iterable<T>\` and any class works in one — and the loop variable is a
 -- \`T\`, with no annotation and no cast.
 --
 -- The contract is a single method: \`iter()\` answers a *step closure*, and

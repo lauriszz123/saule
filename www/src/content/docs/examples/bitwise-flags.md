@@ -291,7 +291,7 @@ class Main
 		-- `>>` is a *logical* shift, as in Lua 5.3: the vacated bits are
 		-- filled with zeros rather than with the sign bit, so a negative
 		-- number comes back positive. `>>` is not "divide by a power of two"
-		-- for negative values — divide when that is what you meant.
+		-- for negative values — divide when that is what is meant.
 		printf("-8 >> 1           = %d\n", -8 >> 1)
 		printf("-8 / 2            = %d\n", -8 / 2)
 

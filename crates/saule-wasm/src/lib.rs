@@ -91,7 +91,7 @@ enum Front {
 /// Everything up to but not including execution.
 ///
 /// Factored out because [`check`] wants exactly this and nothing more: the
-/// playground reports errors as you type without running anything, and a
+/// playground reports errors during typing without running anything, and a
 /// second copy of the phase order is how the two would come to disagree
 /// about what a program means.
 ///

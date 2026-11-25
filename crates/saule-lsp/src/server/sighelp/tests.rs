@@ -1292,8 +1292,8 @@ end
         label_at(src, at)
     );
 
-    // And the keys still answer, so you can see what `children`
-    // wants before you open it.
+    // And the keys still answer, so what `children` wants can be
+    // seen before it is opened.
     assert!(label_at(src, open + 2).starts_with("Column("));
     let at = src.find("spacing: 4.0").expect("key") + 2;
     assert!(label_at(src, at).starts_with("Column("));

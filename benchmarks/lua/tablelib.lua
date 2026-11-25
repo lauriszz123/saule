@@ -8,7 +8,7 @@
 -- ordered.
 --
 -- Lua ships `insert`, `remove`, `concat` and `sort`; the other six are
--- written out below, because that is what Lua leaves you to do.
+-- written out below, because that is what Lua leaves to be done by hand.
 local function reverse(t)
 	local i, j = 1, #t
 	while i < j do

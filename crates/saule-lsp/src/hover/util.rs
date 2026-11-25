@@ -194,7 +194,7 @@ fn enum_variant(owner: &str, variant: &str) -> Option<String> {
     let mut s = format!("```saule\n(variant) {owner}.{variant}");
     if shape.arity() > 0 {
         // The declared payload, named and typed the way the enum spells it —
-        // which is what tells you the order to destructure in.
+        // which is what says the order to destructure in.
         let fields: Vec<String> = shape
             .fields
             .iter()

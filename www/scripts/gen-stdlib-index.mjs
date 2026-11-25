@@ -168,8 +168,8 @@ function build() {
 
 	// The module names themselves complete too, so typing `Str` offers
 	// `String` and `.` then offers its members. Only the static classes —
-	// `File` and `Process` are types you hold a value of, never names you
-	// write.
+	// `File` and `Process` are types a value is held of, never names that are
+	// written.
 	const modules = [
 		...new Set(entries.filter((e) => e.owner && !e.method).map((e) => e.owner)),
 	].sort();
