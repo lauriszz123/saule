@@ -13,6 +13,20 @@ security problem, see [SECURITY.md](SECURITY.md) instead.
 
 You need [Rust](https://rustup.rs) 1.98 or newer.
 
+The example projects live in a repository of their own,
+[saule-examples](https://github.com/lauriszz123/saule-examples), which this
+one carries as the `examples/` folder (a git submodule). They are part of
+the tests, so fetch them too:
+
+```sh
+git clone --recurse-submodules https://github.com/lauriszz123/saule.git
+# or, in a clone you already have:
+git submodule update --init
+```
+
+A change to an example is a commit in saule-examples, and then a commit
+here that moves `examples/` to it.
+
 ```sh
 cargo build
 cargo test --workspace

@@ -2538,7 +2538,7 @@ converts at those sites and only those, so relaxing the checker anywhere else
 would typecheck a value that never gets built — leaving a raw `string` inside
 a `table<Text>` for the first `Text` member call to trip over.
 
-See [`examples/wrapper-types`](./examples/wrapper-types) for all three
+See [`wrapper-types`](https://github.com/lauriszz123/saule-examples/tree/main/wrapper-types) for all three
 working together.
 
 ---
@@ -3467,7 +3467,7 @@ A worked tour of all of this — lazy stream combinators that are themselves
 coroutines, a tokenizer that yields from inside the functions it calls, a
 parser that pulls one token at a time, and a cooperative scheduler whose tasks
 interleave on one thread — is in
-[`examples/coroutines`](./examples/coroutines).
+[`coroutines`](https://github.com/lauriszz123/saule-examples/tree/main/coroutines).
 
 See the [`Coroutine` reference](./DOCS.md#coroutine) for every method.
 

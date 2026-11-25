@@ -12,13 +12,13 @@ sidebar:
 
 An interpreter for another language, in about 240 lines. Tables as a tape, a dispatch loop, and a program that takes its source file from `Os.args()`.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/bf)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/bf)
 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/bf
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/bf
 saule run -- -d          # embedded hello world
 saule run -- test.bf     # or a .bf file
 saule run -- 400quine.bf

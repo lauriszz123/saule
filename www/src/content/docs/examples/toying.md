@@ -12,7 +12,7 @@ sidebar:
 
 Opens a window and draws a rectangle that follows the mouse, using the Love2D-style Shine2D native package. Shows how Saule calls into a dynamically-loaded Rust library.
 
-[Browse this example on GitHub](https://github.com/lauriszz123/saule/tree/main/examples/toying)
+[Browse this example on GitHub](https://github.com/lauriszz123/saule-examples/tree/main/toying)
 
 :::caution[Prerequisite]
 This one needs the `shine` native package installed first. Shine2D lives in its own repository — clone [saule-shine](https://github.com/lauriszz123/saule-shine), run `cargo build --release`, and copy the built library into `~/.saule/native_packages/`.
@@ -21,8 +21,8 @@ This one needs the `shine` native package installed first. Shine2D lives in its 
 ## Run it
 
 ```sh
-git clone https://github.com/lauriszz123/saule.git
-cd saule/examples/toying
+git clone https://github.com/lauriszz123/saule-examples.git
+cd saule-examples/toying
 saule run
 ```
 

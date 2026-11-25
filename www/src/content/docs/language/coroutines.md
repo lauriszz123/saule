@@ -256,7 +256,7 @@ A worked tour of all of this — lazy stream combinators that are themselves
 coroutines, a tokenizer that yields from inside the functions it calls, a
 parser that pulls one token at a time, and a cooperative scheduler whose tasks
 interleave on one thread — is in
-[`examples/coroutines`](/saule/examples/coroutines/).
+[`coroutines`](/saule/examples/coroutines/).
 
 See the [`Coroutine` reference](/saule/stdlib/coroutine/) for every method.
 

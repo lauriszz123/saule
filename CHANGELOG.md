@@ -253,7 +253,7 @@ history.
 
 ### Added
 
-- **A worked coroutines example.** [`examples/coroutines`](./examples/coroutines)
+- **A worked coroutines example.** [`examples/coroutines`](https://github.com/lauriszz123/saule-examples/tree/main/coroutines)
   is a six-part tour: lazy stream combinators that are themselves coroutines,
   a stackful tokenizer that yields from two frames below the body, a
   recursive-descent parser that pulls one token at a time, and a cooperative
