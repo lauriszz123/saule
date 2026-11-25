@@ -1,0 +1,9 @@
+-- Calling through a function alias checks the arguments against the
+-- parameters it was declared with.
+
+type Formatter = fn(integer, string) -> string
+
+local pad: Formatter = fn(width: integer, text: string) -> string
+	return text
+end
+println(pad("wide", 3))

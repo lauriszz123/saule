@@ -67,11 +67,11 @@
         },
         {
           "name": "keyword.declaration.saule",
-          "match": "\\b(class|interface|enum|fn|local|static|export|import|from|as|extends|implements)\\b"
+          "match": "\\b(class|interface|enum|type|fn|local|static|export|import|from|as|extends|implements)\\b"
         },
         {
           "name": "keyword.operator.logical.saule",
-          "match": "\\b(and|or|not)\\b"
+          "match": "\\b(and|or|not|is)\\b"
         },
         {
           "name": "variable.language.saule",

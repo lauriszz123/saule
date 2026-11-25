@@ -217,12 +217,12 @@ export class Storage
 			return false
 		end
 
-		if type(data) != "table" then
+		if data is not table then
 			return false
 		end
 
 		for _, entry in data do
-			if type(entry) != "table" then
+			if entry is not table then
 				return false
 			end
 

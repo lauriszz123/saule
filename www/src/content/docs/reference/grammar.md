@@ -62,9 +62,11 @@ that can actually be assigned to is decided later, by the semantic pass.
 ### Declarations
 
 ```ebnf
-decl ::= ['export'] (function | class | interface | enum)
+decl ::= ['export'] (function | class | interface | enum | alias)
        | 'local' function
        | import
+
+alias     ::= 'type' Name ['<' Name {',' Name} '>'] '=' type
 
 function  ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 
@@ -94,8 +96,9 @@ params ::= '(' [param {',' param}] ')'
 param  ::= ['...'] (Name | 'self') [':' type] ['=' exp]
 ```
 
-`export` applies only to the four declaration forms listed; there is no
-`export local`. On a declared `fn` or method every parameter needs its type —
+`export` applies only to the declaration forms listed; there is no
+`export local`. An `alias` is a top-level declaration only, and its type
+parameters are bare names: they take no bounds. On a declared `fn` or method every parameter needs its type —
 the `[':' type]` above is optional only inside a lambda, where the target type
 supplies it, and on `self`, which is typed as the enclosing class.
 
@@ -144,7 +147,7 @@ exp        ::= orExp
 orExp      ::= andExp {'or' andExp}
 andExp     ::= eqExp {'and' eqExp}
 eqExp      ::= cmpExp {('==' | '!=') cmpExp}
-cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp}
+cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp | 'is' ['not'] type}
 borExp     ::= bxorExp {'|' bxorExp}
 bxorExp    ::= bandExp {'~' bandExp}
 bandExp    ::= shiftExp {'&' shiftExp}

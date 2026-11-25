@@ -202,7 +202,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
             // `R[A].<K[B]> := R[C]`
             Op::SETFX => Some((ins.b() as usize, chunk.constants.len(), "constant")),
             // `cast_types[C]`
-            Op::CASTCHK | Op::CASTUNWRAP => {
+            Op::CASTCHK | Op::CASTUNWRAP | Op::ISTYPE => {
                 Some((ins.c() as usize, chunk.cast_types.len(), "cast type"))
             }
             // `type descriptor C`

@@ -1,0 +1,7 @@
+-- The arguments of a generic alias are part of the type: a
+-- `Lookup<integer>` holds integers, and `"old"` is not one.
+
+type Lookup<V> = table<string, V>
+
+local ages: Lookup<integer> = {ann: "old"}
+println(ages["ann"])

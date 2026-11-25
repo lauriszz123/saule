@@ -1,0 +1,7 @@
+-- An alias is a name for a type and nothing else. Nothing called `Handler`
+-- exists when the program runs, so it cannot be read as a value.
+
+type Handler = fn(string) -> nil
+
+local h = Handler
+println(h)

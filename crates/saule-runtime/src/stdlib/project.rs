@@ -72,6 +72,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     );
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: CLASS_NAME.to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.

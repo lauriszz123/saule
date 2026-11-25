@@ -1,0 +1,36 @@
+-- `is` sits with the comparisons: looser than arithmetic, `..`, `??` and
+-- everything above them, tighter than `==`, `and` and `or`.
+
+local a: any = 2
+local b: any = 3
+local s: any = "x"
+local nothing: any? = nil
+
+-- Arithmetic and concatenation belong to the left operand.
+assert(a + b is integer)                  -- (a + b) is integer
+assert(2.0 * 1.5 is float)
+assert(s .. "y" is string)
+assert(nothing ?? "fallback" is string)   -- (nothing ?? "fallback") is string
+
+-- `and` / `or` take whole tests.
+assert(a is integer and s is string)
+assert(a is string or s is string)
+assert(not (a is string or b is string))
+assert(a is integer and b is integer and s is not integer)
+
+-- `==` is looser: both sides are tests.
+assert(a is integer == b is integer)
+assert(a is integer != s is integer)
+
+-- A call, an index and a member read are complete before `is` looks.
+local list: table<any> = {1, "two"}
+local box = {value: 4.5}
+assert(list[1] is integer)
+assert(list[2] is string)
+assert(box.value is float)
+assert(tostring(a) is string)
+assert(#list is integer)
+
+-- And a cast binds tighter still: `v as T is U` tests the cast's result.
+assert(a as integer is integer?)
+println("ok")

@@ -270,7 +270,7 @@ println(Table.remove(names, 1) ?? "")   -- removes and answers it
 println(Table.remove(names) ?? "")      -- the last one, when no position
 
 -- A map. The key type is part of the type, so \`ages["ada"]\` is an \`integer?\`
--- — a key that is not there is \`nil\`, and the checker makes you say so.
+-- — a key that is not there is \`nil\`, and the checker requires that to be said.
 local ages: table<string, integer> = {}
 ages["ada"] = 36
 ages["grace"] = 85

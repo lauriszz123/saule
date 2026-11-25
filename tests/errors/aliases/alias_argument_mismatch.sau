@@ -1,0 +1,15 @@
+-- A parameter typed with an alias checks its argument like any other.
+
+type Scores = table<string, integer>
+
+fn best(scores: Scores) -> integer
+	local top = 0
+	for _, score in scores do
+		if score > top then
+			top = score
+		end
+	end
+	return top
+end
+
+println(best({"ann", "bob"}))

@@ -1252,3 +1252,101 @@ fn extern_interface_and_async_survive_formatting() {
     assert!(once.contains("async fn ping(n: integer)"), "{once}");
     assert_eq!(format_str(&once).unwrap(), once, "formatting is idempotent");
 }
+
+// ─── `type` aliases ─────────────────────────────────────────────────────
+
+#[test]
+fn a_type_alias_is_printed_on_one_line() {
+    let cases = [
+        ("type   Id=integer", "type Id = integer\n"),
+        ("export  type Names   =  table< string >", "export type Names = table<string>\n"),
+        (
+            "type Handler=fn( string,integer )->boolean",
+            "type Handler = fn(string, integer) -> boolean\n",
+        ),
+        ("type Pair< A,B > = table<A,B>", "type Pair<A, B> = table<A, B>\n"),
+        ("type Maybe<T> =T?", "type Maybe<T> = T?\n"),
+        (
+            "type Index = table<string,table<integer>>",
+            "type Index = table<string, table<integer>>\n",
+        ),
+    ];
+    for (src, want) in cases {
+        assert_eq!(format_str(src).unwrap(), want, "formatting {src:?}");
+    }
+}
+
+/// A module's aliases read as a glossary, like a run of imports or of
+/// module variables: consecutive ones stay together, and a blank line
+/// separates them from the declarations around them.
+#[test]
+fn consecutive_type_aliases_stay_together() {
+    let src = "from a import b\ntype Id = integer\ntype Ids = table<Id>\nexport type Name = string\nfn f()\nend\ntype Late = float\nlocal x = 1\n";
+    let want = "from a import b\n\ntype Id = integer\ntype Ids = table<Id>\nexport type Name = string\n\nfn f()\nend\n\ntype Late = float\n\nlocal x = 1\n";
+    assert_eq!(format_str(src).unwrap(), want);
+}
+
+#[test]
+fn the_authors_blank_lines_between_aliases_are_kept() {
+    let src = "type Id = integer\ntype Ids = table<Id>\n\ntype Name = string\n";
+    assert_eq!(format_with_source(src), src);
+}
+
+#[test]
+fn comments_on_type_aliases_survive() {
+    let src = "\
+-- Who a thing belongs to.
+type Owner = string
+
+type Handler = fn(Owner) -> nil  -- called once per owner
+-- What `find` answers.
+export type Found<T> = T?
+";
+    let out = format_with_comments(src).unwrap();
+    assert_eq!(out, src);
+}
+
+#[test]
+fn type_alias_formatting_is_idempotent_and_reparses() {
+    let src = "export type   Visit< T > =fn( table<float>,T )->T\ntype Grid<T> =table<table<T>>\nclass C<T>\n  cells: Grid<T> = {}\nend\n";
+    let once = format_str(src).unwrap();
+    let twice = format_str(&once).unwrap();
+    assert_eq!(once, twice);
+    assert!(once.contains("export type Visit<T> = fn(table<float>, T) -> T\n"), "{once}");
+    assert!(once.contains("type Grid<T> = table<table<T>>\n"), "{once}");
+}
+
+// ─── `is` ────────────────────────────────────────────────────────────────
+
+#[test]
+fn a_type_test_is_printed_with_single_spaces() {
+    let cases = [
+        ("local a = v   is   integer", "local a = v is integer\n"),
+        ("local a = v is   not  string", "local a = v is not string\n"),
+        ("local a = v is table< string,integer >", "local a = v is table<string, integer>\n"),
+        ("local a = p . owner is Person?", "local a = p.owner is Person?\n"),
+    ];
+    for (src, want) in cases {
+        assert_eq!(format_str(src).unwrap(), want, "formatting {src:?}");
+    }
+}
+
+/// Parentheses the precedence does not need are not invented, and the ones
+/// it does need are kept: each of these prints as it was written.
+#[test]
+fn a_type_test_keeps_the_grouping_its_precedence_requires() {
+    for src in [
+        "local a = x is integer and y is not string\n",
+        "local a = a + b is integer\n",
+        "local a = not (v is string)\n",
+        "local a = not v is boolean\n",
+        "local a = (v is string) == (w is string)\n",
+        "local a = v is integer or w == nil\n",
+        "local a = (a or b) is string\n",
+        "if v is not Circle then\n  return\nend\n",
+    ] {
+        let once = format_with_source(src);
+        assert_eq!(once, src, "formatting {src:?}");
+        assert_eq!(format_with_source(&once), once, "second pass of {src:?}");
+    }
+}

@@ -1,0 +1,7 @@
+-- `nil` is a value, not a type: an alias cannot stand for it. To allow
+-- nil, alias a nullable type (`type Maybe = string?`).
+
+type Nothing = nil
+
+local n: Nothing = nil
+println(n)

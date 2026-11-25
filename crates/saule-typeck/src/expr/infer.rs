@@ -55,6 +55,8 @@ fn infer_uncollected(expr: &Spanned<Expr>, scope: &Scope) -> Option<Type> {
             let source = infer(value, scope);
             Some(crate::casts::resolve(source.as_ref(), ty).result(ty))
         }
+        // `v is T` answers yes or no, whatever `v` and `T` are.
+        Expr::Is { .. } => Some(Type::Named("boolean".into())),
         // `obj.field` — when `obj` resolves to a known class, return the
         // declared type of that field (walks parents). Methods aren't fields,
         // so this only fires for stored slots declared with `local x: T`.

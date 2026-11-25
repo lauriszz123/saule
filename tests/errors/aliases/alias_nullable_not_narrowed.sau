@@ -1,0 +1,14 @@
+-- An alias of a nullable type is still nullable: it cannot fill a slot
+-- that does not allow nil until it has been narrowed.
+
+type MaybeName = string?
+
+fn find(key: string) -> MaybeName
+	if key == "a" then
+		return "Ann"
+	end
+	return nil
+end
+
+local name: string = find("a")
+println(name)

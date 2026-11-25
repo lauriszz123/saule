@@ -63,7 +63,10 @@ pub use table::TypeTable;
 /// them through `saule-semantic`'s thread-local accessors. The standard
 /// pipeline (`saule_runtime::pipeline` or the CLI) guarantees this.
 pub fn check(module: &Module) -> Vec<TypeCheckError> {
-    check_inner(module)
+    // Every `type` alias written out first. Semantic analysis did this to
+    // a copy of the tree, for its own passes, and left the scope it used
+    // installed; a tree handed over by shared reference gets its copy here.
+    check_inner(&saule_semantic::aliases::written_out(module))
 }
 
 /// [`check`], but also hands back the types it proved along the way.
@@ -81,8 +84,9 @@ pub fn check(module: &Module) -> Vec<TypeCheckError> {
 /// Coverage is partial on purpose; see [`coverage`] for measuring it, and
 /// [`TypeTable`] for why a missing entry is always safe.
 pub fn check_with_types(module: &Module) -> (Vec<TypeCheckError>, TypeTable) {
+    let module = saule_semantic::aliases::written_out(module);
     let previous = table::begin();
-    let errors = check_inner(module);
+    let errors = check_inner(&module);
     (errors, table::end(previous))
 }
 
@@ -98,7 +102,12 @@ pub fn check_with_types(module: &Module) -> (Vec<TypeCheckError>, TypeTable) {
 /// standard pipeline, `saule_runtime::prepare_captures`): resolving a
 /// cast inside a lambda body reallocates that body if its `Arc` is already
 /// shared.
+///
+/// It also writes out every `type` alias in `module`, in place. What comes
+/// after — the compiler — reads types too (`as T`, `catch e: T`), and has to
+/// find the type there, not a name for it.
 pub fn check_and_resolve(module: &mut Module) -> Vec<TypeCheckError> {
+    saule_semantic::aliases::expand_installed(module);
     let previous = casts::begin();
     let errors = check_inner(module);
     stamp_casts(module, casts::end(previous));
@@ -109,6 +118,7 @@ pub fn check_and_resolve(module: &mut Module) -> Vec<TypeCheckError> {
 /// bytecode path — which needs both the stamped tree and the type table,
 /// and would otherwise typecheck every module twice to get them.
 pub fn check_and_resolve_with_types(module: &mut Module) -> (Vec<TypeCheckError>, TypeTable) {
+    saule_semantic::aliases::expand_installed(module);
     let prev_casts = casts::begin();
     let prev_types = table::begin();
     let errors = check_inner(module);
@@ -143,6 +153,7 @@ fn check_inner(module: &Module) -> Vec<TypeCheckError> {
     let _restore = state::set_current_class(None);
     funcs::install(module);
     vars::install(module);
+    stmt::note_alias_names(module);
 
     let mut errors = Vec::new();
     let mut scope = state::Scope::default();
@@ -152,6 +163,7 @@ fn check_inner(module: &Module) -> Vec<TypeCheckError> {
 
     funcs::clear();
     vars::clear();
+    stmt::forget_alias_names();
     errors
 }
 

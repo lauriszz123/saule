@@ -24,12 +24,12 @@ const CONTROL = new Set([
 
 // keyword.declaration.saule
 const DECLARATION = new Set([
-	'class', 'interface', 'enum', 'fn', 'local', 'static', 'export', 'import',
-	'from', 'as', 'extends', 'implements',
+	'class', 'interface', 'enum', 'type', 'fn', 'local', 'static', 'export',
+	'import', 'from', 'as', 'extends', 'implements',
 ]);
 
 // keyword.operator.logical.saule
-const LOGICAL = new Set(['and', 'or', 'not']);
+const LOGICAL = new Set(['and', 'or', 'not', 'is']);
 
 // variable.language.saule
 const SELF = new Set(['self', 'super']);

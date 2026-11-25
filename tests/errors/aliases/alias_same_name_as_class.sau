@@ -1,0 +1,12 @@
+-- A module's classes, interfaces, enums and aliases share one set of
+-- names: `Point` cannot be both a class and another name for a table.
+
+class Point
+	x: integer = 0
+	y: integer = 0
+end
+
+type Point = table<integer>
+
+local p = Point()
+println(p.x)

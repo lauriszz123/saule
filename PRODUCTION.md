@@ -277,9 +277,22 @@ Where it is incomplete or unsound:
   The README is honest about this, which is good; it is still a hole in the type
   grid, and `userdata` in particular is load-bearing for native packages
   ([§8](#8-is-it-easy-to-write-a-native-library)).
-- **No union types, no type aliases, no structural types.** `integer | float`
-  appears in the stdlib documentation (`int(n: integer | float)`) as a signature
-  the *user* cannot write. That asymmetry will be noticed.
+- **No union types and no structural types, by design.** What they are usually
+  wanted for is covered another way: "this or nothing" is `T?`; "one of several
+  shapes" is an enum with payloads, which `match` checks for exhaustiveness
+  where an untagged union could not; "anything with these fields" is a class
+  that says `implements`, which is the point of a nominal language. What is
+  left is loosely shaped data — decoded JSON — which goes through `any` and
+  the type test, `v is T`.
+
+  Type aliases, the third thing this entry used to list, exist:
+  `type Handler = fn(string) -> nil` names a long type once. They are
+  transparent, so they add a name and no new kind of type.
+
+  An earlier version of this section said the standard library documented
+  `integer | float` signatures that a program could not write. That is no
+  longer so: the `Math` functions are generic over the number type
+  (`Math.max<N>(...N) -> N`), and `DOCS.md` contains no union.
 - **No `const`/immutability**, no visibility beyond class access modifiers and
   module `export`.
 
@@ -601,7 +614,7 @@ Weighted by what actually stops adoption, not by what is hard to build.
 | Implementation quality | Clean, tested, documented, lint-gated | **A** |
 | Compile-time diagnostics | miette, cross-module, `tests/errors/` pinned | **A−** |
 | Documentation (language) | README 73k + DOCS 15k, examples, website | **A−** |
-| Type system completeness | Strong core, deliberately partial checker, no unions/aliases | **B** |
+| Type system completeness | Strong core with aliases and a narrowing type test, deliberately partial checker | **B** |
 | Formatter | Dedicated crate, config-driven, corpus tests, round-trips | **A−** |
 | LSP feature breadth | Hover, goto, refs, symbols, inlay, sighelp, completion, format | **A−** |
 | LSP robustness | Error recovery + prior-parse seeding + completion repair | **B+** |
@@ -1335,7 +1348,7 @@ Ordered by *unblocking*, not by size. Each phase makes the next one possible.
 ### Phase 1 — Make it obtainable — **DONE**
 RELEASE_PLAN steps 2–4. The release pipeline is proven (21 releases, six triples
 each), the one-line installer is live and checksum-verified, and the editor
-plugins are published. **Nothing else mattered until someone who is not you
+plugins are published. **Nothing else mattered until someone other than the author
 could run `saule`**, and that is now true in one command on three platforms.
 
 ### Phase 2 — Make it usable

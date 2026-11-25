@@ -131,7 +131,7 @@ fn onlyInts<T>(items: table<T>) -> table<integer>
 end
 ```
 
-Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
+Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function being *called* is not the `T` declared by the one being written, however alike they read.
 
 Classes, interfaces and enums take type parameters the same way — see [Generic Classes](/saule/language/classes/#generic-classes), [Generic Interfaces](/saule/language/interfaces/#generic-interfaces) and [Generic Enums](/saule/language/enums/#generic-enums).
 

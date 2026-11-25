@@ -88,6 +88,9 @@ impl Backend {
                 None => saule_semantic::ModuleSeed::default(),
             };
             let _ = saule_semantic::analyze_with_seed(module, seed);
+            // `local done: Callback = …` is callable because of what
+            // `Callback` stands for, so that is what the walker reads.
+            let module = &*saule_semantic::aliases::written_out(module);
 
             match answer_from_module(module, &source, offset) {
                 Answer::Help(help) => return Some(help),
@@ -112,6 +115,7 @@ impl Backend {
                 None => saule_semantic::ModuleSeed::default(),
             };
             let _ = saule_semantic::analyze_with_seed(&module, seed);
+            let module = saule_semantic::aliases::written_out(&module);
 
             match answer_from_module(&module, &source, offset) {
                 Answer::Help(help) => return Some(help),

@@ -1,0 +1,14 @@
+-- Two classes share an instance only when one is an ancestor of the other.
+-- `Rock` and `Tree` are siblings, so a `Rock` is never a `Tree`.
+
+class Thing
+end
+
+class Rock extends Thing
+end
+
+class Tree extends Thing
+end
+
+local rock: Rock = Rock()
+println(rock is Tree)

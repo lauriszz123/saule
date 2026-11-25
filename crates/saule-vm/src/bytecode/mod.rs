@@ -53,7 +53,7 @@ pub const MAGIC: &[u8; 8] = b"SAULEBC\0";
 
 /// Bumped whenever the layout changes. The Saule version is checked too, so
 /// this guards a development build against its own older files.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 
 /// How much of the source to keep.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,0 +1,8 @@
+-- The shortest cycle: an alias that names itself. A type that contains
+-- itself has to be a `class` or an `enum`, which exist at run time and can
+-- point at themselves; an alias is only a name.
+
+type Json = table<string, Json>
+
+local doc: Json = {}
+println(#doc)

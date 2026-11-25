@@ -20,6 +20,15 @@ pub(crate) fn render_type_params(type_params: &[String]) -> String {
     }
 }
 
+/// A `type` alias, as it is declared: `type Handler<T> = fn(T) -> nil`.
+pub(crate) fn render_alias(name: &str, type_params: &[String], ty: &Type) -> String {
+    format!(
+        "```saule\ntype {name}{} = {}\n```",
+        render_type_params(type_params),
+        render_type(ty)
+    )
+}
+
 /// A named type reference from a declaration header, arguments included —
 /// `Animal`, or `Repository<Player>`.
 pub(crate) fn render_type_ref(r: &TypeRef) -> String {

@@ -228,12 +228,32 @@ pub(super) fn render_unknown_member(class: &str, name: &str) -> String {
 
 pub(super) fn named_type(ty: &Type) -> Option<String> {
     match ty {
-        Type::Named(n) => Some(n.clone()),
+        Type::Named(n) => Some(behind_alias(n)),
         Type::Nullable(inner) => named_type(inner),
         // A `Box<integer>` is an instance of `Box`.
-        Type::Generic(g) => Some(g.name.clone()),
+        Type::Generic(g) => Some(behind_alias(&g.name)),
         _ => None,
     }
+}
+
+/// The type a value annotated `name` is an instance of: `name` itself, or
+/// when it is a `type` alias, the type that stands for.
+///
+/// One step and no further. What an alias stands for has no alias left in
+/// it, and a name in it that happens to be an alias *here* means whatever
+/// it meant in the module that declared it.
+fn behind_alias(name: &str) -> String {
+    fn head(ty: &Type) -> Option<String> {
+        match ty {
+            Type::Named(n) => Some(n.clone()),
+            Type::Nullable(inner) => head(inner),
+            Type::Generic(g) => Some(g.name.clone()),
+            _ => None,
+        }
+    }
+    saule_semantic::lookup_alias(name)
+        .and_then(|alias| head(&alias.ty))
+        .unwrap_or_else(|| name.to_string())
 }
 
 /// Walk a [`Type`] and append every named-type identifier reachable

@@ -147,6 +147,20 @@ impl<'a> CollectCx<'a> {
                     self.push(name_span.clone(), true);
                 }
             }
+            Decl::TypeAlias {
+                name,
+                name_span,
+                ty,
+                ty_span,
+                ..
+            } => {
+                if let Symbol::TypeAlias(target) = self.symbol
+                    && target == name
+                {
+                    self.push(name_span.clone(), true);
+                }
+                self.collect_type_name_refs_in(ty, ty_span);
+            }
             Decl::Import { path, quoted, .. } => {
                 if let Symbol::ImportPath(target) = self.symbol
                     && target == path

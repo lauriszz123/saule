@@ -1,0 +1,11 @@
+-- Inside the branch the value has the tested type, and is checked as it:
+-- a string cannot be added to.
+
+fn next(v: any) -> integer
+	if v is string then
+		return v + 1
+	end
+	return 0
+end
+
+println(next("a"))

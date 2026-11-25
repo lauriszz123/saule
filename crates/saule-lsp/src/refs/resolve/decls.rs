@@ -140,6 +140,16 @@ impl<'a> ResolveCx<'a> {
                     },
                 );
             }
+            Decl::TypeAlias {
+                name,
+                name_span,
+                ty,
+                ty_span,
+                ..
+            } => {
+                self.record(name_span.clone(), Symbol::TypeAlias(name.clone()));
+                self.record_type_names_in(ty, ty_span);
+            }
             Decl::Import { path, quoted, .. } => {
                 // Find the path inside the import statement — quoted between
                 // the matching quotes, bare at the end of the declaration.

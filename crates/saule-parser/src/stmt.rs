@@ -80,6 +80,12 @@ impl Parser {
             Token::Class => self.parse_class_decl(false).map(stmt_decl),
             Token::Interface => self.parse_interface_decl(false).map(stmt_decl),
             Token::Enum => self.parse_enum_decl(false).map(stmt_decl),
+            // `type Name …` is the declaration. `type` followed by anything
+            // else is the word used as a name, which the expression rule
+            // has the better message for.
+            Token::Type if matches!(self.peek_at(1).value, Token::Identifier(_)) => {
+                self.parse_type_alias(false).map(stmt_decl)
+            }
             Token::Import => self.parse_import().map(stmt_decl),
             Token::From => self.parse_from_import(false).map(stmt_decl),
             Token::Export => self.parse_export(),

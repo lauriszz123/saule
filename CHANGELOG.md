@@ -4,6 +4,87 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## 26.32
+
+### Added
+
+- **Type aliases: `type Name = T`.** Another name for a type, so that a
+  callback's signature or a nested table type is written once:
+
+  ```saule
+  type Handler = fn(string) -> nil
+  type Scores = table<string, integer>
+  type Maybe<T> = T?
+
+  fn each(names: table<string>, handler: Handler)
+      for name in names do
+          handler(name)
+      end
+  end
+  ```
+
+  An alias is transparent — it and the type it stands for are the same type
+  in both directions — and leaves nothing behind when the program runs. It
+  may take type parameters, be built from other aliases in any order, and be
+  exported and imported like any declaration (`export type`). A class's
+  fields and methods written with an alias are checked in other files
+  against what the alias stands for, so a module's private aliases stay
+  private. See [Type aliases](./LANGUAGE.md#type-aliases).
+- **The type test: `v is T`.** Asks what a value is when the program runs,
+  answers a `boolean`, and narrows the value where it held:
+
+  ```saule
+  fn describe(v: any) -> string
+      if v is integer then
+          return "integer " .. (v + 1)      -- `v` is an integer here
+      elseif v is Person then
+          return v.name()                   -- and a Person here
+      end
+      return "something else"
+  end
+  ```
+
+  Classes follow the hierarchy — an instance is its own class, every class
+  above it, and every interface any of them implements. `v is not T` is the
+  negation, and narrows past a guard. `table<T>` is tested elementwise,
+  `T?` admits nil, and a test the types already answer with "never" is an
+  error. See [Testing a type with `is`](./LANGUAGE.md#testing-a-type-with-is).
+- **`typeof(v)`** — the name of a value's type as text, for a message or to
+  compare two values' types. It is what `type(v)` was; see Changed.
+- **Any word may be a table key.** `{type: "click", end: 3}` is accepted, as
+  `t.type` and `t.end` already were: a key is a string, not a name.
+
+### Changed
+
+- **`type` and `is` are reserved words.** `type` begins an alias declaration
+  and `is` is the type test, so neither can name a variable, a parameter, a
+  field, a function or a method any more. A program that used either as a
+  name has to rename it; a member of that name on a value from elsewhere is
+  still read with `v.type` / `v.is(…)`, and a table key may be any word.
+- **`type(v)` is gone.** Where it was compared with a name, write the test:
+  `type(v) == "string"` is `v is string`, which the checker follows and
+  narrows on. Where the name itself was wanted, the function is now
+  `typeof(v)`. The compiler says both when it meets a `type(…)` call.
+- **Interfaces are known at run time.** `v as SomeInterface` out of an `any`
+  and `catch e: SomeInterface` used to answer no for every instance; both
+  now make the test `is` does.
+
+### Fixed
+
+- **A subclass can be called through its parent's interface.** With
+  `class Student extends Person` and `Person implements Greeter`, calling a
+  `Greeter`-typed `Student` failed at run time with "does not implement the
+  interface this call goes through". A subclass now has its parent's
+  interface tables.
+- **`v as P` on a class imported under another name.** With `from people
+  import Person as P`, or `people.Person` through a namespace, the checked
+  cast tested for a class called `P` and answered `nil` for every value. It
+  tests for the class.
+- **An interface extending one from another file inherits its methods.**
+  `interface Greeter extends Named`, with `Named` imported, had no slot for
+  `Named`'s methods, and a class implementing `Greeter` could not be called
+  through `Named`.
+
 ## 26.31
 
 ### Added

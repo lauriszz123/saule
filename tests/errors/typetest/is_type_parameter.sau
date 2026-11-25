@@ -1,0 +1,8 @@
+-- Type parameters are erased: when this runs, nothing records which type
+-- `T` stood for, so there is nothing to test the value against.
+
+fn holds<T>(v: any) -> boolean
+	return v is T
+end
+
+println(holds<integer>(1))

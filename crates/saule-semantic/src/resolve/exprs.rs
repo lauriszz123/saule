@@ -15,6 +15,21 @@ impl Resolver {
             // it: the parse error that produced it is the diagnostic.
             Expr::Error => {}
             Expr::Ident(name) => {
+                // An alias has no value. One this module declares resolves
+                // to nothing; an imported one resolves to a slot nothing
+                // ever fills. A local of the same name is a local.
+                if self.type_only.contains(name.as_str())
+                    && matches!(
+                        self.resolve_binding(name),
+                        None | Some(crate::binding::Binding::Module { .. })
+                    )
+                {
+                    self.errors.push(SemanticError::AliasAsValue {
+                        name: name.clone(),
+                        span: to_source_span(span),
+                    });
+                    return;
+                }
                 if !self.resolve_at(expr.id, name) {
                     // Only a namespace import makes a name with a dot in it.
                     let error = match name.split_once('.') {
@@ -66,7 +81,7 @@ impl Resolver {
             // Resolve the operand; the target type is resolved separately
             // by the typechecker, which is where unknown type names are
             // reported.
-            Expr::Cast { value, .. } => self.expr(value),
+            Expr::Cast { value, .. } | Expr::Is { value, .. } => self.expr(value),
             Expr::Table(entries) => {
                 for e in entries {
                     match e {

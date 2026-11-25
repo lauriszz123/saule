@@ -1302,6 +1302,13 @@ impl Vm {
                         *self.reg_mut(base + a) = v;
                     }
 
+                    // `v is T`. `CASTCHK`'s test, kept as its answer.
+                    Op::ISTYPE => {
+                        let src = base + ins.b() as usize;
+                        let ok = cast_holds(&chunk, ins.c() as usize, self.reg(src));
+                        *self.reg_mut(base + a) = Value::Bool(ok);
+                    }
+
                     // `x as T` where the cast converts rather than tests.
                     // The conversion is the tree-walker's own function, for
                     // the reason `CASTCHK` calls into its `cast`: one

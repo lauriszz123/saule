@@ -138,7 +138,7 @@ fn driver_loops_nest() {
 //
 // The dynamic `for … in` path (`ITERPREPX`). Every case launders its source
 // through `any` so the front end cannot prove it — the shape real code hits,
-// where a `Json.decode` result is iterated behind a `type(x) == "table"`
+// where a `Json.decode` result is iterated behind a `typeof(x) == "table"`
 // guard that no static type can see through.
 
 /// Prefix a program with a launderer that erases its source's static type.

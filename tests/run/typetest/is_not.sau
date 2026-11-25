@@ -1,0 +1,38 @@
+-- `v is not T` is the negation, written so it reads as one question.
+-- `not` on its own binds tighter than `is`, so the other spelling needs
+-- parentheses: `not (v is T)`.
+
+fn check(v: any) -> string
+	local parts: table<string> = {}
+	if v is not integer then
+		Table.insert(parts, "not-integer")
+	end
+	if not (v is string) then
+		Table.insert(parts, "not-string")
+	end
+	if v is not table and v is not boolean then
+		Table.insert(parts, "scalar")
+	end
+	return String.join(",", parts)
+end
+
+println(check(1), "|", check("a"), "|", check({}), "|", check(nil))
+assert(check(1) == "not-string,scalar")
+assert(check("a") == "not-integer,scalar")
+assert(check({}) == "not-integer,not-string")
+assert(check(nil) == "not-integer,not-string,scalar")
+
+-- The two spellings agree on every value.
+for v in {1, 1.5, "s", true, {}} do
+	assert((v is not float) == (not (v is float)))
+	assert((v is float) != (v is not float))
+end
+
+-- It is an ordinary boolean: stored, compared, passed on.
+local value: any = "text"
+local isText: boolean = value is string
+local isNotText: boolean = value is not string
+assert(isText and not isNotText)
+assert((value is string) == true)
+assert((value is not string) == false)
+println("ok")

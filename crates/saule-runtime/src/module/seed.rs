@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::aliases::{PassGuard, resolved_module};
 use super::*;
 
 /// Walk every `import ... from "path"` statement in `module`, resolve the
@@ -87,6 +88,8 @@ pub fn collect_import_seed_io(
     dir: &Path,
     io: SeedIo<'_>,
 ) -> saule_semantic::ModuleSeed {
+    // One table of written-out modules for the whole collection.
+    let _aliases = PassGuard::enter();
     let mut visited = HashSet::new();
     let mut seed = collect_import_seed_inner(module, dir, &mut visited, 0, io);
     seed.wildcard_names = collect_wildcard_names(module, dir, io);
@@ -95,7 +98,7 @@ pub fn collect_import_seed_io(
 
 /// A module's tree: from the caller's cache if it has one, otherwise read
 /// (through the overlay) and parsed here.
-fn parsed_module(abs: &Path, io: SeedIo<'_>) -> Option<std::sync::Arc<Module>> {
+pub(super) fn parsed_module(abs: &Path, io: SeedIo<'_>) -> Option<std::sync::Arc<Module>> {
     if let Some(provider) = io.modules
         && let Some(tree) = provider(abs)
     {
@@ -298,6 +301,9 @@ fn collect_seed(
             let built = (pkg.builtins)();
             let aliases = collect_native_aliases(pkg, names);
             for (orig, alias) in aliases {
+                if seed.aliases.contains_key(&alias) {
+                    continue;
+                }
                 if let Some(info) = built.classes.get(&orig).cloned() {
                     seed.classes.entry(alias.clone()).or_insert(info);
                 }
@@ -319,13 +325,19 @@ fn collect_seed(
         // its types undefined.
         if crate::dynamic_packages::is_dynamic_package(path) {
             for (alias, info) in crate::dynamic_packages::seed_classes(path, names) {
-                seed.classes.entry(alias).or_insert(info);
+                if !seed.aliases.contains_key(&alias) {
+                    seed.classes.entry(alias).or_insert(info);
+                }
             }
             for (alias, info) in crate::dynamic_packages::seed_enums(path, names) {
-                seed.enums.entry(alias).or_insert(info);
+                if !seed.aliases.contains_key(&alias) {
+                    seed.enums.entry(alias).or_insert(info);
+                }
             }
             for (alias, extends) in crate::dynamic_packages::seed_interfaces(path, names) {
-                seed.interfaces.entry(alias).or_insert(extends);
+                if !seed.aliases.contains_key(&alias) {
+                    seed.interfaces.entry(alias).or_insert(extends);
+                }
             }
             continue;
         }
@@ -333,27 +345,57 @@ fn collect_seed(
         let Some(abs) = resolve_import_path(dir, path) else {
             continue;
         };
-        let Some(imported) = parsed_module(&abs, io) else {
+        // Read with its `type` aliases written out, so that nothing it
+        // declares in terms of one — a field, a parameter, a result — still
+        // says a name only that module knows the meaning of.
+        let Some(resolved) = resolved_module(&abs, io) else {
             continue;
         };
+        let imported = &resolved.tree;
         imported_modules.push(abs.clone());
 
+        // The aliases themselves, under the names this import gives them.
+        // What the module passes on from its own imports is among them
+        // already, so the re-export walk below has none to add.
+        //
+        // As with every other kind of name, the first import to bind one
+        // keeps it: an alias does not replace a class an earlier import
+        // brought in, nor (below) the other way about.
+        if !only_exported {
+            for (name, info) in &resolved.exported {
+                for local in local_names(names, name) {
+                    let taken = seed.classes.contains_key(&local)
+                        || seed.interfaces.contains_key(&local)
+                        || seed.enums.contains_key(&local)
+                        || seed.functions.contains_key(&local)
+                        || seed.variables.contains_key(&local);
+                    if !taken {
+                        seed.aliases.entry(local).or_insert_with(|| info.clone());
+                    }
+                }
+            }
+        }
+
         let (mut reg, ifaces, enums, iface_methods, _iface_params) =
-            saule_semantic::build_registry(&imported);
-        let mut funcs = saule_semantic::build_function_registry(&imported);
+            saule_semantic::build_registry(imported);
+        let mut funcs = saule_semantic::build_function_registry(imported);
         // An imported accessor's return type is inferred here, on the way
         // in. Doing it only in `analyze_inner` would infer it for the file
         // that declares the class and not for the files that use it, which
         // is the wrong way round: the declaring file can read the body.
-        saule_semantic::infer_missing_returns(&imported, &mut reg, &ifaces, &enums, &mut funcs);
-        let vars = saule_semantic::build_variable_registry(&imported);
+        saule_semantic::infer_missing_returns(imported, &mut reg, &ifaces, &enums, &mut funcs);
+        let vars = saule_semantic::build_variable_registry(imported);
 
         // For each top-level decl in the imported module, decide which
         // (local) alias to register it under. Wildcard imports adopt the
         // original name; named imports rename per `as`-clause.
-        let aliases = collect_import_aliases(&imported, names);
+        let aliases = collect_import_aliases(imported, names);
 
         for (orig, alias) in aliases {
+            // Already a `type` alias, from this import or an earlier one.
+            if seed.aliases.contains_key(&alias) {
+                continue;
+            }
             if let Some(info) = reg.get(&orig).cloned() {
                 seed.classes.entry(alias.clone()).or_insert(info);
             }
@@ -386,7 +428,7 @@ fn collect_seed(
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let sub = collect_seed(&imported, &sub_dir, visited, depth + 1, io, true);
+            let sub = collect_seed(imported, &sub_dir, visited, depth + 1, io, true);
             visited.remove(&abs);
             merge_reexported_seed(&mut seed, sub, names);
         }
@@ -575,6 +617,11 @@ fn mentions_of_seed(seed: &saule_semantic::ModuleSeed, out: &mut Vec<String>) {
     for ty in seed.variables.values() {
         type_mentions(ty, out);
     }
+    // What an alias stands for is written into the importing module's own
+    // annotations, so the types it names have to be known there too.
+    for alias in seed.aliases.values() {
+        type_mentions(&alias.ty, out);
+    }
 }
 
 fn class_mentions(info: &saule_semantic::ClassInfo, out: &mut Vec<String>) {
@@ -638,7 +685,10 @@ fn type_mentions(ty: &saule_ast::Type, out: &mut Vec<String>) {
 /// What the module at `abs` declares, from [`DECLARED`] when its tree has
 /// not changed.
 fn declared_types(abs: &Path, io: SeedIo<'_>) -> Option<Arc<DeclaredTypes>> {
-    let module = parsed_module(abs, io)?;
+    // With aliases written out, for the reason `collect_seed` reads it so.
+    // An unchanged module comes back as the same tree, which is what the
+    // table below is keyed on.
+    let module = resolved_module(abs, io)?.tree.clone();
     let cached = DECLARED.with(|c| {
         c.borrow()
             .get(abs)
@@ -741,7 +791,7 @@ fn seed_package_types(seed: &mut saule_semantic::ModuleSeed, packages: &[&str]) 
 
 /// The names `key`, exported by the imported module, is known by here: a
 /// namespace import binds it both bare and qualified.
-fn local_names(names: &ImportNames, key: &str) -> Vec<String> {
+pub(super) fn local_names(names: &ImportNames, key: &str) -> Vec<String> {
     match names {
         ImportNames::All => vec![key.to_string()],
         ImportNames::Namespace(ns) => vec![format!("{ns}.{key}"), key.to_string()],

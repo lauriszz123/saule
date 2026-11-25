@@ -208,6 +208,22 @@ impl<'a> Printer<'a> {
                     self.expr(v, 0);
                 }
             }
+            Decl::TypeAlias {
+                exported,
+                name,
+                type_params,
+                ty,
+                ..
+            } => {
+                if *exported {
+                    self.write("export ");
+                }
+                self.write("type ");
+                self.write(name);
+                self.type_params(type_params, &[]);
+                self.write(" = ");
+                self.ty(ty);
+            }
             Decl::Import {
                 names,
                 path,

@@ -276,7 +276,46 @@ impl Parser {
             return Err(err);
         }
         self.record(err);
+        // `local type = 1`, `fn f(is: boolean)`: the two words that were
+        // ordinary names until they were reserved. Unlike `fn` or `end`,
+        // neither can be the start of what comes next here, so the word is
+        // taken as the name it was meant as — one mistake, one diagnostic.
+        let meant_as_name = match tok.value {
+            Token::Is => true,
+            Token::Type => !matches!(self.peek_at(1).value, Token::Identifier(_)),
+            _ => false,
+        };
+        if meant_as_name && let Some(word) = tok.value.lexeme() {
+            self.advance();
+            return Ok((word.to_string(), tok.span));
+        }
         Ok((String::new(), tok.span.start..tok.span.start))
+    }
+
+    /// The name of a `fn` or a method: strict, like [`Parser::expect_ident`],
+    /// except for the one mistake that is unmistakable.
+    ///
+    /// `fn is(…)` and `fn type(…)` were legal until the two words were
+    /// reserved, and with the `(` right behind there is no doubt the word
+    /// was meant as the name. Reading it as one keeps the function's body
+    /// intact, so a program written before then gets one diagnostic for the
+    /// line rather than one for every line of the body.
+    pub(crate) fn expect_callable_name(
+        &mut self,
+        what: &'static str,
+    ) -> Result<(String, Range<usize>), ParseError> {
+        let tok = self.peek().clone();
+        let reserved_name = matches!(tok.value, Token::Is | Token::Type)
+            && matches!(self.peek_at(1).value, Token::LParen | Token::Lt);
+        if reserved_name
+            && self.recovering()
+            && let Some(word) = tok.value.lexeme()
+        {
+            self.record(name_expected(what, &tok));
+            self.advance();
+            return Ok((word.to_string(), tok.span));
+        }
+        self.expect_ident(what)
     }
 
     // ── Layer 2: holes where an operand was required ────────────────────────
@@ -489,7 +528,7 @@ impl Parser {
         let keyword = &self.peek_at(after_export).value;
         let named_by_keyword = matches!(
             keyword,
-            Token::Fn | Token::Class | Token::Interface | Token::Enum
+            Token::Fn | Token::Class | Token::Interface | Token::Enum | Token::Type
         );
         // `export name: T = value` names itself; everything else is preceded
         // by its keyword.
@@ -606,6 +645,7 @@ impl Parser {
                     | Token::Class
                     | Token::Interface
                     | Token::Enum
+                    | Token::Type
                     | Token::Export
             )
         {
@@ -636,7 +676,13 @@ pub(crate) fn name_expected(what: &'static str, found: &Spanned<Token>) -> Parse
 fn starts_declaration(t: &Token) -> bool {
     matches!(
         t,
-        Token::Fn | Token::Class | Token::Interface | Token::Enum | Token::Import | Token::Export
+        Token::Fn
+            | Token::Class
+            | Token::Interface
+            | Token::Enum
+            | Token::Type
+            | Token::Import
+            | Token::Export
     )
 }
 
@@ -659,6 +705,7 @@ fn starts_statement(t: &Token) -> bool {
             | Token::Class
             | Token::Interface
             | Token::Enum
+            | Token::Type
             | Token::Import
             | Token::Export
             | Token::Static

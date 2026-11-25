@@ -1,0 +1,7 @@
+-- An alias is checked as the type it stands for. `UserId` is `integer`,
+-- and a string does not fit it.
+
+type UserId = integer
+
+local id: UserId = "seven"
+println(id)

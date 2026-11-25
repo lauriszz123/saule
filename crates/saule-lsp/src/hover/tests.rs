@@ -3900,3 +3900,60 @@ fn a_stdlib_module_card_names_parameters() {
         "module prose:\n{md}"
     );
 }
+
+// ─── `type` aliases and `is` ─────────────────────────────────────────────
+
+#[test]
+fn hover_on_an_alias_declaration_shows_what_it_stands_for() {
+    let src = "type Handler = fn(string) -> nil\nlocal h: Handler? = nil\n";
+    let md = hover_src(src, "Handler =").expect("hover");
+    assert!(md.contains("type Handler = fn(string) -> nil"), "{md}");
+}
+
+#[test]
+fn hover_on_an_alias_in_an_annotation_shows_what_it_stands_for() {
+    let src = "type Scores = table<string, integer>\nlocal s: Scores = {}\nfn top(scores: Scores) -> integer\n  return 0\nend\n";
+    let md = hover_src(src, "Scores = {}").expect("hover on the local's annotation");
+    assert!(md.contains("type Scores = table<string, integer>"), "{md}");
+    let md = hover_src(src, "Scores) ->").expect("hover on the parameter's annotation");
+    assert!(md.contains("type Scores = table<string, integer>"), "{md}");
+}
+
+#[test]
+fn hover_on_a_generic_alias_shows_its_parameters() {
+    let src = "type Pair<A, B> = table<A, B>\nlocal p: Pair<string, integer> = {}\n";
+    let md = hover_src(src, "Pair<string").expect("hover");
+    assert!(md.contains("type Pair<A, B> = table<A, B>"), "{md}");
+}
+
+/// The alias is shown as declared, but what it is built from is written
+/// out: the card says what the type *is*, not a chain to follow.
+#[test]
+fn hover_on_an_alias_of_an_alias_is_written_out() {
+    let src = "type Id = integer\ntype Ids = table<Id>\nlocal ids: Ids = {}\n";
+    let md = hover_src(src, "Ids = {}").expect("hover");
+    assert!(md.contains("type Ids = table<integer>"), "{md}");
+}
+
+#[test]
+fn hover_on_a_class_inside_an_alias_shows_the_class() {
+    let src = "class Event\n  name: string = \"\"\nend\ntype Handler = fn(Event) -> nil\n";
+    let md = hover_src(src, "Event) -> nil").expect("hover");
+    assert!(md.contains("class Event"), "{md}");
+}
+
+/// A value annotated with an alias of a class is an instance of the class:
+/// its members hover as they would through the class's own name.
+#[test]
+fn hover_reads_members_through_an_alias_of_a_class() {
+    let src = "class Point\n  x: integer = 0\nend\ntype Position = Point\nlocal p: Position = Point()\nlocal n = p.x\n";
+    let md = hover_src(src, "x\n").expect("hover on the member");
+    assert!(md.contains("x: integer"), "{md}");
+}
+
+#[test]
+fn hover_on_the_type_after_is_shows_the_type() {
+    let src = "class Dog\n  name: string = \"\"\nend\nfn f(v: any) -> boolean\n  return v is Dog\nend\n";
+    let md = hover_src(src, "Dog\nend").expect("hover on the tested type");
+    assert!(md.contains("class Dog"), "{md}");
+}

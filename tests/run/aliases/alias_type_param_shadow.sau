@@ -1,0 +1,50 @@
+-- Inside `class Map<Key, Value>`, `Key` is the class's type parameter —
+-- whatever alias the module also has by that name. The same goes for a
+-- function's parameters and an alias's own. Outside, the alias is back.
+
+type Key = string
+type Value = integer
+type Item = table<Key, Value>
+
+class Slot<Key>
+	held: Key
+
+	fn init(held: Key)
+		self.held = held
+	end
+
+	fn get() -> Key
+		return self.held
+	end
+
+	-- A method's own parameter, shadowing the alias `Value` in turn.
+	fn pair<Value>(other: Value) -> table<Value>
+		return {other}
+	end
+end
+
+fn identity<Key>(key: Key) -> Key
+	return key
+end
+
+type Box<Value> = table<Value>      -- the alias's own parameter
+
+local number: Slot<integer> = Slot(41)
+local flag: Slot<boolean> = Slot(true)
+local answer: integer = number.get() + 1       -- `Key` was `integer` there
+local yes: boolean = flag.get()
+local floats: table<float> = number.pair(1.5)
+local same: float = identity(2.5)
+local words: Box<string> = {"a"}
+
+-- And here the aliases mean what they say.
+local key: Key = "k"
+local value: Value = 9
+local item: Item = {k: value}
+
+println(answer, yes, floats[1], same, words[1], key, item["k"])
+assert(answer == 42)
+assert(yes)
+assert(floats[1] == 1.5)
+assert(same == 2.5)
+assert(item[key] == 9)

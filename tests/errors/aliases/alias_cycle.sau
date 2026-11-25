@@ -1,0 +1,10 @@
+-- An alias is replaced by the type on its right wherever it is written, so
+-- one defined in terms of itself — here through two others — has nothing
+-- to be replaced by. Reported once, on the first, with the path it takes.
+
+type Tree = table<Branch>
+type Branch = Leaf?
+type Leaf = fn(Tree) -> nil
+
+local tree: Tree = {}
+println(#tree)

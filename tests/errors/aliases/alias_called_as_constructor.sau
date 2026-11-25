@@ -1,0 +1,11 @@
+-- An alias of a class names the class as a *type*. It is not the class
+-- value, so it cannot be called to make one: `Point()` does that.
+
+class Point
+	x: integer = 0
+end
+
+type Position = Point
+
+local p = Position()
+println(p.x)

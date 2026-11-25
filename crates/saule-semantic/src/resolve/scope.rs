@@ -47,6 +47,9 @@ pub(crate) fn collect_module_scope(module: &Module) -> Vec<Rc<str>> {
                 | Decl::Interface { name, .. }
                 | Decl::Enum { name, .. }
                 | Decl::Variable { name, .. } => push(name, &mut order),
+                // No slot: a `type` alias is not a value, and nothing by
+                // its name exists when the program runs.
+                Decl::TypeAlias { .. } => {}
                 Decl::Import { names, .. } => match names {
                     ImportNames::All | ImportNames::Namespace(_) => {}
                     ImportNames::List(items) => {
@@ -60,4 +63,43 @@ pub(crate) fn collect_module_scope(module: &Module) -> Vec<Rc<str>> {
         }
     }
     order
+}
+
+/// The aliases in scope whose names are *only* types here: every alias but
+/// those sharing a name with something the module itself declares as a
+/// value. Naming one of them in an expression is a mistake worth its own
+/// message — see [`SemanticError::AliasAsValue`](crate::SemanticError).
+///
+/// An imported alias does have a module slot, since an `import` list cannot
+/// tell what kind of thing each name is; this set is what tells them apart.
+pub(crate) fn type_only_names(module: &Module) -> HashSet<String> {
+    let mut names: HashSet<String> =
+        crate::aliases::with_aliases(|scope| scope.keys().cloned().collect());
+    if names.is_empty() {
+        return names;
+    }
+    for s in &module.stmts {
+        match &s.value {
+            Stmt::Local { name, .. } => {
+                names.remove(name);
+            }
+            Stmt::LocalMulti { names: locals, .. } => {
+                for (n, _, _) in locals {
+                    names.remove(n);
+                }
+            }
+            Stmt::Decl(d) => match &d.value {
+                Decl::Function { name, .. }
+                | Decl::Class { name, .. }
+                | Decl::Interface { name, .. }
+                | Decl::Enum { name, .. }
+                | Decl::Variable { name, .. } => {
+                    names.remove(name);
+                }
+                Decl::TypeAlias { .. } | Decl::Import { .. } => {}
+            },
+            _ => {}
+        }
+    }
+    names
 }

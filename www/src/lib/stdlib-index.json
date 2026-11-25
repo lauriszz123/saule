@@ -49,16 +49,16 @@
 			"href": "/stdlib/prelude-always-in-scope/#tostring"
 		},
 		{
-			"label": "type",
+			"label": "typeof",
 			"owner": null,
-			"name": "type",
+			"name": "typeof",
 			"method": false,
-			"signature": "type(v: any) -> string",
+			"signature": "typeof(v: any) -> string",
 			"params": "v: any",
 			"returns": "string",
-			"detail": "The runtime type name: `\"integer\"`, `\"float\"`, `\"string\"`, `\"boolean\"`, `\"nil\"`, `\"function\"`, `\"table\"`, or the class name for an instance.",
+			"detail": "The name of what a value is, as text: `\"integer\"`, `\"float\"`, `\"string\"`, `\"boolean\"`, `\"nil\"`, `\"function\"`, `\"table\"`, or the class name for an instance.",
 			"section": "Inspecting a value",
-			"href": "/stdlib/prelude-always-in-scope/#type"
+			"href": "/stdlib/prelude-always-in-scope/#typeof"
 		},
 		{
 			"label": "assert",
@@ -77,10 +77,10 @@
 			"owner": null,
 			"name": "error",
 			"method": false,
-			"signature": "error(msg: string) -> nil",
-			"params": "msg: string",
+			"signature": "error(msg: string, level: integer?) -> nil",
+			"params": "msg: string, level: integer?",
 			"returns": "nil",
-			"detail": "Raises `msg` as a runtime error, ending the program. Present for familiarity with Lua.",
+			"detail": "Raises `msg` as a runtime error, ending the program. The message is shown exactly as written, followed by the stack trace. Present for familiarity with Lua.",
 			"section": "Failing",
 			"href": "/stdlib/prelude-always-in-scope/#error"
 		},
@@ -128,7 +128,7 @@
 			"signature": "String.len(s: string) -> integer",
 			"params": "s: string",
 			"returns": "integer",
-			"detail": "The number of **characters**, which is not the number of bytes. `#s` is not defined for a string — use this, and use `#Bytes.fromString(s)` when the byte count is what you want.",
+			"detail": "The number of **characters**, which is not the number of bytes. `#s` is not defined for a string — use this, and use `#Bytes.fromString(s)` when the byte count is what is wanted.",
 			"section": "Length and slicing",
 			"href": "/stdlib/string/#string-len"
 		},
@@ -1787,6 +1787,18 @@
 			"detail": "Starts `program` and answers a handle **while it runs**, so the program can write to it, read what came back, and carry on in between. `nil` when it cannot be started.",
 			"section": "Process",
 			"href": "/stdlib/os/#os-spawn"
+		},
+		{
+			"label": "Os.spawnPty",
+			"owner": "Os",
+			"name": "spawnPty",
+			"method": false,
+			"signature": "Os.spawnPty(program: string, args: table<string>?) -> Pty?",
+			"params": "program: string, args: table<string>?",
+			"returns": "Pty?",
+			"detail": "Starts `program` behind a **pseudo-terminal**, the way a terminal emulator runs a shell. Where `Os.spawn` gives the child plain pipes, this gives it a real terminal: it can ask for its size, switch to raw mode, get Ctrl-C as a signal and do job control. Everything it writes comes back through `read` — escape codes included, for a terminal emulator to interpret — and `write` sends it keystrokes. `nil` when it cannot be started.",
+			"section": "Process",
+			"href": "/stdlib/os/#os-spawnpty"
 		},
 		{
 			"label": "Os.exit",

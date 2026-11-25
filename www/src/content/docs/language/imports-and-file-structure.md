@@ -116,7 +116,7 @@ Only what is written with `export from` is passed on. A plain `from … import` 
 
 ### Exporting
 
-Add `export` before a class, interface, enum, function, or variable to make it accessible from other files:
+Add `export` before a class, interface, enum, type alias, function, or variable to make it accessible from other files:
 
 ```saule
 export class Player
@@ -131,6 +131,8 @@ export fn clamp(value: integer, min: integer, max: integer) -> integer
 end
 
 export maxPlayers: integer = 8
+
+export type Roster = table<Player>
 ```
 
 An `export name: T = value` is a **module variable** (see [Variables](/saule/language/variables/)) — a single value shared by every file that imports it, not a copy per importer.

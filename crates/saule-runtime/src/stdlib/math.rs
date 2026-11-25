@@ -82,6 +82,7 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Prelude>>) {
     static_fields.insert("e".to_string(), Value::Float(std::f64::consts::E));
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "Math".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.

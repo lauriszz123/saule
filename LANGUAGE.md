@@ -237,6 +237,114 @@ field.onChanged("saule")                        -- SAULE
 
 An earlier version of the language accepted a bare `function` annotation. It carried no arity and no parameter types, so every lambda fit every slot and the mistake surfaced at the call — or, for a callback stored now and invoked later, not at all. Widen deliberately with `any` if a slot really does accept anything.
 
+### Type aliases
+
+`type Name = T` gives a type one more name. It is for the types that are long to write and get written often — a callback's signature, a nested table — so that they are spelled once and read by name everywhere else:
+
+```luau
+type Handler = fn(string) -> nil
+type Scores = table<string, integer>
+type Board = table<table<string?>>
+
+fn each(names: table<string>, handler: Handler)
+  for name in names do
+    handler(name)
+  end
+end
+
+local scores: Scores = {ann: 3, bob: 5}
+each({"ann", "bob"}, fn(name: string) -> nil
+  println(name .. " " .. (scores[name] ?? 0))
+end)
+```
+
+An alias is **transparent**: `Handler` and `fn(string) -> nil` are the same type in both directions, everywhere. Nothing new is declared — no conversion, no cast, and nothing at all when the program runs. Two aliases of one type are that one type:
+
+```luau
+type Metres = float
+type Seconds = float
+
+local distance: Metres = 3.0
+local time: Seconds = distance      -- fine: both are `float`
+local plain: float = time
+```
+
+That is the difference from a class. To make `Metres` and `Seconds` *refuse* each other, wrap the value in a class; an alias only names.
+
+An alias can stand anywhere a type can: an annotation, a parameter, a field, a result, between `<` and `>`, after `as` and `is`, in a `catch`.
+
+**Parameters.** An alias takes type parameters of its own, and each use supplies them:
+
+```luau
+type Pair<A, B> = table<A, B>
+type Maybe<T> = T?
+type Check<T> = fn(T) -> boolean
+
+fn find<T>(items: table<T>, want: Check<T>) -> Maybe<T>
+  for item in items do
+    if want(item) then
+      return item
+    end
+  end
+  return nil
+end
+
+local ages: Pair<string, integer> = {ann: 31}
+local long: Maybe<string> = find({"sun", "moon"}, fn(w: string) -> boolean
+  return #w > 3
+end)
+println(long)                       -- moon
+```
+
+A use gives exactly as many types as the alias declares. The parameters take no bounds: an alias declares nothing an argument could fail to be, so a bound belongs on the function or class the alias is used in.
+
+**Built from each other, in any order.** Like functions and classes, a module's aliases are all in scope from its first line:
+
+```luau
+type Board = table<Row>             -- `Row` is declared below
+type Row = table<Cell>
+type Cell = string?
+```
+
+What an alias cannot do is contain itself. It is replaced by the type on its right wherever it is written, so `type Json = table<string, Json>` would never finish being written out. A type that refers to itself has to be a `class` or an `enum`, which exist at run time and can point at themselves.
+
+**Across files.** `export type` publishes an alias like any other declaration, and it is imported the same way — by name, renamed with `as`, through a wildcard, or passed on by a re-export:
+
+```luau
+-- events.sau
+export class Event
+  name: string = ""
+end
+
+type Handler = fn(Event) -> nil     -- private to this file
+export type Listener = Handler
+
+export class Bus
+  fn on(name: string, handler: Handler) -> nil
+  end
+end
+```
+
+```luau
+-- main.sau
+from events import Bus, Event, Listener
+
+local greet: Listener = fn(e: Event) -> nil
+  println("got " .. e.name)
+end
+Bus().on("tap", greet)
+```
+
+An alias is written out *in the module that declares it*. `Bus.on` takes a `Handler`, a name only `events.sau` knows; `main.sau` is checked against what it stands for, and may have a `Handler` of its own that means something else.
+
+The rules, briefly:
+
+- Aliases are declared at the **top level** of a module, not inside a function or a block.
+- A module's classes, interfaces, enums and aliases share one set of names; an alias cannot take the name of another of them, nor of a built-in type.
+- An alias is **not a value**. `type Position = Point` lets `Position` annotate, but `Position()` does not construct — `Point()` does.
+- Inside `class Map<Key, Value>`, `Key` is the class's type parameter, whatever alias shares its name.
+- Types and values are different kinds of name: a local or a parameter may be called the same as an alias.
+
 ### Reserved: `userdata` and `thread`
 
 Lua has these and Saule keeps the names reserved, but **neither is implemented yet**. The typechecker will accept `local h: userdata` as an annotation and then nothing in the language can produce a value to satisfy it — there is no literal, no constructor, and no standard-library function returning either. Don't reach for them:
@@ -368,7 +476,7 @@ string is allowed and is kept as-is.
 
 Both numeric escapes name a **codepoint**, not a byte. A `string` is always
 valid UTF-8, so `"\x80"` is U+0080 — two bytes once encoded — and not a lone
-`0x80`, which is not text at all. `Bytes.of(0x80)` is how you write that byte,
+`0x80`, which is not text at all. `Bytes.of(0x80)` is how that byte is written,
 and the distinction is the same one [`bytes` vs `string`](#bytes-vs-string)
 draws everywhere else. `\u` rejects a value that is not a character: a
 surrogate half (`D800`–`DFFF`) or anything past `10FFFF` is an error rather
@@ -555,11 +663,11 @@ and `nil` when it isn't.
 
 ```luau
 fn describe(y: any) -> string
-    match type(y)
-        case "integer" then return "int " .. tostring(y as integer ?? 0)
-        case "string" then return "str " .. (y as string ?? "?")
-        case _ then return "other"
+    local n = y as integer
+    if n != nil then
+        return "int " .. n
     end
+    return "str " .. (y as string ?? "?")
 end
 ```
 
@@ -598,6 +706,98 @@ print(x as integer)          -- 7, not 8: truncation, not rounding
 local boxed: any = 7.9
 print(boxed as integer ?? -1)   -- -1: a float is not an integer
 ```
+
+### Testing a type with `is`
+
+`v is T` asks what a value is when the program runs, and answers a `boolean`:
+
+```luau
+fn describe(v: any) -> string
+  if v is integer then
+    return "integer " .. (v + 1)
+  elseif v is string then
+    return "string of " .. #v
+  elseif v is table<integer> then
+    return #v .. " integers"
+  end
+  return "something else"
+end
+
+println(describe(41))               -- integer 42
+println(describe("sun"))            -- string of 3
+println(describe({1, 2, 3}))        -- 3 integers
+```
+
+Where the test held, the value **is** that type. The checker narrows a local inside the branch the test guards, so `v + 1` above is integer arithmetic and `#v` is a string's length — no cast, no `!`.
+
+It is the same test the checked `as` makes ([above](#escaping-any-with-as)), kept as its answer instead of as the value. Use `as` to get a `T?` back in one expression; use `is` to branch.
+
+**Classes follow the hierarchy.** An instance is its own class, every class above it, and every interface any of them implements:
+
+```luau
+interface Named
+  fn name() -> string
+end
+
+class Entity
+  id: integer = 0
+end
+
+class Person extends Entity implements Named
+  fn name() -> string
+    return "Ann"
+  end
+end
+
+local person: Entity = Person()
+
+println(person is Person)           -- true
+println(person is Entity)           -- true: its parent class
+println(person is Named)            -- true: an interface it implements
+
+if person is Person then
+  println(person.name())            -- `person` is a `Person` here
+end
+```
+
+A test against a wider type takes nothing away: a `Person` that `is Entity` is still a `Person` inside the branch.
+
+**`is not`** is the negation, and narrows the other way round — past a guard, the value has the type:
+
+```luau
+fn length(v: any) -> integer
+  if v is not string then
+    return -1
+  end
+  return #v                         -- a string from here on
+end
+```
+
+`not` on its own binds tighter than `is`, as it does than `==`: `not v is string` is `(not v) is string`. Write `v is not string`, or `not (v is string)`.
+
+What can stand after `is`:
+
+| Test | True when |
+| --- | --- |
+| `v is integer`, `float`, `string`, `boolean`, `bytes` | the value is exactly that; `1` is not a `float` and `"1"` is not an `integer` |
+| `v is table` | it is any table |
+| `v is table<T>`, `table<K, V>` | every entry fits — checked **elementwise**, so it is O(n); an empty table fits any |
+| `v is SomeClass` | it is an instance of that class or of a subclass |
+| `v is SomeInterface` | its class, or one above it, implements the interface |
+| `v is SomeEnum` | it is a variant of that enum |
+| `v is fn(A) -> R` | it can be called; the signature is the checker's to hold and is not recorded on the value |
+| `v is T?` | it is a `T`, or nil |
+| `v is any` | always |
+
+And what cannot:
+
+- **`nil`.** It is a value, not a type: compare with `v == nil`, or test `v is T?` for "a `T` or nothing".
+- **A type parameter.** `v is T` inside `fn f<T>` has nothing to test against — type parameters are erased.
+- **A test that can only say no.** `count is string` with `count: integer` is a mistake, not a question, and the compiler says so. Two classes are told apart this way only when neither is an ancestor of the other.
+
+`is` sits with the comparisons: looser than arithmetic, `..` and `??`, tighter than `==`, `and` and `or`. So `a + b is integer` tests the sum, and `v is string and #v > 0` is two conditions — the second already sees `v` as a string.
+
+For the *name* of a value's type as text — in a message, or to ask whether two values are the same kind of thing — there is [`typeof(v)`](./DOCS.md#prelude-always-in-scope).
 
 ---
 
@@ -955,7 +1155,7 @@ local p: table = { name: "Arthur", health: 100, alive: true }
 local mix: table = { "a", "b", color: "red", 99 }
 ```
 
-Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry.
+Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry. A reserved word may be a key too — `{ type: "click", end: 3 }` — since a key is a string and not a name; it is read back with `t.type`.
 
 #### Computed keys
 
@@ -1165,7 +1365,7 @@ fn onlyInts<T>(items: table<T>) -> table<integer>
 end
 ```
 
-Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function you are *calling* is not the `T` declared by the one you are writing, however alike they read.
+Two type parameters are independent for the same reason: nothing proves a `T` is a `U`. That holds across functions too — a `T` declared by the function being *called* is not the `T` declared by the one being written, however alike they read.
 
 Classes, interfaces and enums take type parameters the same way — see [Generic Classes](#generic-classes), [Generic Interfaces](#generic-interfaces) and [Generic Enums](#generic-enums).
 
@@ -1977,7 +2177,7 @@ local words: Box<string> = Box("hi")
 local s: string = words.get()       -- and `string` here
 ```
 
-The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
+The argument is **inferred from the constructor** when it is not written, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
 
 ```luau
 class Pair<A, B>
@@ -3584,7 +3784,7 @@ Only what is written with `export from` is passed on. A plain `from … import` 
 
 ### Exporting
 
-Add `export` before a class, interface, enum, function, or variable to make it accessible from other files:
+Add `export` before a class, interface, enum, type alias, function, or variable to make it accessible from other files:
 
 ```luau
 export class Player
@@ -3599,6 +3799,8 @@ export fn clamp(value: integer, min: integer, max: integer) -> integer
 end
 
 export maxPlayers: integer = 8
+
+export type Roster = table<Player>
 ```
 
 An `export name: T = value` is a **module variable** (see [Variables](#variables)) — a single value shared by every file that imports it, not a copy per importer.
@@ -3891,6 +4093,7 @@ of every construct, see the [Grammar](#grammar).
 | `class` | Declare a class |
 | `interface` | Declare an interface |
 | `enum` | Declare an enum |
+| `type` | Declare a type alias: `type Name = T` |
 | `fn` | Declare a function or method |
 | `extends` | Inherit from a class |
 | `implements` | Fulfill one or more interfaces |
@@ -3918,6 +4121,9 @@ of every construct, see the [Grammar](#grammar).
 | `then` | Begin a `match` arm body / `if` branch |
 | `nil` | Absence of value |
 | `true / false` | Boolean literals |
+| `as` | Cast a value, or rename an import |
+| `is` | Test what a value is at run time: `v is T`, `v is not T` |
+| `and / or / not` | Boolean logic |
 
 ### Literals
 
@@ -3953,6 +4159,7 @@ of every construct, see the [Grammar](#grammar).
 | `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
 | `as` | Cast — converts a typed value (`x as integer` truncates toward zero, `n as string` renders), tests an `any` |
+| `is`, `is not` | Type test — `v is T` is a `boolean`, and narrows `v` to `T` where it held |
 
 ### Coroutines
 
@@ -4024,9 +4231,11 @@ that can actually be assigned to is decided later, by the semantic pass.
 ### Declarations
 
 ```ebnf
-decl ::= ['export'] (function | class | interface | enum)
+decl ::= ['export'] (function | class | interface | enum | alias)
        | 'local' function
        | import
+
+alias     ::= 'type' Name ['<' Name {',' Name} '>'] '=' type
 
 function  ::= 'fn' Name [typeParams] params ['->' type] chunk 'end'
 
@@ -4056,8 +4265,9 @@ params ::= '(' [param {',' param}] ')'
 param  ::= ['...'] (Name | 'self') [':' type] ['=' exp]
 ```
 
-`export` applies only to the four declaration forms listed; there is no
-`export local`. On a declared `fn` or method every parameter needs its type —
+`export` applies only to the declaration forms listed; there is no
+`export local`. An `alias` is a top-level declaration only, and its type
+parameters are bare names: they take no bounds. On a declared `fn` or method every parameter needs its type —
 the `[':' type]` above is optional only inside a lambda, where the target type
 supplies it, and on `self`, which is typed as the enclosing class.
 
@@ -4106,7 +4316,7 @@ exp        ::= orExp
 orExp      ::= andExp {'or' andExp}
 andExp     ::= eqExp {'and' eqExp}
 eqExp      ::= cmpExp {('==' | '!=') cmpExp}
-cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp}
+cmpExp     ::= borExp {('<' | '<=' | '>' | '>=') borExp | 'is' ['not'] type}
 borExp     ::= bxorExp {'|' bxorExp}
 bxorExp    ::= bandExp {'~' bandExp}
 bandExp    ::= shiftExp {'&' shiftExp}

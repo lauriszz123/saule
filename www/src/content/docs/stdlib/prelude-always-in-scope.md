@@ -98,30 +98,53 @@ println("n = " .. 42)             -- n = 42
 </div>
 
 <div class="api-list">
-<details class="api-entry" id="type">
-<summary><code class="api-sig"><span class="sig-fn">type</span><span class="sig-punct">(</span><span class="sig-param">v</span><span class="sig-punct">:</span> <span class="sig-type">any</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">string</span></code></summary>
+<details class="api-entry" id="typeof">
+<summary><code class="api-sig"><span class="sig-fn">typeof</span><span class="sig-punct">(</span><span class="sig-param">v</span><span class="sig-punct">:</span> <span class="sig-type">any</span><span class="sig-punct">)</span> <span class="sig-arrow">-&gt;</span> <span class="sig-type">string</span></code></summary>
 
 
-The runtime type name: `"integer"`, `"float"`, `"string"`, `"boolean"`,
-`"nil"`, `"function"`, `"table"`, or the class name for an instance.
+The name of what a value is, as text: `"integer"`, `"float"`, `"string"`,
+`"boolean"`, `"nil"`, `"function"`, `"table"`, or the class name for an
+instance.
 
-`"function"` is a runtime tag covering every callable — it is not a type you
-can write, since a function's type is its signature, `fn(A) -> R`.
+To ask whether a value is one particular type, write
+[`v is T`](/saule/language/types/#testing-a-type-with-is) instead: `if v is string
+then … end` is checked by the compiler and narrows `v` inside the branch,
+which comparing names cannot do. `typeof` is for the two things `is` does not
+cover — putting the name in a message, and asking whether two values are the
+same kind of thing.
+
+`"function"` is a runtime tag covering every callable — it is not a type that
+can be written, since a function's type is its signature, `fn(A) -> R`.
 
 ```saule
-println(type(42))             -- integer
-println(type(2.5))            -- float
-println(type("hi"))           -- string
-println(type(true))           -- boolean
-println(type(nil))            -- nil
-println(type({1}))            -- table
-println(type(println))        -- function
+println(typeof(42))             -- integer
+println(typeof(2.5))            -- float
+println(typeof("hi"))           -- string
+println(typeof(true))           -- boolean
+println(typeof(nil))            -- nil
+println(typeof({1}))            -- table
+println(typeof(println))        -- function
 
--- An instance reports its class.
+-- An instance reports its own class, not a parent's.
 class Point
     x: integer = 0
 end
-println(type(Point()))        -- Point
+class Pixel extends Point
+end
+println(typeof(Pixel()))        -- Pixel
+println(Pixel() is Point)       -- true: `is` follows the hierarchy
+
+-- In a message.
+fn expectString(v: any) -> string
+    if v is string then
+        return v
+    end
+    return "expected a string, got " .. typeof(v)
+end
+println(expectString(3))        -- expected a string, got integer
+
+-- Are these two the same kind of thing?
+println(typeof(Point()) == typeof(Pixel()))   -- false
 ```
 
 
@@ -188,7 +211,7 @@ end
 println(sqrtOf(4.0))             -- 2.0
 ```
 
-**It is not the same as `throw`.** A value you `throw` can be caught by a
+**It is not the same as `throw`.** A thrown value can be caught by a
 `catch` clause of the matching type; an `error` cannot be caught at all. Use
 `throw` for a failure the program is meant to handle, and `error` only where
 stopping is the point.

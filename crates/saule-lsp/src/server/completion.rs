@@ -61,6 +61,7 @@ pub fn complete(source: &str, offset: usize) -> Vec<CompletionItem> {
         return Vec::new();
     };
     let _ = saule_semantic::analyze_with_seed(&module, saule_semantic::ModuleSeed::default());
+    let module = saule_semantic::aliases::written_out(&module);
 
     let Some(found) = Walk::run(&module) else {
         if Walk::in_interface_body(&module, offset - prefix.len()) {
@@ -177,6 +178,9 @@ impl Backend {
             None => saule_semantic::ModuleSeed::default(),
         };
         let _ = saule_semantic::analyze_with_seed(&module, seed);
+        // What follows a `.` depends on what the value is, and a value
+        // annotated with a `type` alias is what the alias stands for.
+        let module = saule_semantic::aliases::written_out(&module);
 
         let Some(found) = Walk::run(&module) else {
             // Nothing in the tree stands for the caret. An interface body is

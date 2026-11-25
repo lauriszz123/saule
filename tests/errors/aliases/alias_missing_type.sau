@@ -1,0 +1,6 @@
+-- An alias has to say what it is another name for.
+
+type UserId =
+
+local id: integer = 1
+println(id)

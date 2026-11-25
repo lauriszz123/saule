@@ -1,0 +1,18 @@
+-- The narrowing belongs to the branch the test guards. After the `if`, the
+-- value is a `Shape` again, and a `Shape` has no `radius`.
+
+class Shape
+end
+
+class Circle extends Shape
+	radius: float = 1.0
+end
+
+fn size(shape: Shape) -> float
+	if shape is Circle then
+		return shape.radius
+	end
+	return shape.radius
+end
+
+println(size(Circle()))

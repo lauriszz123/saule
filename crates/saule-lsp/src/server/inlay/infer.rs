@@ -164,6 +164,8 @@ impl<'a> Cx<'a> {
                 let source = self.infer_type(&value.value);
                 Some(saule_typeck::casts::resolve(source.as_ref(), ty).result(ty))
             }
+            // `v is T` is a yes or a no.
+            Expr::Is { .. } => Some(Type::Named("boolean".into())),
             // `x!` drops the nullability the unwrap just asserted away.
             Expr::ForceUnwrap(inner) => Some(strip_nullable(self.infer_type(&inner.value)?)),
             // `obj.field` — the field's declared type. A bare method

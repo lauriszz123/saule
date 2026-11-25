@@ -593,6 +593,7 @@ impl Walk {
                     self.returns = outer;
                 }
             }
+            Decl::TypeAlias { ty, .. } => self.ty(Some(ty)),
             // Module variables are in scope for the whole file, so bind the
             // name before walking on — completion inside a later function
             // body should offer it.
@@ -720,7 +721,7 @@ impl Walk {
             // `x as T` — both halves can hold the caret. The target is a
             // type annotation like any other, so `v as <caret>` wants type
             // names rather than the values `Ctx::Value` would offer.
-            Expr::Cast { value, ty, .. } => {
+            Expr::Cast { value, ty, .. } | Expr::Is { value, ty, .. } => {
                 self.expr(value);
                 self.ty(Some(ty));
             }

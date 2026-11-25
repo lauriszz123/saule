@@ -129,7 +129,7 @@ local p: table = { name: "Arthur", health: 100, alive: true }
 local mix: table = { "a", "b", color: "red", 99 }
 ```
 
-Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry.
+Keys in `{ key: value }` literals can be bare identifiers or quoted strings — both produce a string-keyed map entry. A reserved word may be a key too — `{ type: "click", end: 3 }` — since a key is a string and not a name; it is read back with `t.type`.
 
 #### Computed keys
 

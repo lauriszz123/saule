@@ -1,0 +1,7 @@
+-- `nil` is a value, not a type, so it cannot stand after `is`. Comparing
+-- with it is `== nil`; "a string or nothing" is `v is string?`.
+
+local v: any? = nil
+if v is nil then
+	println("nothing")
+end

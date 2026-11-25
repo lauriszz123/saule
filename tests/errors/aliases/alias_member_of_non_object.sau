@@ -1,0 +1,7 @@
+-- Members are read off what the alias stands for. `Id` is an integer, and
+-- an integer has none.
+
+type Id = integer
+
+local id: Id = 7
+println(id.value)

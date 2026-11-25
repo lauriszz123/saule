@@ -210,6 +210,9 @@ impl Compiler<'_> {
             // see `Chunk::cast_types`.
             Expr::Cast { value, ty, kind } => self.cast_to(value, ty, dst, span, false, *kind)?,
 
+            // `v is T`, `v is not T` — the same test, kept as a boolean.
+            Expr::Is { value, ty, negated } => self.is_to(value, ty, *negated, dst, span)?,
+
             Expr::Match { scrutinee, arms } => self.match_to(e, scrutinee, arms, dst)?,
 
             Expr::Lambda {
@@ -298,7 +301,7 @@ impl Compiler<'_> {
         unwrap: bool,
         kind: CastKind,
     ) -> Result<(), CompileError> {
-        let k = self.chunk.add_cast_type(ty);
+        let k = self.chunk.add_cast_type(&self.as_declared(ty));
         let Ok(k) = u8::try_from(k) else {
             return Err(CompileError::unsupported(
                 "a module casting to more than 256 distinct types",
@@ -320,6 +323,86 @@ impl Compiler<'_> {
             (_, false) => Op::CASTCHK,
         };
         self.emit(Instruction::abc(op, a, b, k), span);
+        self.free_to(m);
+        Ok(())
+    }
+}
+
+impl Compiler<'_> {
+    /// `ty` with every class, enum and interface named as it was
+    /// **declared**, rather than as this module happens to call it.
+    ///
+    /// A value is asked what it is by name — an instance knows its class's
+    /// own name, not the ones importers give it. So `from people import
+    /// Person as P` followed by `v is P`, or `v is people.Person` through a
+    /// namespace, has to test for `Person`. Without this both answered no
+    /// for every value, silently.
+    fn as_declared(&self, ty: &saule_ast::Type) -> saule_ast::Type {
+        use saule_ast::Type;
+        match ty {
+            Type::Named(n) => Type::Named(self.declared_name(n)),
+            Type::Generic(g) => Type::generic(
+                self.declared_name(&g.name),
+                g.args.iter().map(|a| self.as_declared(a)).collect(),
+            ),
+            Type::Nullable(inner) => Type::Nullable(Box::new(self.as_declared(inner))),
+            Type::Table { key, value } => Type::Table {
+                key: key.as_deref().map(|k| Box::new(self.as_declared(k))),
+                value: Box::new(self.as_declared(value)),
+            },
+            Type::Tuple(items) => Type::Tuple(items.iter().map(|t| self.as_declared(t)).collect()),
+            // Only "is it callable" is asked of a function type.
+            Type::Function { .. } => ty.clone(),
+        }
+    }
+
+    /// The name `local` was declared with, when it is a class, an enum or an
+    /// interface this module can see; otherwise `local` itself.
+    fn declared_name(&self, local: &str) -> String {
+        if let Some(i) = self.layouts.get(local)
+            && let Some(class) = self.chunk.classes.get(i as usize)
+        {
+            return class.name.to_string();
+        }
+        if let Some(i) = self.layouts.enum_of(local)
+            && let Some(en) = self.chunk.enums.get(i as usize)
+        {
+            return en.name.to_string();
+        }
+        if let Some(i) = self.layouts.interface_of(local)
+            && let Some(iface) = self.chunk.interfaces.get(i as usize)
+        {
+            return iface.name.to_string();
+        }
+        local.to_string()
+    }
+
+    /// `value is ty`: whether the value is a `ty`, as a boolean in `dst`.
+    ///
+    /// The type is interned beside the ones `as` tests against — it is the
+    /// same test — so the two share the table and its 256-type limit.
+    fn is_to(
+        &mut self,
+        value: &Spanned<Expr>,
+        ty: &saule_ast::Type,
+        negated: bool,
+        dst: u16,
+        span: &std::ops::Range<usize>,
+    ) -> Result<(), CompileError> {
+        let k = self.chunk.add_cast_type(&self.as_declared(ty));
+        let Ok(k) = u8::try_from(k) else {
+            return Err(CompileError::unsupported(
+                "a module testing against more than 256 distinct types",
+                span.clone(),
+            ));
+        };
+        let m = self.mark();
+        let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
+        let (a, b) = (self.reg8(dst, span)?, self.reg8(r, span)?);
+        self.emit(Instruction::abc(Op::ISTYPE, a, b, k), span);
+        if negated {
+            self.emit(Instruction::abc(Op::NOT, a, a, 0), span);
+        }
         self.free_to(m);
         Ok(())
     }

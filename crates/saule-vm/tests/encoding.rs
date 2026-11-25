@@ -205,10 +205,11 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::GETPATH as u8, 132);
     assert_eq!(Op::GETPAY as u8, 133);
     assert_eq!(Op::CALLSELF as u8, 134);
+    assert_eq!(Op::ISTYPE as u8, 135);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::CALLSELF),
-        "a new opcode was appended after CALLSELF — extend this assertion rather than \
+        Some(Op::ISTYPE),
+        "a new opcode was appended after ISTYPE — extend this assertion rather than \
          inserting one in the middle"
     );
 }

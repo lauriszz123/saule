@@ -638,7 +638,7 @@ A **character class** matches one character:
 | `%A`, `%D`, `%S`, … | the **complement** — any uppercase class letter negates it |
 | `[set]` | any character in the set: `[aeiou]`, a range `[a-z]`, or a class `[%a_]` |
 | `[^set]` | any character **not** in the set |
-| `%x` where `x` is not a class letter | the literal `x` — this is how you match `%.`, `%%`, `%(` |
+| `%x` where `x` is not a class letter | the literal `x` — this is how `%.`, `%%`, `%(` are matched |
 
 A **quantifier** follows a class and repeats it:
 

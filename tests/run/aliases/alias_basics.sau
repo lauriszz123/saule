@@ -1,0 +1,53 @@
+-- `type Name = T` gives a type one more name, and nothing else: the alias
+-- and what it stands for are the same type in both directions, so values
+-- pass between them with no cast and no conversion.
+
+type UserId = integer
+type Name = string
+type Names = table<Name>
+type Scores = table<Name, integer>
+
+fn describe(id: UserId, name: Name) -> string
+	return "#" .. id .. " " .. name
+end
+
+fn longest(names: Names) -> Name
+	local best: Name = ""
+	for name in names do
+		if #name > #best then
+			best = name
+		end
+	end
+	return best
+end
+
+fn total(scores: Scores) -> integer
+	local sum = 0
+	for _, score in scores do
+		sum += score
+	end
+	return sum
+end
+
+local id: UserId = 7
+local plain: integer = id          -- an alias fills the slot of its type
+local back: UserId = plain + 1     -- and the other way round
+assert(back == 8)
+
+local names: Names = {"ann", "bartholomew", "cy"}
+local same: table<string> = names  -- still the one table, not a copy
+Table.insert(same, "dee")
+assert(#names == 4)
+
+local scores: Scores = {ann: 3, cy: 4}
+scores["dee"] = 5
+
+println(describe(id, longest(names)))  -- #7 bartholomew
+println(total(scores))                 -- 12
+assert(describe(id, longest(names)) == "#7 bartholomew")
+assert(total(scores) == 12)
+
+-- An alias is not a new type at run time either: the value is what it was.
+assert(typeof(id) == "integer")
+assert(id is integer and id is UserId)
+assert(typeof(names) == "table")

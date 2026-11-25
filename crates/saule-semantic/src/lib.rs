@@ -26,6 +26,7 @@ use std::ops::Range;
 
 use saule_ast::{Decl, Module, Stmt};
 
+pub mod aliases;
 pub mod binding;
 pub mod builtins;
 mod control_flow;
@@ -38,6 +39,10 @@ mod resolve;
 mod return_check;
 mod return_infer;
 
+pub use aliases::{
+    AliasInfo, AliasRegistry, alias_scope, expand_aliases, exported_aliases, lookup_alias,
+    with_aliases,
+};
 pub use binding::{Binding, Bindings, FunctionInfo, FunctionTable, ResolveTable, UpvalRef};
 pub use error::SemanticError;
 pub use registry::{
@@ -87,6 +92,7 @@ impl ModuleSeed {
             && same_map(&self.enums, &other.enums, same_enum)
             && same_map(&self.functions, &other.functions, same_function)
             && self.variables == other.variables
+            && self.aliases == other.aliases
             && self.wildcard_names == other.wildcard_names
     }
 }
@@ -178,6 +184,9 @@ pub struct ModuleSeed {
     /// Declared types of the `export name: T = value` module variables the
     /// imports bring in, keyed by their local name.
     pub variables: VariableRegistry,
+    /// The `type` aliases the imports bring in, keyed by their local name,
+    /// each already written out: what it stands for names no alias.
+    pub aliases: AliasRegistry,
     /// Local names this module's `from "..." import *` statements bind,
     /// as enumerated by the embedder.
     ///
@@ -227,6 +236,22 @@ fn analyze_inner(
     collect_bindings: bool,
 ) -> (Vec<SemanticError>, Option<Bindings>) {
     let wildcard_names = seed.wildcard_names;
+
+    // Aliases first, since every pass below reads types. They are written
+    // out on a copy: the caller's tree keeps the names as they were typed.
+    // A module with no alias in scope — most of them — is analysed as it
+    // stands, with no copy made.
+    let (alias_scope, mut errors) = aliases::alias_scope(module, &seed.aliases);
+    let rewritten;
+    let module = if alias_scope.is_empty() {
+        module
+    } else {
+        let mut copy = module.clone();
+        errors.extend(aliases::expand_aliases(&mut copy, &alias_scope));
+        rewritten = copy;
+        &rewritten
+    };
+
     let (mut reg, mut ifaces, mut enums, mut iface_methods, iface_params) = build_registry(module);
     // A type this module declares wins over an imported one of the same
     // name *whatever kind either is*. Each registry already keeps its own
@@ -289,8 +314,7 @@ fn analyze_inner(
     install_registries(reg, ifaces, enums, iface_methods, iface_params);
     install_functions(funcs);
     install_variables(vars);
-
-    let mut errors = Vec::new();
+    aliases::install_aliases(alias_scope);
 
     // Definite assignment on every class declaration.
     for stmt in &module.stmts {

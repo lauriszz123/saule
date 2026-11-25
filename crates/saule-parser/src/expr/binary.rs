@@ -1,5 +1,5 @@
 //! The binary-operator precedence ladder, loosest to tightest:
-//! `or` -> `and` -> equality -> comparison -> `|` -> `~` -> `&` ->
+//! `or` -> `and` -> equality -> comparison and `is` -> `|` -> `~` -> `&` ->
 //! shift -> `??` -> `..` -> additive -> multiplicative -> unary -> `^` ->
 //! `as`.
 //!
@@ -70,6 +70,25 @@ impl Parser {
                 self.report_empty_angles(|span| ParseError::LtGtNotEqual { span })?;
                 let right = self.bor_expr()?;
                 left = mk_binary(BinOp::NotEq, left, right);
+                continue;
+            }
+            // `v is T`, `v is not T` — the type test. It sits with the
+            // comparisons because it is one: it answers a boolean about its
+            // left operand, and reads the same way beside `and` / `or`.
+            // What follows is a type, not an expression.
+            if self.check(&Token::Is) {
+                self.advance();
+                let negated = self.eat(&Token::Not);
+                let ty = self.parse_type()?;
+                let span = left.span.start..self.last_consumed_end();
+                left = Spanned::new(
+                    Expr::Is {
+                        value: Box::new(left),
+                        ty,
+                        negated,
+                    },
+                    span,
+                );
                 continue;
             }
             let op = match self.peek().value {

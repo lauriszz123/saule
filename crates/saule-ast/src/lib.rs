@@ -26,7 +26,7 @@ mod visit;
 
 pub use decl::*;
 pub use expr::*;
-pub use ids::{assign_ids, visit_exprs_mut};
+pub use ids::{TypeSite, assign_ids, visit_exprs_mut, visit_types_mut};
 pub use stmt::*;
 pub use types::*;
 pub use visit::{Visitor, visit, visit_expr, visit_exprs, visit_stmts};

@@ -90,6 +90,10 @@ pub enum Export {
     /// are Rust-built values fixed before the program runs, so it travels
     /// as the value itself and folds into a constant wherever it lands.
     Native(saule_runtime::Value),
+    /// A `type` alias. Nothing to link: the importer's front end has
+    /// already replaced the name by the type it stands for. It is listed so
+    /// that importing it is not "no such export".
+    Alias,
 }
 
 /// One module on its way from a path to a chunk.
@@ -504,6 +508,7 @@ fn imported_layouts(
                     };
                     values.push(ImportBinding { local, from });
                 }
+                Some(Export::Alias) => {}
                 None => {
                     let from = from_path.display().to_string();
                     return Err(not_exported(unit, orig, &from, &edge.span));
@@ -643,6 +648,13 @@ fn collect_exports(
                     out.insert(name.clone(), e);
                 }
             }
+            Decl::TypeAlias {
+                exported: true,
+                name,
+                ..
+            } => {
+                out.insert(name.clone(), Export::Alias);
+            }
             Decl::Import {
                 names, exported, ..
             } => {
@@ -673,6 +685,13 @@ fn collect_exports(
                 // The names this import bound *locally* — under their
                 // aliases, since that is what the module published them as.
                 for (orig, local) in names.bind(from.keys().map(String::as_str)) {
+                    // An alias passes on as an alias. Asking `export_of`
+                    // would find the slot a named import reserved for it
+                    // and publish a value that is never written.
+                    if matches!(from.get(&orig), Some(Export::Alias)) {
+                        out.insert(local, Export::Alias);
+                        continue;
+                    }
                     let Some(e) = export_of(&local, slot_base, layouts, bindings) else {
                         continue;
                     };

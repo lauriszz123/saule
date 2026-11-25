@@ -1,0 +1,7 @@
+-- A generic alias is given one type for each parameter it declares.
+-- `Pair` declares two.
+
+type Pair<A, B> = table<A, B>
+
+local ages: Pair<string> = {}
+println(#ages)

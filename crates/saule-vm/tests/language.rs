@@ -104,11 +104,11 @@ fn division_by_zero() {
 #[test]
 fn type_builtin() {
     assert_eq!(
-        eval("type(42)").unwrap(),
+        eval("typeof(42)").unwrap(),
         Value::Str(SauleStr::new("integer".into()))
     );
     assert_eq!(
-        eval(r#"type("hi")"#).unwrap(),
+        eval(r#"typeof("hi")"#).unwrap(),
         Value::Str(SauleStr::new("string".into()))
     );
 }
@@ -403,7 +403,7 @@ fn higher_order_function() {
 fn function_type_name_is_function() {
     let src = r#"
         fn id(x: integer) -> integer return x end
-        type(id)
+        typeof(id)
     "#;
     assert_eq!(
         eval(src).unwrap(),
@@ -814,7 +814,7 @@ mod tables {
     }
     #[test]
     fn type_of_table_is_table() {
-        assert_str("type({1,2,3})", "table");
+        assert_str("typeof({1,2,3})", "table");
     }
 }
 
@@ -1180,11 +1180,11 @@ mod classes {
     }
     #[test]
     fn type_of_instance_is_instance() {
-        // Saule uses class names as runtime type tags; `type(p)` should
+        // Saule uses class names as runtime type tags; `typeof(p)` should
         // yield the class name (or at least something non-empty).
         let src = r#"
             class Foo end
-            type(Foo())
+            typeof(Foo())
         "#;
         // We only assert it's a string of "Foo" or similar; the exact
         // format will be locked once classes are implemented.

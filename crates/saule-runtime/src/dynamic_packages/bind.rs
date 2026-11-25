@@ -121,6 +121,7 @@ fn build_runtime(manifest: Arc<Manifest>, weak: &Weak<PackageRt>) -> PackageRt {
         exports.insert(
             spec.name.clone(),
             Value::Class(Rc::new(ClassObject {
+                interfaces: Vec::new(),
                 name: spec.name.clone(),
                 parent: None,
                 // A native class's objects live in the package; nothing about

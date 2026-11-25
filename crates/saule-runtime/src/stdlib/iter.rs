@@ -102,6 +102,7 @@ fn define_iter_class(env: &Rc<RefCell<Prelude>>) {
     add("groupBy", "Iter.groupBy", iter_group_by);
 
     let class = ClassObject {
+        interfaces: Vec::new(),
         name: "Iter".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.

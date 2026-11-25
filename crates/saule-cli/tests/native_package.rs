@@ -156,7 +156,7 @@ println(c.bump())
 c.step = 5
 println(c.step, c.bump())
 println(c.doubled())
-println(type(c), c)
+println(typeof(c), c)
 "#,
     );
     assert_eq!(out, "10\n11\n5\t16\n32\nCounter\t<instance of Counter>\n");

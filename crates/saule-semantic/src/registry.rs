@@ -802,4 +802,5 @@ pub fn clear_registries() {
     ENUMS.with(|c| c.borrow_mut().clear());
     FUNCTIONS.with(|c| c.borrow_mut().clear());
     VARIABLES.with(|c| c.borrow_mut().clear());
+    crate::aliases::clear_aliases();
 }

@@ -64,6 +64,35 @@ pub enum TypeCheckError {
         span: miette::SourceSpan,
     },
 
+    #[error("this test is always false: the value is `{from}`, which is never `{to}`")]
+    #[diagnostic(help("{help}"))]
+    ImpossibleTypeTest {
+        from: String,
+        to: String,
+        help: String,
+        #[label("always false")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("`nil` is a value, not a type — it cannot stand after `is`")]
+    #[diagnostic(help(
+        "compare with it instead: `v == nil` or `v != nil`. To ask whether a value is a `T`          or nothing, test against the nullable type: `v is T?`"
+    ))]
+    IsNil {
+        #[label("compare with `== nil`")]
+        span: miette::SourceSpan,
+    },
+
+    #[error("a value cannot be tested against the type parameter `{name}`")]
+    #[diagnostic(help(
+        "type parameters are erased: when the program runs nothing records which type          `{name}` stands for, so there is nothing to compare the value with. Test against          a type that exists at run time, or pass the answer in as an argument"
+    ))]
+    IsTypeParameter {
+        name: String,
+        #[label("`{name}` is not known when this runs")]
+        span: miette::SourceSpan,
+    },
+
     #[error("cannot assign value of type `{found}` to variable of type `{expected}`")]
     #[diagnostic(help("the value's type isn't compatible with the declared type"))]
     AssignmentTypeMismatch {

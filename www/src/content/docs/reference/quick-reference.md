@@ -15,6 +15,7 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `class` | Declare a class |
 | `interface` | Declare an interface |
 | `enum` | Declare an enum |
+| `type` | Declare a type alias: `type Name = T` |
 | `fn` | Declare a function or method |
 | `extends` | Inherit from a class |
 | `implements` | Fulfill one or more interfaces |
@@ -42,6 +43,9 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `then` | Begin a `match` arm body / `if` branch |
 | `nil` | Absence of value |
 | `true / false` | Boolean literals |
+| `as` | Cast a value, or rename an import |
+| `is` | Test what a value is at run time: `v is T`, `v is not T` |
+| `and / or / not` | Boolean logic |
 
 ### Literals
 
@@ -77,6 +81,7 @@ of every construct, see the [Grammar](/saule/reference/grammar/).
 | `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `..=`, `&=`, `\|=`, `<<=`, `>>=` | Compound assignment (no `~=` — that is Lua's `!=`) |
 | `:` | Pipeline stage call inside `when(...)` |
 | `as` | Cast — converts a typed value (`x as integer` truncates toward zero, `n as string` renders), tests an `any` |
+| `is`, `is not` | Type test — `v is T` is a `boolean`, and narrows `v` to `T` where it held |
 
 ### Coroutines
 

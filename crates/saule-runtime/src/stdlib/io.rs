@@ -119,6 +119,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     // `File` as a type name in `local f: File = ...`. Method dispatch
     // happens in `dispatch_file_method`, not through this class.
     let file_class = ClassObject {
+        interfaces: Vec::new(),
         name: "File".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.
@@ -153,6 +154,7 @@ pub fn install(env: &Rc<RefCell<Prelude>>) {
     static_fields.insert("write".to_string(), native_multi("Io.write", io_write));
 
     let io_class = ClassObject {
+        interfaces: Vec::new(),
         name: "Io".to_string(),
         parent: None,
         // Statics only — a stdlib namespace class is never instantiated.

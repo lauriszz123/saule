@@ -862,9 +862,10 @@ fn a_statement_start_completes_declaration_keywords() {
 fn export_completes_the_declaration_keywords() {
     assert_eq!(complete("export en@\n"), vec!["enum"]);
     assert_eq!(complete("export cl@\n"), vec!["class"]);
+    assert_eq!(complete("export ty@\n"), vec!["type"]);
     assert_eq!(
         complete("export @\n"),
-        vec!["fn", "class", "interface", "enum"]
+        vec!["fn", "class", "interface", "enum", "type"]
     );
 }
 
@@ -2125,4 +2126,54 @@ fn a_lambda_does_not_inherit_the_outer_return_type() {
     );
     let top = first_two(&src);
     assert!(!top.contains(&"true".to_string()), "{top:?}");
+}
+
+// ─── `type` aliases and `is` ─────────────────────────────────────────────
+
+#[test]
+fn a_type_position_offers_the_modules_aliases() {
+    let src = "type Handler = fn(string) -> nil\ntype Height = float\nlocal h: H@\n";
+    let got = complete(src);
+    assert!(got.contains(&"Handler".to_string()), "{got:?}");
+    assert!(got.contains(&"Height".to_string()), "{got:?}");
+}
+
+#[test]
+fn an_alias_completion_says_what_it_stands_for() {
+    let tokens = saule_lexer::Lexer::new("type Handler = fn(string) -> nil\n")
+        .tokenize()
+        .expect("lex");
+    let module = saule_parser::parse(tokens).expect("parse");
+    let _ = saule_semantic::analyze(&module);
+    let item = type_items()
+        .into_iter()
+        .find(|i| i.label == "Handler")
+        .expect("offered");
+    assert_eq!(item.detail.as_deref(), Some("type = fn(string) -> nil"));
+}
+
+/// What follows `is` is a type, so types are what is offered — not the
+/// locals and functions a value position would list.
+#[test]
+fn the_right_of_is_offers_types() {
+    let src = "class Dog\nend\nfn f(v: any) -> boolean\n  local dozen = 12\n  return v is D@\nend\n";
+    let got = complete(src);
+    assert!(got.contains(&"Dog".to_string()), "{got:?}");
+    assert!(!got.contains(&"dozen".to_string()), "{got:?}");
+
+    let src = "fn f(v: any) -> boolean\n  return v is not int@\nend\n";
+    assert_eq!(complete(src), vec!["integer"]);
+}
+
+#[test]
+fn the_right_of_an_alias_declaration_offers_types() {
+    let src = "class Event\nend\ntype Handler = fn(Ev@\n";
+    let got = complete(src);
+    assert!(got.contains(&"Event".to_string()), "{got:?}");
+}
+
+#[test]
+fn a_statement_position_offers_the_type_keyword() {
+    let got = complete("ty@\n");
+    assert!(got.contains(&"type".to_string()), "{got:?}");
 }

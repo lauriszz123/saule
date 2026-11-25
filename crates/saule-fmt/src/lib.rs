@@ -208,6 +208,10 @@ const UNARY_PREC: u8 = 13;
 /// parser's precedence ladder.
 const CAST_PREC: u8 = MAX_PREC - 1;
 
+/// Binding strength of `v is T`: the comparisons' rung, where the parser
+/// reads it (see [`bin_prec`]).
+const IS_PREC: u8 = 4;
+
 /// (precedence, right_associative) for each binary operator.
 ///
 /// This table has to mirror
@@ -479,6 +483,13 @@ fn needs_top_separator(prev: &Stmt, next: &Stmt) -> bool {
     let p_is_var = matches!(prev, Stmt::Decl(d) if matches!(d.value, Decl::Variable { .. }));
     let n_is_var = matches!(next, Stmt::Decl(d) if matches!(d.value, Decl::Variable { .. }));
     if p_is_var && n_is_var {
+        return false;
+    }
+    // So do `type` aliases: each is one line, and a module's few read as a
+    // glossary.
+    let p_is_alias = matches!(prev, Stmt::Decl(d) if matches!(d.value, Decl::TypeAlias { .. }));
+    let n_is_alias = matches!(next, Stmt::Decl(d) if matches!(d.value, Decl::TypeAlias { .. }));
+    if p_is_alias && n_is_alias {
         return false;
     }
     let p_is_decl = matches!(prev, Stmt::Decl(_));

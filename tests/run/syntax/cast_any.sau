@@ -10,7 +10,7 @@ class Dog extends Animal
 end
 
 fn describe(y: any) -> string
-	match type(y)
+	match typeof(y)
 		case "integer" then
 			return "int " .. tostring(y as integer ?? 0)
 		case "string" then

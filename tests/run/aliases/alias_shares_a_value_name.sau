@@ -1,0 +1,21 @@
+-- Types and values are different kinds of name. An alias takes nothing
+-- from the values: a local, a parameter or a function may be called the
+-- same, and which one is meant follows from where the name stands.
+
+type Size = integer
+type Colour = string
+
+fn Size(width: integer, height: integer) -> Size   -- a function, and the alias
+	return width * height
+end
+
+fn paint(Colour: Colour) -> Colour                -- a parameter, and the alias
+	return "painted " .. Colour
+end
+
+local Colour: Colour = "red"
+local area: Size = Size(3, 4)
+
+println(area, paint(Colour))  -- 12  painted red
+assert(area == 12)
+assert(paint(Colour) == "painted red")

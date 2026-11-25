@@ -317,7 +317,7 @@ local words: Box<string> = Box("hi")
 local s: string = words.get()       -- and `string` here
 ```
 
-The argument is **inferred from the constructor** when you don't write it, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
+The argument is **inferred from the constructor** when it is not written, so `local b = Box(5)` gives a `Box<integer>` and `b.get() + 1` type-checks. Several parameters bind independently, each from the position it appears in:
 
 ```saule
 class Pair<A, B>

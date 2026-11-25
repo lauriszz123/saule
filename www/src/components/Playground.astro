@@ -1268,8 +1268,8 @@ println("Hello from my script!")
 		async function confirmDiscard(tab: OpenTab): Promise<boolean> {
 			if (tab.kind === 'user' || !dirty.has(tabKey(tab))) return true;
 			const answer = await openDialog({
-				title: 'Discard your changes?',
-				body: 'This program is not one of your scripts, so its edits are not saved. Save it as a script first to keep them.',
+				title: 'Discard the changes?',
+				body: 'This program is not a saved script, so its edits are not saved. Save it as a script first to keep them.',
 				confirm: 'Discard',
 				danger: true,
 			});

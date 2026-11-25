@@ -185,6 +185,21 @@ impl<'a> Printer<'a> {
                 }
             }
 
+            Expr::Is { value, ty, negated } => {
+                // A comparison, and printed as one: it sits on their rung,
+                // with its left operand read at that strength.
+                let parens = IS_PREC < parent_prec || self.was_grouped(parent_prec, &e.span);
+                if parens {
+                    self.write("(");
+                }
+                self.expr(value, IS_PREC);
+                self.write(if *negated { " is not " } else { " is " });
+                self.ty(ty);
+                if parens {
+                    self.write(")");
+                }
+            }
+
             Expr::Table(entries) => {
                 if entries.is_empty() {
                     self.write("{}");

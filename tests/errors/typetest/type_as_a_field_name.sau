@@ -1,0 +1,9 @@
+-- Nor a field. (A table key may be any word — `{type: "click"}` — since a
+-- key is a string, not a name.)
+
+class Token
+	type: string = ""
+	text: string = ""
+end
+
+println(Token().text)

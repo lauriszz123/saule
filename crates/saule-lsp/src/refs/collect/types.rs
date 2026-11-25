@@ -119,7 +119,9 @@ impl<'a> CollectCx<'a> {
     /// interface / enum inside a type ascription found in `search`.
     pub(crate) fn collect_type_name_refs_in(&mut self, ty: &Type, search: &Range<usize>) {
         let target = match self.symbol {
-            Symbol::Class(n) | Symbol::Interface(n) | Symbol::Enum(n) => n.clone(),
+            Symbol::Class(n) | Symbol::Interface(n) | Symbol::Enum(n) | Symbol::TypeAlias(n) => {
+                n.clone()
+            }
             _ => return,
         };
         let mut names = Vec::new();

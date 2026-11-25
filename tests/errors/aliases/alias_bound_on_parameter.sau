@@ -1,0 +1,12 @@
+-- An alias's parameters take no bounds. An alias declares nothing an
+-- argument could fail to be; the bound belongs on the function or class
+-- the alias is used in.
+
+interface Named
+	fn name() -> string
+end
+
+type Roster<T: Named> = table<T>
+
+local roster: Roster<Named> = {}
+println(#roster)

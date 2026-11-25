@@ -1,0 +1,8 @@
+-- The answer is already known: `count` is declared an integer, and no
+-- integer is a string. A test that can only say no is a mistake, not a
+-- question — usually the wrong variable, or a type that changed.
+
+local count: integer = 3
+if count is string then
+	println("never")
+end

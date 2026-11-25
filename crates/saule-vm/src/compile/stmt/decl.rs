@@ -22,9 +22,15 @@ impl Compiler<'_> {
         // so the declaration statement itself emits nothing.
         // Classes and enums are laid out in their own passes before the
         // module body, so the declaration statement itself emits nothing.
+        //
+        // A `type` alias emits nothing either, for a different reason: the
+        // front end has already written out what it stands for wherever it
+        // was used, and nothing is left of it to run.
         if matches!(
             &d.value,
-            saule_ast::Decl::Class { .. } | saule_ast::Decl::Interface { .. }
+            saule_ast::Decl::Class { .. }
+                | saule_ast::Decl::Interface { .. }
+                | saule_ast::Decl::TypeAlias { .. }
         ) {
             return Ok(());
         }

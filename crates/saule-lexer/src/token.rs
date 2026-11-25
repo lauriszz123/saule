@@ -34,6 +34,10 @@ pub enum Token {
     Do,
     In,
     As,
+    /// `v is T` — the runtime type test.
+    Is,
+    /// `type Name = T` — a type alias.
+    Type,
     From,
     Match,
     Case,
@@ -165,6 +169,8 @@ impl Token {
             Token::Do => "do",
             Token::In => "in",
             Token::As => "as",
+            Token::Is => "is",
+            Token::Type => "type",
             Token::From => "from",
             Token::Match => "match",
             Token::Case => "case",
@@ -275,6 +281,8 @@ impl Token {
                 | Token::Do
                 | Token::In
                 | Token::As
+                | Token::Is
+                | Token::Type
                 | Token::From
                 | Token::Match
                 | Token::Case

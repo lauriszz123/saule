@@ -208,6 +208,7 @@ impl Writer {
             static_methods,
             smindex,
             itables,
+            interfaces,
             init,
             member_of_vslot,
             member_of_sslot,
@@ -232,6 +233,7 @@ impl Writer {
             |w, k| w.u32(*k),
             |w, v| w.list(v, |w, x| w.u16(*x)),
         );
+        self.list(interfaces, Self::rc_str);
         self.option(*init, Self::u16);
         self.map(member_of_vslot, |w, k| w.u16(*k), |w, v| w.usize(*v));
         self.list(member_of_sslot, |w, v| w.usize(*v));
@@ -268,10 +270,12 @@ impl Writer {
             name,
             methods,
             index,
+            ancestors,
         } = i;
         self.rc_str(name);
         self.list(methods, Self::rc_str);
         self.map(index, Self::rc_str, |w, v| w.u16(*v));
+        self.list(ancestors, Self::rc_str);
     }
 
     // ─── Modules ────────────────────────────────────────────────────────

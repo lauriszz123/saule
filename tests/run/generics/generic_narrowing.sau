@@ -23,7 +23,7 @@ end
 fn describe<T>(x: T) -> string
 	local slot: any = x
 
-	return type(slot)
+	return typeof(slot)
 end
 
 class Main

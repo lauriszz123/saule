@@ -162,7 +162,7 @@ fn collect(m: &Module) -> Vec<NodeId> {
                     expr(e, out)
                 }
             }
-            Decl::Interface { .. } | Decl::Import { .. } => {}
+            Decl::Interface { .. } | Decl::TypeAlias { .. } | Decl::Import { .. } => {}
         }
     }
 
