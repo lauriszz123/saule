@@ -51,17 +51,32 @@ fn os_builtins() -> saule_semantic::builtins::Builtins {
 }
 
 thread_local! {
-    /// Phantom class object reused as the type tag for every `FsInfo`
-    /// instance produced by `Os.fsInfo`. Populated by `install`.
+    /// The `FsInfo` class, the type tag of every instance `Os.fsInfo`
+    /// makes, and the `FsKind` and `OsPlatform` enums. Enum variants
+    /// compare by identity (`Rc::ptr_eq`), so what `Os.fsInfo` and
+    /// `Os.platform` hand out has to *be* what the prelude names: a freshly
+    /// built `Dir` matched `FsKind.Dir` in a `match` (which goes by tag) but
+    /// was never `==` to it. The class is kept the same way, so there is
+    /// one `FsInfo`, as there is one of each enum.
+    ///
+    /// Each is made the first time the prelude is installed on a thread and
+    /// that one installed every time after. The prelude is installed more
+    /// than once in a run — the compiler builds one for each module it
+    /// compiles, and the runtime its own — and each install used to make
+    /// new ones and replace these with them. Only the module whose prelude
+    /// happened to be installed last then saw `Os.platform() ==
+    /// OsPlatform.Macos` hold; in every other module it was false.
     static FSINFO_CLASS: RefCell<Option<Rc<ClassObject>>> = const { RefCell::new(None) };
-
-    /// The installed `FsKind` and `OsPlatform` enums. Enum variants compare
-    /// by identity (`Rc::ptr_eq`), so the variants `Os.fsInfo` and
-    /// `Os.platform` hand out have to *be* the prelude's singletons — a
-    /// freshly built `Dir` matched `FsKind.Dir` in a `match` (which goes by
-    /// tag) but was never `==` to it. Populated by `install`.
     static FS_KIND_ENUM: RefCell<Option<Rc<EnumObject>>> = const { RefCell::new(None) };
     static OS_PLATFORM_ENUM: RefCell<Option<Rc<EnumObject>>> = const { RefCell::new(None) };
+}
+
+/// The value in `slot`, made by `make` the first time it is asked for.
+fn installed_once<T>(
+    slot: &'static std::thread::LocalKey<RefCell<Option<Rc<T>>>>,
+    make: impl FnOnce() -> Rc<T>,
+) -> Rc<T> {
+    slot.with(|s| s.borrow_mut().get_or_insert_with(make).clone())
 }
 
 /// The prelude's own variant `name` of an installed enum, so it is `==` to
@@ -296,38 +311,11 @@ fn tag_in(variants: &[(&str, &str)], name: &str) -> u32 {
 }
 
 fn install_platform_enum(env: &Rc<RefCell<Prelude>>) {
-    let variants = &OS_PLATFORM_VARIANTS;
-    let name = "OsPlatform";
-    let mut variant_dict = fxmap();
-    let mut by_tag = Vec::with_capacity(variants.len());
-    let mut tags = fxmap();
-    // Declaration order is the slice order, so the index is the tag.
-    for (tag, (vname, vvalue)) in variants.iter().enumerate() {
-        let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string().into(),
-            variant_name: (*vname).to_string().into(),
-            tag: tag as u32,
-            value: std::cell::OnceCell::from(Value::Str(SauleStr::new((*vvalue).to_string()))),
-            enum_obj: RefCell::new(None),
-        });
-        variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
-        by_tag.push(Some(variant));
-        tags.insert((*vname).to_string(), tag as u32);
-    }
-    let final_enum = Rc::new(EnumObject {
-        name: name.to_string(),
-        variants: variant_dict.clone(),
-        by_tag,
-        tags,
-        tuple_variants: Default::default(),
-        methods: Default::default(),
+    let platform = installed_once(&OS_PLATFORM_ENUM, || {
+        build_enum("OsPlatform", &OS_PLATFORM_VARIANTS)
     });
-    for v in variant_dict.values() {
-        *v.enum_obj.borrow_mut() = Some(final_enum.clone());
-    }
-    OS_PLATFORM_ENUM.with(|slot| *slot.borrow_mut() = Some(final_enum.clone()));
     env.borrow_mut()
-        .define(name.to_string(), Value::Enum(final_enum));
+        .define("OsPlatform".to_string(), Value::Enum(platform));
 }
 
 // ─── argv passthrough ──────────────────────────────────────────────────────
@@ -1037,12 +1025,17 @@ fn os_parsedate(args: &[Value]) -> Result<Vec<Value>, String> {
 // ─── FsInfo / FsKind ───────────────────────────────────────────────────────
 
 fn install_fskind_enum(env: &Rc<RefCell<Prelude>>) {
-    let variants = &FS_KIND_VARIANTS;
-    let name = "FsKind";
+    let kind = installed_once(&FS_KIND_ENUM, || build_enum("FsKind", &FS_KIND_VARIANTS));
+    env.borrow_mut()
+        .define("FsKind".to_string(), Value::Enum(kind));
+}
+
+/// A prelude enum `name` of `variants`, given in declaration order: the
+/// index is the tag, and each variant's value is its string.
+fn build_enum(name: &str, variants: &[(&str, &str)]) -> Rc<EnumObject> {
     let mut variant_dict = fxmap();
     let mut by_tag = Vec::with_capacity(variants.len());
     let mut tags = fxmap();
-    // Declaration order is the slice order, so the index is the tag.
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
         let variant = Rc::new(EnumVariantObject {
             enum_name: name.to_string().into(),
@@ -1055,7 +1048,7 @@ fn install_fskind_enum(env: &Rc<RefCell<Prelude>>) {
         by_tag.push(Some(variant));
         tags.insert((*vname).to_string(), tag as u32);
     }
-    let final_enum = Rc::new(EnumObject {
+    let built = Rc::new(EnumObject {
         name: name.to_string(),
         variants: variant_dict.clone(),
         by_tag,
@@ -1064,11 +1057,9 @@ fn install_fskind_enum(env: &Rc<RefCell<Prelude>>) {
         methods: Default::default(),
     });
     for v in variant_dict.values() {
-        *v.enum_obj.borrow_mut() = Some(final_enum.clone());
+        *v.enum_obj.borrow_mut() = Some(built.clone());
     }
-    FS_KIND_ENUM.with(|slot| *slot.borrow_mut() = Some(final_enum.clone()));
-    env.borrow_mut()
-        .define(name.to_string(), Value::Enum(final_enum));
+    built
 }
 
 /// The fields `Os.fsInfo` fills, in slot order.
@@ -1083,33 +1074,34 @@ const FSINFO_FIELDS: [&str; 5] = ["path", "kind", "size", "modifiedAt", "readOnl
 /// lookup resolves. Has no user-callable methods of its own; field access
 /// goes through the class's [`FieldLayout`] like any other instance.
 fn install_fsinfo_class(env: &Rc<RefCell<Prelude>>) {
-    let field_defs: Vec<FieldDef> = FSINFO_FIELDS
-        .iter()
-        .map(|n| FieldDef {
-            name: (*n).to_string(),
+    let class = installed_once(&FSINFO_CLASS, || {
+        let field_defs: Vec<FieldDef> = FSINFO_FIELDS
+            .iter()
+            .map(|n| FieldDef {
+                name: (*n).to_string(),
+            })
+            .collect();
+        let layout = Rc::new(crate::value::FieldLayout::build(None, &field_defs));
+        Rc::new(ClassObject {
+            interfaces: Vec::new(),
+            name: "FsInfo".to_string(),
+            parent: None,
+            layout,
+            methods: Default::default(),
+            static_fields: RefCell::new(Default::default()),
+            slot_statics: None,
+            static_methods: Default::default(),
         })
-        .collect();
-    let layout = Rc::new(crate::value::FieldLayout::build(None, &field_defs));
-    let class = Rc::new(ClassObject {
-        interfaces: Vec::new(),
-        name: "FsInfo".to_string(),
-        parent: None,
-        layout,
-        methods: Default::default(),
-        static_fields: RefCell::new(Default::default()),
-        slot_statics: None,
-        static_methods: Default::default(),
     });
-    FSINFO_CLASS.with(|slot| *slot.borrow_mut() = Some(class.clone()));
     env.borrow_mut()
         .define("FsInfo".to_string(), Value::Class(class));
 }
 
 fn fskind_variant(kind: &str) -> Value {
-    // The installed prelude variant, so `info.kind == FsKind.Dir` holds.
-    // `install` refreshes the slot, so a rebuilt environment never sees a
-    // stale enum. Falls back to a freshly-constructed variant if the enum
-    // isn't installed (which would only happen if the stdlib wasn't loaded).
+    // The installed prelude variant, so `info.kind == FsKind.Dir` holds in
+    // every module (see `FS_KIND_ENUM`). Falls back to a freshly-constructed
+    // variant if the enum isn't installed (which would only happen if the
+    // stdlib wasn't loaded).
     if let Some(v) = installed_variant(&FS_KIND_ENUM, kind) {
         return v;
     }
@@ -1248,4 +1240,78 @@ pub fn builtin_registries() -> (
     classes.insert("FsInfo".to_string(), info);
 
     (classes, ifaces, enums)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The standard prelude, as the compiler builds it for a module.
+    fn prelude() -> Rc<RefCell<Prelude>> {
+        crate::init();
+        Prelude::with_std()
+    }
+
+    fn named(prelude: &Rc<RefCell<Prelude>>, name: &str) -> Value {
+        prelude.borrow().get(name).expect("installed")
+    }
+
+    fn enum_of(value: Value) -> Rc<EnumObject> {
+        match value {
+            Value::Enum(e) => e,
+            other => panic!("not an enum: {other:?}"),
+        }
+    }
+
+    /// The prelude is installed once per module the compiler compiles, and
+    /// again by the runtime. Every install has to name the same enums, or
+    /// `==` holds only in whichever module's prelude came last; and the
+    /// same class, so there is one `FsInfo`.
+    #[test]
+    fn every_prelude_names_the_same_enums_and_class() {
+        let first = prelude();
+        let second = prelude();
+        for name in ["OsPlatform", "FsKind"] {
+            assert!(
+                Rc::ptr_eq(
+                    &enum_of(named(&first, name)),
+                    &enum_of(named(&second, name))
+                ),
+                "two {name}s"
+            );
+        }
+        let class = |p: &Rc<RefCell<Prelude>>| match named(p, "FsInfo") {
+            Value::Class(c) => c,
+            other => panic!("not a class: {other:?}"),
+        };
+        assert!(Rc::ptr_eq(&class(&first), &class(&second)), "two FsInfos");
+    }
+
+    /// What `Os.platform` hands out is the variant an earlier prelude names,
+    /// not only the latest's.
+    #[test]
+    fn os_platform_is_the_variant_every_prelude_names() {
+        let earlier = prelude();
+        let _later = prelude();
+        let Value::EnumVariant(given) = os_platform(&[]).expect("a platform")[0].clone() else {
+            panic!("Os.platform gave no variant");
+        };
+        let platform = enum_of(named(&earlier, "OsPlatform"));
+        let named_variant = platform
+            .variants
+            .get(&*given.variant_name)
+            .expect("a known variant");
+        assert!(Rc::ptr_eq(&given, named_variant));
+    }
+
+    #[test]
+    fn fs_kind_is_the_variant_every_prelude_names() {
+        let earlier = prelude();
+        let _later = prelude();
+        let Value::EnumVariant(given) = fskind_variant("Dir") else {
+            panic!("no variant");
+        };
+        let kind = enum_of(named(&earlier, "FsKind"));
+        assert!(Rc::ptr_eq(&given, kind.variants.get("Dir").expect("Dir")));
+    }
 }
