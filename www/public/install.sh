@@ -2,6 +2,7 @@
 # Saule installer.
 #
 #   curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+#   curl -fsSL https://lauriszz123.github.io/saule/install.sh | SAULE_CHANNEL=latest sh
 #
 # Downloads the release archive for this machine from the Saule project's
 # GitHub releases, verifies it against SHA256SUMS, and installs both binaries
@@ -11,7 +12,8 @@
 # whatever /bin/sh is on macOS, because `curl | sh` picks the shell and the
 # script does not get a say.
 #
-# Environment:
+# Environment, given to the `sh` after the pipe as above (written before
+# `curl`, a variable reaches curl alone and this script never sees it):
 #   SAULE_CHANNEL   `stable` (default) or `latest`. See "Which channel?".
 #   SAULE_VERSION   install this exact version instead of resolving a channel,
 #                   e.g. 26.7. Overrides SAULE_CHANNEL.
@@ -30,6 +32,8 @@ GITHUB_REPO="lauriszz123/saule"
 
 WEB="$GITHUB_HOST/$GITHUB_REPO"
 API="https://api.github.com/repos/$GITHUB_REPO"
+# Where this script is served from, for the commands its messages suggest.
+INSTALL_URL="https://lauriszz123.github.io/saule/install.sh"
 
 say() { printf 'saule: %s\n' "$*"; }
 err() { printf 'saule: error: %s\n' "$*" >&2; exit 1; }
@@ -190,7 +194,8 @@ resolve_stable_tag() {
     json="$(fetch_stdout "$API/releases/latest" 2>/dev/null || true)"
     [ -n "$json" ] || err "could not resolve the latest stable release from $WEB/releases.
     Are you online, and has any release been marked stable yet?
-    Try SAULE_CHANNEL=latest, or set SAULE_VERSION to install a specific one."
+    Try the latest channel: curl -fsSL $INSTALL_URL | SAULE_CHANNEL=latest sh
+    or one version:         curl -fsSL $INSTALL_URL | SAULE_VERSION=26.7 sh"
 
     tag="$(printf '%s' "$json" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \

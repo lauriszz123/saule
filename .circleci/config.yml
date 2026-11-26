@@ -909,7 +909,7 @@ jobs:
             echo "Published: https://github.com/$GITHUB_REPO/releases/tag/$TAG"
             echo
             echo "This is a PRE-RELEASE, so it is on the \`latest\` channel only:"
-            echo "  SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh"
+            echo "  curl -fsSL https://lauriszz123.github.io/saule/install.sh | SAULE_CHANNEL=latest sh"
             echo
             echo "The default \`stable\` channel will not offer it until it is blessed:"
             echo "  gh release edit $TAG --prerelease=false --latest"
