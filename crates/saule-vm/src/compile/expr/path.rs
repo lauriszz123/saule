@@ -64,6 +64,53 @@ impl Compiler<'_> {
         Ok(true)
     }
 
+    /// `e == nil` or `e != nil` feeding a branch, where `e` is a chain of
+    /// field reads: asked of the field where it lies (`ISNILP`), the answer
+    /// tested, and the object the field may hold never read into a
+    /// register. `skip_if_nil` is the sense — the instruction after the
+    /// test is skipped when the value is nil, as `JNIL` skips, or when it
+    /// is not. Says whether it was emitted.
+    ///
+    /// Any chain will do, one link included: a lone `row.mid` is a `GETF`
+    /// when its value is wanted, and here its value is not.
+    pub(crate) fn nil_test_on_path(
+        &mut self,
+        e: &Spanned<Expr>,
+        skip_if_nil: bool,
+        span: &std::ops::Range<usize>,
+    ) -> Result<bool, CompileError> {
+        let Some((root, links)) = self.field_path(e) else {
+            return Ok(false);
+        };
+        let path = FieldPath {
+            links: links.into_boxed_slice(),
+        };
+        let (idx, added) = match self.f.paths.iter().position(|p| *p == path) {
+            Some(i) => (i, false),
+            None => {
+                self.f.paths.push(path);
+                (self.f.paths.len() - 1, true)
+            }
+        };
+        let Ok(c) = u8::try_from(idx) else {
+            if added {
+                self.f.paths.pop();
+            }
+            return Ok(false);
+        };
+        let in_place = self.operand_is_pure(root);
+        let m = self.mark();
+        let r = self.operand_to_reg(root, in_place)?;
+        let t = self.alloc(span)?;
+        let (a, b) = (self.reg8(t, span)?, self.reg8(r, span)?);
+        self.emit(Instruction::abc(Op::ISNILP, a, b, c), span);
+        // `TEST` skips when the register's truth is not its `C`: on true
+        // (nil) for `C` 0, on false (not nil) for `C` 1.
+        self.emit(Instruction::abc(Op::TEST, a, 0, !skip_if_nil as u8), span);
+        self.free_to(m);
+        Ok(true)
+    }
+
     /// The chain of field links `e` ends in, outermost last, and the
     /// expression it starts from. `None` when `e` is not a field link at all.
     fn field_path<'e>(&self, e: &'e Spanned<Expr>) -> Option<(&'e Spanned<Expr>, Vec<PathLink>)> {

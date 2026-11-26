@@ -47,7 +47,7 @@ use crate::op::{Instruction, Op};
 use super::call::Site;
 use super::ops::{
     bad_iter_result, cast_holds, convert_to, field_slot_err, float_in_range, index_array,
-    int_in_range, jump, not_iterable, operand_err, shift, snapshot_pairs,
+    int_in_range, jump, lease_array, not_iterable, operand_err, shift, snapshot_pairs,
 };
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
 
@@ -190,6 +190,11 @@ impl Vm {
         proto: &Proto,
         here: u32,
     ) -> Result<(), RuntimeError> {
+        // A coroutine yielding leaves through here too, and has thrown
+        // nothing: no need to go and look.
+        if matches!(e, RuntimeError::Yield) {
+            return Err(e);
+        }
         let Some(value) = saule_runtime::call::take_native_throw() else {
             return Err(e);
         };
@@ -200,10 +205,10 @@ impl Vm {
     /// `CALLMX`: a method call on a receiver the compiler could not prove,
     /// handed to the runtime's dynamic method dispatch.
     ///
-    /// Also where a coroutine yields: `co.yield(v)` is a method call on the
-    /// yielder, and when it is made by the coroutine's own code it is the
-    /// one call that must *leave* the dispatch loop — see
-    /// [`Vm::try_yield`]. `pc` is the instruction after this one, which is
+    /// A coroutine yields through the same opcode: `co.yield(v)` is a method
+    /// call on the yielder, and when it is made by the coroutine's own code
+    /// it is the one call that must *leave* the dispatch loop
+    /// ([`Vm::yield_at`]). `pc` is the instruction after this one, which is
     /// where a resumed coroutine continues.
     #[inline(never)]
     #[allow(clippy::too_many_arguments)]
@@ -217,8 +222,17 @@ impl Vm {
         site: &Site<'_>,
         pc: usize,
     ) -> Result<(), RuntimeError> {
-        let key = chunk.constants[k as usize].clone();
-        let Value::Str(name) = &key else {
+        // A coroutine's own `yield` leaves the loop from here, keeping
+        // every frame. Asked first, and only of a coroutine's register
+        // file: a yield is the commonest thing a coroutine does. (Here and
+        // not in the `CALLMX` arm, which is in the dispatch loop: a test
+        // added there cost `oop` 8%, though it makes no such call.)
+        if self.coroutine != 0 && self.yield_at(k, ins, base + a, chunk, pc) {
+            return Err(RuntimeError::Yield);
+        }
+        // Read where it is: the chunk outlives the call, and a copy of the
+        // name was a reference taken and given back for every call.
+        let Value::Str(name) = &chunk.constants[k as usize] else {
             return Err(RuntimeError::Internal {
                 message: "internal: CALLMX name is not a string".into(),
                 span: site.span(),
@@ -233,16 +247,8 @@ impl Vm {
         } else {
             ins.c() - 1
         };
-        if let Value::Coroutine(c) = self.reg(base + a)
-            && name.as_str() == "yield"
-        {
-            let c = Rc::clone(c);
-            if self.try_yield(&c, base + a, n_args, n_ret, pc) {
-                return Err(RuntimeError::Yield);
-            }
-            // Not this register file's coroutine: the runtime path below
-            // reports why it cannot yield from here.
-        }
+        // (A `yield` that is not this register file's coroutine's gets
+        // here, and the runtime path below reports why it cannot yield.)
         let recv = (*self.reg(base + a)).clone();
         let args: Vec<Value> = (0..n_args)
             .map(|i| (*self.reg(base + a + 1 + i)).clone())
@@ -948,26 +954,76 @@ impl Vm {
                         // inside the loop does not change what the loop sees.
                         // Reproducing that exactly is why this materialises
                         // the pairs up front rather than holding a cursor.
-                        let pairs = match self.reg(base + a) {
-                            Value::Table(t) => snapshot_pairs(&t.borrow()),
+                        //
+                        // A table that is all array is not copied to get
+                        // that: see `lease_array`.
+                        self.ensure_stack(base + a + 6);
+                        let leased = match self.reg(base + a) {
+                            Value::Table(t) => lease_array(t),
                             other => {
                                 return Err(not_iterable(other.type_name(), proto.span_at(here)));
                             }
                         };
-                        let empty = pairs.is_empty();
-                        self.ensure_stack(base + a + 5);
-                        *self.reg_mut(base + a) =
-                            Value::Table(Rc::new(RefCell::new(TableObject::from_array(pairs))));
-                        *self.reg_mut(base + a + 1) = Value::Int(0);
-                        if empty {
-                            pc = jump(pc, ins.bx() as i32);
+                        if let Some(lease) = leased {
+                            *self.reg_mut(base + a + 5) = Value::Table(lease);
+                            *self.reg_mut(base + a + 1) = Value::Int(-1);
+                        } else {
+                            let pairs = match self.reg(base + a) {
+                                Value::Table(t) => snapshot_pairs(&t.borrow()),
+                                _ => Vec::new(),
+                            };
+                            let empty = pairs.is_empty();
+                            *self.reg_mut(base + a) =
+                                Value::Table(Rc::new(RefCell::new(TableObject::from_array(pairs))));
+                            *self.reg_mut(base + a + 1) = Value::Int(0);
+                            if empty {
+                                pc = jump(pc, ins.bx() as i32);
+                            }
                         }
                     }
                     Op::ITERNEXT => {
-                        let i = match self.reg(base + a + 1) {
-                            Value::Int(n) => *n as usize,
+                        let at = match self.reg(base + a + 1) {
+                            Value::Int(n) => *n,
                             _ => 0,
                         };
+                        // An array gone over in place counts down from -1
+                        // (see `lease_array`): element `-at - 1` of the
+                        // array, while the lease is still the array's, and
+                        // of the copy the lease holds once the array has
+                        // been written to.
+                        if at < 0 {
+                            let i = (-(at + 1)) as usize;
+                            // Cloned straight out of its slot: handed on
+                            // as an `Option<Value>` it went through the
+                            // stack in pieces, and reading it back whole
+                            // was a third of the step.
+                            let v = {
+                                let (Value::Table(t), Value::Table(lease)) =
+                                    (self.reg(base + a), self.reg(base + a + 5))
+                                else {
+                                    continue;
+                                };
+                                let t = t.borrow();
+                                if t.array.leased_to(lease) {
+                                    if i >= t.array.len() {
+                                        continue;
+                                    }
+                                    t.array[i].clone()
+                                } else {
+                                    let kept = lease.borrow();
+                                    if i >= kept.array.len() {
+                                        continue;
+                                    }
+                                    kept.array[i].clone()
+                                }
+                            };
+                            *self.reg_mut(base + a + 1) = Value::Int(at - 1);
+                            *self.reg_mut(base + a + 3) = Value::Int(i as i64 + 1);
+                            self.set_reg(base + a + 4, v);
+                            pc = jump(pc, ins.sbx());
+                            continue;
+                        }
+                        let i = at as usize;
                         let (k, v, more) = match self.reg(base + a) {
                             Value::Table(t) => {
                                 let t = t.borrow();
@@ -1000,9 +1056,15 @@ impl Vm {
                         // one would end a single-variable loop early here
                         // and run to completion under the tree-walker.
                         let src = (*self.reg(base + a)).clone();
-                        self.ensure_stack(base + a + 5);
+                        self.ensure_stack(base + a + 6);
                         match src {
                             Value::Table(t) => {
+                                if let Some(lease) = lease_array(&t) {
+                                    *self.reg_mut(base + a + 5) = Value::Table(lease);
+                                    *self.reg_mut(base + a + 1) = Value::Int(-1);
+                                    *self.reg_mut(base + a + 2) = Value::Bool(false);
+                                    continue;
+                                }
                                 let pairs = snapshot_pairs(&t.borrow());
                                 let empty = pairs.is_empty();
                                 *self.reg_mut(base + a) = Value::Table(Rc::new(RefCell::new(
@@ -1309,6 +1371,19 @@ impl Vm {
                         *self.reg_mut(base + a) = Value::Bool(ok);
                     }
 
+                    // The opcodes kept out of the loop: `self.items[i]` read
+                    // and written without the table copied out of its field
+                    // first, and `row.mid == nil` asked of the field where
+                    // it lies. **One arm and one call for all of them**, out
+                    // of line as `CALLNAT` is: an arm each, though each was
+                    // only a call, cost `fib` 6% and `mandel` 8%, which run
+                    // none of them. A failure is left in `Vm::fault`.
+                    Op::GETFIDX | Op::GETFIDXU | Op::SETFIDX | Op::ISNILP => {
+                        if !self.outlined(op, base, ins, &proto, here) {
+                            return Err(self.take_fault());
+                        }
+                    }
+
                     // `x as T` where the cast converts rather than tests.
                     // The conversion is the tree-walker's own function, for
                     // the reason `CASTCHK` calls into its `cast`: one
@@ -1579,15 +1654,18 @@ impl Vm {
                             }
                             other => return Err(operand_err(other, "instance", &proto, here)),
                         };
-                        *self.reg_mut(base + a) = v;
+                        // What a field is read into is nearly always a
+                        // temporary that held a number: see `set_reg`.
+                        self.set_reg(base + a, v);
                     }
                     // `a.b?.c!.d` — every link in one instruction, and only
                     // the value at the end copied. See `FieldPath`.
                     Op::GETPATH => {
                         // SAFETY: the verifier proved `C < paths.len()` (§17).
                         let path = unsafe { proto.paths.get_unchecked(ins.c() as usize) };
-                        let v = self.follow_path(base + ins.b() as usize, path, &proto)?;
-                        self.set_reg(base + a, v);
+                        if !self.path_into(base + a, base + ins.b() as usize, path, &proto) {
+                            return Err(self.take_fault());
+                        }
                     }
                     Op::SETF => {
                         let slot = ins.b() as usize;
@@ -1661,7 +1739,11 @@ impl Vm {
                         let recv = base + a;
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
-                        let (tm, target) = self.vtable_lookup_cached(recv, slot, &proto, here)?;
+                        let hit = self.callee_packed(recv, slot, &proto, here);
+                        if hit == super::call::NO_HIT {
+                            return Err(self.take_fault());
+                        }
+                        let (tm, target) = ((hit >> 32) as usize, hit as u32);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         // `self` counts as an argument: the frame starts at
                         // the receiver, not past it.

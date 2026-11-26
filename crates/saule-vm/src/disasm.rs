@@ -152,7 +152,7 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
             .map(|cl| cl.name.to_string()),
         Op::VARIANT => c.enums.get(ins.bx() as usize).map(|e| e.name.to_string()),
         // `.3?.0!.1` — the slots, each with the operator that reached it.
-        Op::GETPATH => {
+        Op::GETPATH | Op::ISNILP => {
             let path = p.paths.get(ins.c() as usize)?;
             Some(
                 path.links

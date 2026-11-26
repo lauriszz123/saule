@@ -174,10 +174,9 @@ impl Compiler<'_> {
             let base = self.alloc_n(3, span)?;
             self.variant_ref_to(idx, tag as u32, base + 1, span)?;
             self.expr_to(expr, base + 2)?;
-            let setter = saule_runtime::Value::Native(std::rc::Rc::new(saule_runtime::NativeFn {
-                name: "<enum variant value>",
-                func: set_variant_value,
-            }));
+            let setter = saule_runtime::Value::Native(std::rc::Rc::new(
+                saule_runtime::NativeFn::new("<enum variant value>", set_variant_value),
+            ));
             let k = self.constant(setter, span)?;
             let a = self.reg8(base, span)?;
             self.emit(Instruction::abc(Op::CALLNAT, a, 3, 1), span);

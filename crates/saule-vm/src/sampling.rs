@@ -155,6 +155,12 @@ pub(crate) fn due() -> bool {
     PENDING.load(Relaxed)
 }
 
+/// Whether the profiler is on at all.
+#[inline(always)]
+pub(crate) fn on() -> bool {
+    ENABLED.load(Relaxed)
+}
+
 /// A native is about to run: what the sampler reports while it does.
 #[inline(always)]
 pub(crate) fn enter_native(name: &'static str) -> usize {

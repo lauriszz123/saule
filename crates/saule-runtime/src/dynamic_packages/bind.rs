@@ -701,6 +701,12 @@ fn make_native(rt: &Weak<PackageRt>, class: &str, spec: &MethodSpec) -> Value {
     let symbol = spec.symbol.clone();
     let returns = spec.returns.clone();
     let resolved: Cell<Option<NativeSymbolFn>> = Cell::new(None);
+    // Whether any declared result is, or holds, one of the package's enums:
+    // only those are given another form on the way back (`as_declared`).
+    // Asked once, at the first call, when the package's enums are all known:
+    // most natives return a number or nothing, and matching each result
+    // against its type on every call was a tenth of what a call cost.
+    let converts: Cell<Option<bool>> = Cell::new(None);
 
     let func = Box::new(move |args: &[Value]| -> Result<Vec<Value>, String> {
         let rt = rt
@@ -718,16 +724,31 @@ fn make_native(rt: &Weak<PackageRt>, class: &str, spec: &MethodSpec) -> Value {
             }
         };
         let result = call_native(&rt, raw, args)?;
-        let values = if returns.len() > 1 {
-            spread_multi_return(result, returns.len())
-        } else {
-            vec![result]
+        let converts = match converts.get() {
+            Some(known) => known,
+            None => {
+                let any = returns.iter().any(|ty| rt.mentions_enum(ty));
+                converts.set(Some(any));
+                any
+            }
         };
-        Ok(values
-            .into_iter()
-            .zip(returns.iter())
-            .map(|(v, ty)| rt.as_declared(v, ty))
-            .collect())
+        // One result, as most have: one vector, made once.
+        match returns.as_slice() {
+            [] => Ok(Vec::new()),
+            [ty] if converts => Ok(vec![rt.as_declared(result, ty)]),
+            [_] => Ok(vec![result]),
+            _ => {
+                let values = spread_multi_return(result, returns.len());
+                if !converts {
+                    return Ok(values);
+                }
+                Ok(values
+                    .into_iter()
+                    .zip(returns.iter())
+                    .map(|(v, ty)| rt.as_declared(v, ty))
+                    .collect())
+            }
+        }
     });
 
     Value::NativeClosure(Rc::new(NativeClosure {
@@ -816,9 +837,19 @@ fn call_native(rt: &PackageRt, raw: NativeSymbolFn, args: &[Value]) -> Result<Va
     native_host::enter();
     native_host::enter_package(rt.ctx.clone());
     let result = (|| {
-        let mut cargs = Vec::with_capacity(args.len());
+        // On the stack for as many arguments as nearly every call has: a
+        // vector here was an allocation and a free on every call.
+        const INLINE: usize = 8;
+        let mut inline = [std::mem::MaybeUninit::<CValue>::uninit(); INLINE];
+        let mut spilled: Vec<std::mem::MaybeUninit<CValue>> = Vec::new();
+        let slots: &mut [std::mem::MaybeUninit<CValue>] = if args.len() <= INLINE {
+            &mut inline[..args.len()]
+        } else {
+            spilled.resize(args.len(), std::mem::MaybeUninit::uninit());
+            &mut spilled[..]
+        };
         for (i, v) in args.iter().enumerate() {
-            cargs.push(native_host::value_to_cvalue(v).ok_or_else(
+            slots[i].write(native_host::value_to_cvalue(v).ok_or_else(
                 || match native_host::refusal(v) {
                     Some(why) => format!("cannot pass argument #{}: {why}", i + 1),
                     None => format!(
@@ -829,6 +860,11 @@ fn call_native(rt: &PackageRt, raw: NativeSymbolFn, args: &[Value]) -> Result<Va
                 },
             )?);
         }
+        // SAFETY: every one of the `args.len()` slots was written just
+        // above (an argument that could not be returned early), and
+        // `MaybeUninit<CValue>` has `CValue`'s layout.
+        let cargs: &[CValue] =
+            unsafe { std::slice::from_raw_parts(slots.as_ptr().cast::<CValue>(), slots.len()) };
 
         let mut out = CValue::nil();
         // SAFETY: `cargs` is a valid, contiguous, initialised slice; `out` is a

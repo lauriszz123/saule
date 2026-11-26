@@ -1,0 +1,161 @@
+-- A loop over a table sees the table as it was when the loop began
+-- (LANGUAGE §11.2), whatever its body does to it: appends, removes,
+-- replaces, sorts, empties, through a function or from a loop inside it.
+--
+-- A table that is all array is gone over where it is, not copied first,
+-- and is copied only if it is written to meanwhile
+-- (`saule_runtime::value::ArrayPart`): every way of writing to one is
+-- here, with what the loop has to go on seeing.
+local out: table<string> = {}
+local fn say(s: string) -> nil
+  Table.insert(out, s)
+end
+
+-- changed while looped over: appended, removed, replaced, cleared, sorted
+local seen0 = ""
+local a: table<integer> = {1, 2, 3, 4}
+for v in a do
+  Table.insert(a, v * 10)
+end
+seen0 = ""
+for v in a do
+  seen0 = seen0 .. v .. ","
+end
+say("append " .. #a .. " " .. seen0)
+
+local b: table<integer> = {1, 2, 3, 4}
+local seen = ""
+for i, v in b do
+  seen = seen .. i .. "=" .. v .. " "
+  Table.remove(b, 1)
+end
+say("remove " .. seen .. "left " .. #b)
+
+local c: table<integer> = {5, 6, 7}
+seen = ""
+for v in c do
+  c[2] = 99
+  c[3] = 100
+  seen = seen .. v .. " "
+end
+say("replace " .. seen .. c[2] .. " " .. c[3])
+
+local d: table<integer> = {3, 1, 2}
+seen = ""
+for v in d do
+  Table.sort(d, fn(x: integer, y: integer) -> boolean return x < y end)
+  seen = seen .. v .. " "
+end
+say("sort " .. seen .. d[1] .. d[2] .. d[3])
+
+-- two loops over one table, the inner changing it
+local e: table<integer> = {1, 2, 3}
+seen = ""
+for x in e do
+  for y in e do
+    if x == 1 and y == 1 then
+      Table.insert(e, 4)
+    end
+    seen = seen .. x .. y .. " "
+  end
+end
+say("nested " .. seen .. #e)
+
+-- a loop begun after a change sees the change; break, and loop again
+local f: table<integer> = {1, 2, 3}
+for v in f do
+  if v == 2 then
+    break
+  end
+end
+Table.insert(f, 4)
+seen = ""
+for v in f do
+  seen = seen .. v
+end
+say("again " .. seen)
+
+-- a key outside the array added while looping; mixed and map tables; nil holes
+local g: table<any, any> = {1, 2}
+seen = ""
+for k, v in g do
+  g["x"] = 5
+  seen = seen .. tostring(k) .. "=" .. tostring(v) .. " "
+end
+say("mapkey " .. seen)
+seen = ""
+for k, v in g do
+  seen = seen .. tostring(k) .. "=" .. tostring(v) .. " "
+end
+say("mixed " .. seen)
+local h: table<string, integer> = {b: 2, a: 1}
+seen = ""
+for k, v in h do
+  h["c"] = 3
+  seen = seen .. k .. v
+end
+say("map " .. seen)
+local n: table<any> = {1, nil, 3}
+seen = ""
+for i, v in n do
+  seen = seen .. i .. ":" .. tostring(v) .. " "
+end
+say("nils " .. seen)
+
+-- emptied, and an empty one
+local z: table<integer> = {1, 2, 3}
+seen = ""
+for v in z do
+  while #z > 0 do
+    Table.remove(z)
+  end
+  seen = seen .. v
+end
+say("clear " .. seen .. " " .. #z)
+local count = 0
+local none: table<integer> = {}
+for v in none do
+  count += 1
+end
+say("empty " .. count)
+
+-- the loop variable written to, a function changing the table, recursion
+local r: table<integer> = {1, 2, 3}
+local fn grow(t: table<integer>) -> nil
+  Table.insert(t, 0, 1)
+end
+seen = ""
+for i, v in r do
+  grow(r)
+  v = v + 100
+  seen = seen .. i .. ":" .. v .. " "
+end
+say("func " .. seen .. #r)
+local fn walk(t: table<integer>, depth: integer) -> integer
+  local total = 0
+  for v in t do
+    if depth > 0 then
+      total += walk(t, depth - 1)
+    else
+      total += 1
+    end
+  end
+  return total
+end
+say("recurse " .. walk({1, 2, 3}, 3))
+
+assert(#out == 14)
+assert(out[1] == "append 8 1,2,3,4,10,20,30,40,")
+assert(out[2] == "remove 1=1 2=2 3=3 4=4 left 0")
+assert(out[3] == "replace 5 6 7 99 100")
+assert(out[4] == "sort 3 1 2 123")
+assert(out[5] == "nested 11 12 13 21 22 23 24 31 32 33 34 4")
+assert(out[6] == "again 1234")
+assert(out[7] == "mapkey 1=1 2=2 ")
+assert(out[8] == "mixed 1=1 2=2 x=5 ")
+assert(out[9] == "map a1b2")
+assert(out[10] == "nils 1:1 2:nil 3:3 ")
+assert(out[11] == "clear 123 0")
+assert(out[12] == "empty 0")
+assert(out[13] == "func 1:101 2:102 3:103 6")
+assert(out[14] == "recurse 81")

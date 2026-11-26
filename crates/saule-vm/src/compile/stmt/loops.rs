@@ -188,7 +188,9 @@ impl Compiler<'_> {
         }
 
         self.f.enter_scope();
-        let base = self.alloc_n(5, span)?;
+        // Five registers of control block, and a sixth for the lease of an
+        // array gone over in place (`ArrayPart`).
+        let base = self.alloc_n(6, span)?;
         self.expr_to(iter, base)?;
 
         let a = self.reg8(base, span)?;
@@ -343,9 +345,9 @@ impl Compiler<'_> {
     ) -> Result<(), CompileError> {
         self.f.enter_scope();
         let nvars = vars.len() as u16;
-        // The same five-register control block as the proved table path, so
-        // `ITERNEXT` drives it unchanged.
-        let base = self.alloc_n(5, span)?;
+        // The same control block as the proved table path, lease register
+        // and all, so `ITERNEXT` drives it unchanged.
+        let base = self.alloc_n(6, span)?;
         self.expr_to(iter, base)?;
 
         let a = self.reg8(base, span)?;

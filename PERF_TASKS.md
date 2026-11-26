@@ -55,6 +55,207 @@ Measured min-of-9 interleaved, against the same binary without it:
 `loop_arith` **0.75x**, `mandel` **0.90x**, `bintree` **0.91x**, the rest at
 parity. No fixture, example or benchmark output changed.
 
+### A loop over an array no longer copies it ✓ DONE
+
+Found in a profile of a real program (the window manager of Saule Linux,
+idle), not of a benchmark: none of the thirty-one loops over a list of
+objects the way a view tree is walked every frame.
+
+`for v in t` has to see `t` as it was when the loop began (LANGUAGE §11.2),
+and `ITERPREP` got that by copying every key and value into a new table
+before the first step: two allocations, and a reference count taken and
+given back per element, for every loop. A table that is all array is now
+gone over where it is. The array part (`saule_runtime::value::ArrayPart`)
+hands the loop a *lease* and copies itself into it only if it is written to
+while a loop still holds it; an array nothing writes to keeps its lease, and
+looping over it again allocates nothing. Tables with entries outside the
+array are copied and sorted as before.
+
+The step itself was the other half: handing the element on as an
+`Option<Value>` sent it through the stack in pieces, and reading it back
+whole was a third of the step.
+
+Measured on a list of sixteen objects, summing a field: **28 → 15 ns** an
+element (Lua 5.4's `ipairs`: 18). `bench.py` old against new: level on every
+benchmark, so the test every `&mut` access to an array now makes costs
+nothing that shows.
+
+### A call into a native package ✓ DONE (in part)
+
+Three allocations a call are now one: the arguments are marshalled on the
+stack (up to eight), and one result is put straight into the vector that
+carries it. A result is matched against its declared type only where that
+type mentions one of the package's enums, which is asked once per native.
+`Timer.getTime()` from Saule: **86 → 67 ns**. What is left is four
+thread-local accesses a call (`native_host::enter`/`exit` and the package
+stack) and, on the package's side, a `String` allocated for every string
+argument.
+
+### `Math` calls: the name written out for every call ✓ DONE
+
+`mathlib` was the furthest behind Lua of all thirty-one, at 2.2x, and a
+third of it was this: `Math`'s own `expect_arity` wrote `Math.{name}` into
+a new `String` — for the message of a call with the wrong number of
+arguments — before looking at how many there were. Every `Math` call made
+a `String` and freed it. The count is looked at first now.
+
+The rest of the gap that could be had without new opcodes: a native that
+only works something out from its arguments has a shorter way in
+(`NativeFn::quick`), which is the native itself with its error let go of,
+so the two cannot disagree. The VM takes it first and skips what a call
+sets up in case a native runs Saule code; a call the native refuses goes
+the ordinary way, for the error.
+
+`mathlib`: **0.676 → 0.376 s**, 2.2x → 1.2x of Lua. What is left is the
+call itself, thirteen to an iteration: `Math.sqrt` of a `float` compiled
+to an opcode of its own would be the next step.
+
+`treewalk` is new with this: a tree of objects walked child list by child
+list, which nothing in the suite did. 1.33x of Lua before the loops stopped
+copying, 0.9x after.
+
+### Coroutines: a switch that takes nothing apart ✓ DONE (in part)
+
+`coroutine`, `coro_pipe` and `coro_tree` were 2.1x, 2.0x and 1.8x of Lua.
+Three things, in the order they were found:
+
+* A suspended coroutine's register file was a `Vm` **taken apart into its
+  fields** and boxed, and built again around them at the next resume: the
+  `Vm` copied four times and an allocation made and freed per round trip,
+  a fifth of what one cost. It is kept whole now. What that was for — a
+  suspended coroutine must not hold the program's `VmShared`, or one kept
+  in a module slot leaks the program — is done by swapping in the shared
+  state of no program (`VmShared::nobody`) while it is suspended.
+* `yield` found out it was a yield **on its way through the dynamic call**:
+  the method's name cloned, the yielder's coroutine looked up through its
+  weak reference (taken and given back), and then out again as an error
+  through `native_throw`, which went to a thread-local to ask whether a
+  native had thrown. The coroutine's own register file asks first now
+  (`Vm::yield_at`), the yielder knows its coroutine's address, and a
+  `Yield` is not asked about.
+* The values yielded were collected in a vector that was given away each
+  time and grown again from nothing.
+
+The test stays in `call_member_by_name` and out of the `CALLMX` arm: in
+the arm it was worth 3% more on `coroutine` and cost `oop`, which makes no
+such call, 8% — the dispatch loop's usual answer to anything put in it.
+
+`coroutine` **0.49 → 0.36 s**, `coro_pipe` 0.45 → 0.33, `coro_tree`
+0.38 → 0.32: about 1.45x of Lua each. What is left is the loop's side of it: a
+coroutine in a `for … in` is stepped through a boxed native closure that
+returns a `Vec`, with the driver copied into the call window at every
+step. A step opcode of its own would take most of that.
+
+### `generic`: no cost of its own, and two things on the way ✓ DONE (in part)
+
+`generic` was the furthest behind Lua once `mathlib` and the coroutines
+had moved, at 1.82x. Its bytecode has nothing generic in it — a `Stack<T>`
+compiles to the instructions a `Stack` of integers would — so what it
+measures is six calls an iteration: four method calls, a static one and a
+closure passed as an argument. Timed apart, against Lua: an empty method
+call 24 ns to 16, a static call 19 to 8, `self.items[i] = v` in a method
+39 to 20. The gap is the call, and reading a table out of a field to index
+it.
+
+Two things found on the way, neither of them `generic`'s alone:
+
+* **A method-cache hit came back through memory.** `vtable_lookup_cached`
+  returns `Result<(usize, u32), RuntimeError>`, written by the callee and
+  read back by the `CALLM` arm on every method call, to carry an error a
+  hit never has. `Vm::callee_packed` answers in one register and leaves
+  the error of the rare failure in `Vm::fault`. `oop` 0.053 → 0.048.
+  The first shape tried — the hit tested in the arm, the miss a second
+  call — was the same on `oop` and cost `loop_arith` and `mandel` 10%,
+  which make no method call: the arm had grown.
+* **`GETF` ran a destructor for a number.** It wrote its register with a
+  plain assignment, so every field read called `Value`'s drop glue for
+  what the register held, which is nearly always a number (`set_reg`).
+  `interp` 0.55 → 0.49, `entity` and `vecops` 5%.
+
+`generic` itself: 0.200 → 0.195. What would move it is not here: an
+instruction that indexes a table held in a field without copying the
+table into a register first (`self.items[self.top]` is a reference count
+taken and given back, through two calls, around every access), and a
+cheaper call. The first is a new opcode, which is the chunk ABI's to
+decide.
+
+Also tried and put back: building a static call's frame from the target's
+fields as it is written, so that the proto and chunk are not stored to the
+stack apart and read back as one sixteen-byte value. The profile put a
+quarter of `enter_static` on that read; the clock put 3% on a loop of
+nothing but static calls and nothing on any benchmark.
+
+### `self.items[i]` without copying the table out ✓ DONE
+
+The instruction the `generic` entry above said was missing: `GETFIDX`,
+`GETFIDXU` and `SETFIDX` index a table that `self` holds in a field where
+it lies, read (with and without `!`) and written. `GETF` then `GETIDX`
+copied the table into a register between the two — a reference count
+taken, and given back when the register was next written, each through a
+call — around every element a class read out of its own list.
+
+The receiver is register 0, which is what leaves room in three operands
+for the field's slot; emitted in a method, for a field declared as a
+table, with an index (and a value) that can run no code. Appended after
+`ISTYPE`. See the opcodes' own notes in `op.rs`.
+
+**One arm in the dispatch loop for the three.** An arm each — each only a
+call to an out-of-line function — was `generic` −5% and `interp` −4%, and
+`fib` +6%, `mandel` +8%, `loop_arith` +2.5%, none of which run them. One
+arm, `GETFIDX | GETFIDXU | SETFIDX`, calling one function that tells them
+apart, keeps the gain and leaves the rest where they were.
+
+`generic` 0.195 → 0.184 (1.75x of Lua at the start, 1.60x now), `interp`
+0.493 → 0.474.
+
+### `nullsafe`: a path's value went round through memory three times ✓ DONE
+
+`nullsafe` is `GETPATH` after `GETPATH` — `row.mid?.inner?.v`,
+`row.mid!.inner != nil` — and the walk itself was already what it should
+be: every link read in place, no object in the middle copied out. What
+cost a fifth of the benchmark was the end of it. `follow_path` answered
+`Result<Value, RuntimeError>`, and a path that ends at an object or a
+table (every nil test on one, every `?.tags`) had its clone written to
+the stack, copied into the `Result`, read back out and written to the
+stack again before it reached its register.
+
+`follow_path` answers where the value is now, and `Vm::path_into` clones
+it once, straight to the register, counting an object's or a table's
+reference in line. It is out of line and answers a `bool`, with the error
+in `Vm::fault`: the same change made in the arm was the same 13% on
+`nullsafe` and cost `loop_arith`, `fib` and `mandel` 8 to 10%.
+
+`nullsafe` **0.240 → 0.208 s**, 1.75x → 1.5x of Lua. What is left is the
+copies themselves: `if row.mid != nil` reads the object into a register,
+counted, to look at whether it is nil. A test that looks without reading
+would be an opcode of its own.
+
+### A nil test on a field without reading the field ✓ DONE
+
+What the `nullsafe` entry above left: `if row.mid != nil` read the object
+into a register, counted, to see whether it was nil. `ISNILP` walks the
+path (`GETPATH`'s, one link included) and writes only the answer; a `TEST`
+branches on it. Emitted by `nil_compare_jump` for any chain of field reads
+compared with nil in a condition.
+
+`nullsafe` 0.208 → 0.170 s (1.74x of Lua at the start, 1.24x now) and
+`bintree` 0.415 → 0.360 (every `if node.left != nil`), with `mandel`,
+`loop_arith`, `fib`, `generic`, `interp` and `json` where they were.
+**`oop` is 6% slower with it** (0.047 → 0.050, still under the 0.052 it
+began at), and so are `coroutine` (0.358 → 0.378) and `coro_pipe`
+(0.328 → 0.345), which keep most of what they had gained. None of them
+runs such an instruction: the arm it shares with `GETFIDX`
+is unchanged, so this is the jump table being one entry longer or the
+out-of-line function being larger. Moving the arm to the end of the
+`match` did not bring it back.
+
+It was a jump first (`JNILP`, skipping the next instruction itself, one
+instruction fewer). Four shapes of arm — its own, with the test in line;
+shared, answering 0, 1 or 2 through a `match`; shared, with `pc += skip`;
+its own again beside `JNIL` — were each a little faster on the two that
+use it and each `mandel` +12%, with `oop` +9% or `loop_arith` +7% beside
+it. What they had in common was an arm that changes `pc` after a call.
+
 ## The profiles these tasks are built on
 
 Leaf-weighted, `sample`, release build. **Do not re-measure these to start a

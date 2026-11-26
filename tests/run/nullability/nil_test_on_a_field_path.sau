@@ -1,0 +1,108 @@
+-- `x.field == nil` and `x.field != nil` in a condition, where the field
+-- is a chain of field reads: one link or several, with `?.` and `!`, either
+-- way round, under `and`, `or` and `not`, in an `if` and a `while`, from
+-- outside the class and from one of its own methods.
+--
+-- These compile to `ISNILP`, which asks the field where it lies and reads
+-- nothing into a register. What they answer is what `GETF` or `GETPATH`
+-- and then `JNIL` or `JNOTNIL` answered.
+class Leaf
+	v: integer?
+	fn init(v: integer?)
+		self.v = v
+	end
+end
+
+class Node
+	leaf: Leaf?
+	tags: table<integer>?
+	count: integer
+	fn init(leaf: Leaf?, tags: table<integer>?)
+		self.leaf = leaf
+		self.tags = tags
+		self.count = 0
+	end
+
+	-- nil tests on its own fields, from a method
+	fn kind() -> string
+		if self.leaf == nil then
+			return "bare"
+		end
+		if self.leaf!.v != nil and self.tags != nil then
+			return "full"
+		end
+		return "part"
+	end
+end
+
+class Root
+	node: Node?
+	fn init(node: Node?)
+		self.node = node
+	end
+end
+
+class Main
+	static fn describe(r: Root) -> string
+		local s: string = ""
+		if r.node == nil then
+			s = s .. "no-node "
+		else
+			s = s .. "node "
+		end
+		if r.node != nil and r.node!.leaf != nil then
+			s = s .. "leaf "
+		end
+		if r.node != nil and r.node!.leaf != nil and r.node!.leaf!.v != nil then
+			s = s .. "v=" .. r.node!.leaf!.v! .. " "
+		end
+		if r.node?.leaf == nil then
+			s = s .. "safe-nil "
+		end
+		if r.node?.leaf?.v != nil then
+			s = s .. "safe-v "
+		end
+		if not (r.node == nil) and r.node!.tags == nil then
+			s = s .. "no-tags "
+		end
+		if r.node == nil or r.node!.tags != nil then
+			s = s .. "or "
+		end
+		if nil != r.node then
+			s = s .. "flipped "
+		end
+		local seen: integer = 0
+		while r.node != nil and seen < 2 do
+			seen = seen + 1
+		end
+		local held: boolean = r.node != nil
+		return s .. seen .. " " .. tostring(held)
+	end
+
+	static fn main()
+		local rows: table<Root> = {
+			Root(nil),
+			Root(Node(nil, nil)),
+			Root(Node(Leaf(nil), {})),
+			Root(Node(Leaf(7), {1, 2})),
+			Root(Node(Leaf(0), nil)),
+		}
+		local out: table<string> = {}
+		for r in rows do
+			Table.insert(out, Main.describe(r))
+			if r.node != nil then
+				Table.insert(out, r.node!.kind())
+			end
+		end
+		assert(#out == 9)
+		assert(out[1] == "no-node safe-nil or 0 false")
+		assert(out[2] == "node safe-nil no-tags flipped 2 true")
+		assert(out[3] == "bare")
+		assert(out[4] == "node leaf or flipped 2 true")
+		assert(out[5] == "part")
+		assert(out[6] == "node leaf v=7 safe-v or flipped 2 true")
+		assert(out[7] == "full")
+		assert(out[8] == "node leaf v=0 safe-v no-tags flipped 2 true")
+		assert(out[9] == "part")
+	end
+end

@@ -435,7 +435,9 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
         width *= 2;
     }
 
-    table.borrow_mut().array = src;
+    // Through the array itself, not round it: a loop going over the table
+    // keeps the order it began with.
+    *table.borrow_mut().array = src;
     Ok(vec![Value::Nil])
 }
 
@@ -668,7 +670,7 @@ fn tbl_copy(args: &[Value]) -> Result<Vec<Value>, String> {
     let table = expect_table("Table.copy", args, 0)?;
     let t = table.borrow();
     Ok(vec![Value::Table(Rc::new(RefCell::new(TableObject {
-        array: t.array.clone(),
+        array: t.array.clone().into(),
         map: t.map.clone(),
     })))])
 }

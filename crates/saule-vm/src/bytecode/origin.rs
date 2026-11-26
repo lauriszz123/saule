@@ -74,10 +74,10 @@ impl Builtin {
 
     pub fn value(self) -> Value {
         match self {
-            Builtin::SetVariantValue => Value::Native(Rc::new(NativeFn {
-                name: "<enum variant value>",
-                func: crate::compile::class::set_variant_value,
-            })),
+            Builtin::SetVariantValue => Value::Native(Rc::new(NativeFn::new(
+                "<enum variant value>",
+                crate::compile::class::set_variant_value,
+            ))),
         }
     }
 }

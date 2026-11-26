@@ -1,0 +1,122 @@
+-- A table held in a field, indexed from a method: `self.items[i]`, read
+-- (with and without `!`) and written, by integer and by string key, past
+-- the end, through a table of tables, with other fields and elements for
+-- the index and the value, and while a loop is going over it.
+--
+-- Inside a method these compile to `GETFIDX`, `GETFIDXU` and `SETFIDX`,
+-- which index the table where it lies in the field. What they answer is
+-- what `GETF` and then `GETIDX` or `SETIDX` answered.
+class Bag
+	items: table<integer>
+	names: table<string, integer>
+	rows: table<table<integer>>
+	top: integer
+
+	fn init()
+		self.items = {}
+		self.names = {}
+		self.rows = {{1, 2}, {3, 4}}
+		self.top = 0
+	end
+
+	fn push(v: integer)
+		self.top = self.top + 1
+		self.items[self.top] = v
+	end
+
+	fn at(i: integer) -> integer?
+		return self.items[i]
+	end
+
+	fn sure(i: integer) -> integer
+		return self.items[i]!
+	end
+
+	fn swap(i: integer, j: integer)
+		local held: integer = self.items[i]!
+		self.items[i] = self.items[j]!
+		self.items[j] = held
+	end
+
+	fn name(k: string, v: integer)
+		self.names[k] = v
+	end
+
+	fn named(k: string) -> integer
+		return self.names[k] ?? -1
+	end
+
+	fn cell(r: integer, c: integer) -> integer
+		return self.rows[r]![c]!
+	end
+
+	fn setCell(r: integer, c: integer, v: integer)
+		self.rows[r]![c] = v
+	end
+
+	fn far(i: integer, v: integer)
+		self.items[i] = v
+	end
+
+	fn sum() -> integer
+		local total: integer = 0
+		for i: integer = 1, self.top do
+			total = total + self.items[i]! * i
+		end
+		return total
+	end
+
+	-- the index and the value read other fields and elements
+	fn shuffle()
+		self.items[self.top] = self.items[1]! + self.top
+		self.items[self.items[2]! - 19] = self.names["a"] ?? 0
+	end
+
+	-- a loop over the field's table while it is written to
+	fn doubled() -> integer
+		local seen: integer = 0
+		for i, v in self.items do
+			self.items[i] = v * 2
+			seen = seen + v
+		end
+		return seen
+	end
+end
+
+class Main
+	static fn main()
+		local b: Bag = Bag()
+		for i: integer = 1, 5 do
+			b.push(i * 10)
+		end
+		local out: table<string> = {}
+		Table.insert(out, tostring(b.at(1)) .. " " .. tostring(b.at(5)) .. " " .. tostring(b.at(6)) .. " " .. tostring(b.at(0)))
+		Table.insert(out, tostring(b.sure(3)))
+		b.swap(1, 5)
+		Table.insert(out, tostring(b.at(1)) .. " " .. tostring(b.at(5)))
+		b.name("a", 7)
+		b.name("b", 8)
+		Table.insert(out, tostring(b.named("a")) .. " " .. tostring(b.named("b")) .. " " .. tostring(b.named("zz")))
+		Table.insert(out, tostring(b.cell(2, 1)))
+		b.setCell(2, 1, 99)
+		Table.insert(out, tostring(b.cell(2, 1)))
+		b.far(6, 60)
+		b.far(9, 90)
+		Table.insert(out, tostring(b.at(6)) .. " " .. tostring(b.at(7)) .. " " .. tostring(b.at(9)) .. " " .. tostring(#b.items))
+		Table.insert(out, tostring(b.sum()))
+		b.shuffle()
+		Table.insert(out, tostring(b.at(5)) .. " " .. tostring(b.at(1)))
+		Table.insert(out, tostring(b.doubled()) .. " " .. tostring(b.at(1)) .. " " .. tostring(b.at(6)))
+		assert(#out == 10)
+		assert(out[1] == "10 50 nil nil")
+		assert(out[2] == "30")
+		assert(out[3] == "50 10")
+		assert(out[4] == "7 8 -1")
+		assert(out[5] == "3")
+		assert(out[6] == "99")
+		assert(out[7] == "60 nil 90 6")
+		assert(out[8] == "390")
+		assert(out[9] == "55 7")
+		assert(out[10] == "302 14 120")
+	end
+end
