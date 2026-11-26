@@ -188,6 +188,16 @@ pub struct Compiler<'a> {
     /// The `CALLSTAT` operand naming the static method about to be
     /// compiled, handed to its `FuncCtx` as `self_static`.
     pub pending_self_static: Option<u32>,
+    /// The static functions a call may be replaced by, by their `CALLSTAT`
+    /// operand: the ones whose body is a few early returns (see
+    /// `Compiler::inline_static_call`). Filled as each is compiled, so a
+    /// call written above the function it calls is still a call.
+    pub inline_statics: HashMap<u32, Rc<saule_ast::Method>>,
+    /// The call most recently compiled in place of itself
+    /// (`inline_static_call`), by node. `runs_in_place` promises that for
+    /// a call before it is compiled; `call_to_want` checks the promise
+    /// against this.
+    pub in_place_last: Option<saule_ast::NodeId>,
     /// Where this module's slots start in the program's flat slot space.
     /// Added to every module-slot operand by [`Compiler::mod_slot`].
     pub module_slot_base: usize,
@@ -241,6 +251,8 @@ impl<'a> Compiler<'a> {
             f: FuncCtx::module_body(),
             enclosing: Vec::new(),
             fn_protos: HashMap::new(),
+            inline_statics: HashMap::new(),
+            in_place_last: None,
             module_decls_seen: std::collections::HashSet::new(),
             module_decls: std::collections::HashSet::new(),
             module_refs: HashMap::new(),

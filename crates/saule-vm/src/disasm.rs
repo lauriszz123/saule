@@ -165,7 +165,7 @@ fn annotate(c: &Chunk, p: &Proto, op: Op, ins: Instruction, pc: usize) -> Option
                     .collect(),
             )
         }
-        Op::SWITCH => {
+        Op::SWITCH | Op::SWITCHTAG => {
             let t = c.jump_tables.get(ins.bx() as usize)?;
             Some(format!(
                 "{} arm(s), default -> {:04}",

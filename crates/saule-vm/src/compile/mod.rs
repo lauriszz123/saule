@@ -37,6 +37,7 @@
 pub mod class;
 pub mod ctx;
 pub mod expr;
+mod inline;
 pub mod layout;
 pub mod match_;
 pub mod peephole;
@@ -46,6 +47,7 @@ pub mod verify;
 /// Register allocation is part of the compiler's state, so it lives in
 /// [`ctx`]; this keeps the `compile::regalloc` path it had before.
 pub use ctx::regalloc;
+pub(crate) use inline::NO_SLOT;
 
 use std::ops::Range;
 

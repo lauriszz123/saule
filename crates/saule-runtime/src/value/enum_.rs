@@ -6,6 +6,40 @@ use std::rc::Rc;
 use super::class::MethodRef;
 use super::{SauleStr, Value};
 
+/// A tuple variant's fields. One and two are what most variants carry and
+/// are kept in place; more go to an allocation of their own.
+#[derive(Debug)]
+enum Fields {
+    None,
+    One([Value; 1]),
+    Two([Value; 2]),
+    Many(Box<[Value]>),
+}
+
+impl Fields {
+    fn of(mut values: Vec<Value>) -> Self {
+        match values.len() {
+            0 => Fields::None,
+            1 => Fields::One([values.remove(0)]),
+            2 => {
+                let second = values.remove(1);
+                Fields::Two([values.remove(0), second])
+            }
+            _ => Fields::Many(values.into_boxed_slice()),
+        }
+    }
+
+    #[inline]
+    fn as_slice(&self) -> &[Value] {
+        match self {
+            Fields::None => &[],
+            Fields::One(one) => one,
+            Fields::Two(two) => two,
+            Fields::Many(many) => many,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct EnumVariantObject {
     /// Shared, not owned: `NEWVAR` builds one of these per tuple-variant
@@ -21,14 +55,102 @@ pub struct EnumVariantObject {
     /// compile to an indexed jump instead of a chain of tests
     /// (`VM_DESIGN.md` §9.1–9.2).
     pub tag: u32,
-    /// A valued variant's value, or a tuple variant's payload. Set once:
-    /// at construction, or — for a valued variant whose value is an
-    /// expression rather than a literal — when its declaration runs, which
-    /// is when the expression may first be evaluated.
-    pub value: std::cell::OnceCell<Value>,
+    /// A valued variant's value. Set once: at construction, or — for a
+    /// valued variant whose value is an expression rather than a literal —
+    /// when its declaration runs, which is when the expression may first be
+    /// evaluated.
+    ///
+    /// For a tuple variant it is the table `.value` answers with, made from
+    /// `fields` the first time it is asked for and the truth from then on:
+    /// the table can be written to, `fields` cannot. See [`Self::value`].
+    value: std::cell::OnceCell<Value>,
+    /// What a tuple variant carries, `Event.Click(x, y)`'s `x` and `y`, in
+    /// the object itself: a `match` that names them reads them one load
+    /// after the tag, with no table in between. Empty for any other
+    /// variant.
+    fields: Fields,
     /// Reference to the enum so we can access methods. Stored in RefCell to
     /// allow updating after enum creation (breaking the circular reference issue).
     pub enum_obj: std::cell::RefCell<Option<Rc<EnumObject>>>,
+}
+
+impl EnumVariantObject {
+    /// A variant with a value of its own (`Red = "red"`), or with none yet.
+    pub fn valued(
+        enum_name: SauleStr,
+        variant_name: SauleStr,
+        tag: u32,
+        value: Option<Value>,
+        enum_obj: Option<Rc<EnumObject>>,
+    ) -> Self {
+        EnumVariantObject {
+            enum_name,
+            variant_name,
+            tag,
+            value: value.map(std::cell::OnceCell::from).unwrap_or_default(),
+            fields: Fields::None,
+            enum_obj: std::cell::RefCell::new(enum_obj),
+        }
+    }
+
+    /// A tuple variant carrying `fields`, in the order they were given.
+    pub fn carrying(
+        enum_name: SauleStr,
+        variant_name: SauleStr,
+        tag: u32,
+        fields: Vec<Value>,
+        enum_obj: Option<Rc<EnumObject>>,
+    ) -> Self {
+        let mut value = std::cell::OnceCell::new();
+        if fields.is_empty() {
+            // Nothing to keep in place, and `.value` is still a table.
+            value = std::cell::OnceCell::from(table_of(&[]));
+        }
+        EnumVariantObject {
+            enum_name,
+            variant_name,
+            tag,
+            value,
+            fields: Fields::of(fields),
+            enum_obj: std::cell::RefCell::new(enum_obj),
+        }
+    }
+
+    /// The variant's value: what it was declared with, or, for a tuple
+    /// variant, a table of its fields. `None` for a variant with neither.
+    ///
+    /// The table of a tuple variant is made here, once. It is an ordinary
+    /// table and may be written to, so from then on it is what the variant
+    /// carries and [`Self::field`] steps aside.
+    pub fn value(&self) -> Option<&Value> {
+        let fields = self.fields.as_slice();
+        if fields.is_empty() {
+            return self.value.get();
+        }
+        Some(self.value.get_or_init(|| table_of(fields)))
+    }
+
+    /// Give a valued variant the value its declaration computed. Does
+    /// nothing to a variant that has one.
+    pub fn set_value(&self, value: Value) {
+        let _ = self.value.set(value);
+    }
+
+    /// Field `i` (from 0) of a tuple variant nothing has asked the table
+    /// of. `None` otherwise, and the answer is then in [`Self::value`].
+    #[inline]
+    pub fn field(&self, i: usize) -> Option<&Value> {
+        match self.fields.as_slice().get(i) {
+            Some(field) if self.value.get().is_none() => Some(field),
+            _ => None,
+        }
+    }
+}
+
+fn table_of(fields: &[Value]) -> Value {
+    Value::Table(Rc::new(std::cell::RefCell::new(
+        super::TableObject::from_array(fields.to_vec()),
+    )))
 }
 
 #[derive(Debug)]

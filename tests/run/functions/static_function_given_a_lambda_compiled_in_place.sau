@@ -1,0 +1,94 @@
+-- `Main.pick(a, b, better)`, where `pick` only chooses between its
+-- arguments by calling one of them and `better` is a lambda held in a
+-- local, is compiled as the choice itself (`inline_static_call`). What
+-- comes out has to be what the call gives, whichever way it is written.
+class Pick
+  static fn best<T>(a: T, b: T, better: fn(T, T) -> boolean) -> T
+    if better(a, b) then
+      return a
+    end
+    return b
+  end
+
+  static fn clamp(v: integer, lo: integer, hi: integer) -> integer
+    if v < lo then
+      return lo
+    end
+    if v > hi then
+      return hi
+    end
+    return v
+  end
+
+  -- Not only a choice: it keeps what it is given, so it stays a call.
+  static fn apply(f: fn(integer, integer) -> boolean, a: integer, b: integer) -> boolean
+    return f(a, b)
+  end
+end
+
+local more: fn(integer, integer) -> boolean = (x, y) => x > y
+local less: fn(integer, integer) -> boolean = (x, y) => x < y
+
+assert(Pick.best(3, 9, more) == 9)
+assert(Pick.best(3, 9, less) == 3)
+assert(Pick.best(9, 3, more) == 9)
+assert(Pick.best(4, 4, more) == 4)
+
+-- Inside one another, and with the result written over an argument.
+local a = 5
+a = Pick.best(a, 2, more)
+assert(a == 5)
+a = Pick.best(Pick.best(1, 7, more), Pick.best(8, 3, less), more)
+assert(a == 7)
+
+-- Arguments are worked out once each, in the order written.
+local order = ""
+local fn noted(v: integer) -> integer
+  order = order .. v
+  return v
+end
+assert(Pick.best(noted(1), noted(2), more) == 2)
+assert(order == "12")
+
+-- No lambda at all: comparisons on its own arguments.
+assert(Pick.clamp(5, 1, 10) == 5)
+assert(Pick.clamp(-5, 1, 10) == 1)
+assert(Pick.clamp(50, 1, 10) == 10)
+order = ""
+assert(Pick.clamp(noted(3), noted(4), noted(9)) == 4)
+assert(order == "349")
+
+-- A lambda that is not held in a local for good, one that does more
+-- than compare, and a function that is more than a choice: all calls.
+local swapped = more
+swapped = less
+assert(Pick.best(3, 9, swapped) == 3)
+local longer: fn(string, string) -> boolean = (x, y) => String.len(x) > String.len(y)
+assert(Pick.best("pear", "fig", longer) == "pear")
+assert(Pick.apply(more, 2, 1))
+assert(not Pick.apply(less, 2, 1))
+
+-- In a loop, over many values, against the same thing written out.
+local sum = 0
+local check = 0
+local seed = 11
+for i = 1, 2000 do
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  local x = seed % 1000
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  local y = seed % 1000
+  sum += Pick.best(x, y, more) - Pick.clamp(x, 100, 900)
+  local big = y
+  if x > y then
+    big = x
+  end
+  local held = x
+  if x < 100 then
+    held = 100
+  elseif x > 900 then
+    held = 900
+  end
+  check += big - held
+end
+assert(sum == check)
+println("ok")

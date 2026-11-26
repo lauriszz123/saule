@@ -405,6 +405,14 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // comparison. `None` for a native comparator, which has nothing to hold
     // open — see `call_value_session`.
     let mut session = crate::call::call_value_session(&comp);
+    // A comparator that only compares its arguments, over values it can
+    // compare: sorted here, with no call at all.
+    if let Some(how) = session.as_ref().and_then(|s| s.compares())
+        && sort_plainly(&mut src, how)
+    {
+        *table.borrow_mut().array = src;
+        return Ok(vec![Value::Nil]);
+    }
     let mut width = 1;
     while width < n {
         let mut lo = 0;
@@ -439,6 +447,65 @@ fn tbl_sort(args: &[Value]) -> Result<Vec<Value>, String> {
     // keeps the order it began with.
     *table.borrow_mut().array = src;
     Ok(vec![Value::Nil])
+}
+
+/// Sort `items` as a comparator that is `how` would have them, without
+/// calling it. `false`, and `items` as they were, when they are not all
+/// what it compares: the sort that asks the comparator then says what a
+/// call of it says.
+///
+/// `(a, b) => a < b` is two instructions, and calling it took a frame
+/// pushed and popped for each of the three and a half million times a
+/// sort of 200 000 numbers asks: nine tenths of the sort.
+///
+/// The order is the one the merge above gives. Integers that compare equal
+/// are the same value, so any correct sort of them is that order. Floats
+/// have two zeros that compare equal and are not the same, and a NaN that
+/// answers `false` to everything: a NaN sends the whole sort back to the
+/// comparator, and the strict comparisons, the only ones taken for floats,
+/// leave equal values in the order they came in, as the merge does.
+fn sort_plainly(items: &mut [Value], how: crate::value::Comparison) -> bool {
+    use crate::value::Comparison::*;
+    match how {
+        IntLess | IntAtMost | IntGreater | IntAtLeast => {
+            if !items.iter().all(|v| matches!(v, Value::Int(_))) {
+                return false;
+            }
+            let key = |v: &Value| match v {
+                Value::Int(n) => *n,
+                _ => 0,
+            };
+            if matches!(how, IntLess | IntAtMost) {
+                items.sort_unstable_by_key(key);
+            } else {
+                items.sort_unstable_by_key(|v| std::cmp::Reverse(key(v)));
+            }
+        }
+        FloatLess | FloatGreater => {
+            if !items
+                .iter()
+                .all(|v| matches!(v, Value::Float(f) if !f.is_nan()))
+            {
+                return false;
+            }
+            let key = |v: &Value| match v {
+                Value::Float(f) => *f,
+                _ => 0.0,
+            };
+            // No NaN among them, so every pair has an order.
+            let order = |a: &Value, b: &Value| {
+                key(a)
+                    .partial_cmp(&key(b))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            };
+            if how == FloatLess {
+                items.sort_by(order);
+            } else {
+                items.sort_by(|a, b| order(b, a));
+            }
+        }
+    }
+    true
 }
 
 /// Ask the comparator whether `a` precedes `b`.

@@ -4,6 +4,51 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## 26.34
+
+### Changed
+
+- **`Table.sort` with a comparator that only compares**, `(a, b) => a < b`
+  and its like over integers or floats, sorts the numbers without calling
+  it: about eight times as fast for 200 000 of them. The order is the same;
+  any other comparator is called as before.
+- **`match` over an enum with guards** tests the tag once. An arm whose
+  guard fails goes straight to the next arm for the same variant, and an
+  arm of a `return match` returns where it used to jump to the return.
+- **Loops of arithmetic** run about a tenth faster: the instructions that
+  only read and write registers find them through one pointer.
+- **A call of a small method is no call.** A method of a few instructions
+  that cannot fail (a getter, a setter, `push` and `pop` of a stack kept
+  in a table) is compiled where it is called, after a test that the
+  object is of the class the method belongs to; an object of a subclass
+  takes the call as before. A constructor that only stores its arguments
+  is compiled in place too. About a third less time for code that is
+  mostly such calls.
+- **A generic function given a lambda** is compiled as what it does with
+  it: `pickMax(a, b, better)`, where `pickMax` only chooses between its
+  arguments by calling `better`, and `better` is `(x, y) => x > y` held
+  in a local, becomes the comparison.
+- **A tuple variant keeps its fields in itself.** `Event.Click(x, y)` was
+  a variant holding a table; it is one object now, made in a fifth less
+  time, and a `match` reads `x` and `y` straight out of it. `.value` is
+  the same table of the fields it was, made when first asked for.
+- **A function that is one `match` over its argument** is compiled where
+  it is called, like the generic function above.
+- **The false branch of an `if`** costs one instruction where it cost
+  two: about 5% off most programs, a fifth off recursive ones.
+- **`match` over an enum with fields** runs in about 60% of the time, all
+  of the above together.
+- **Two instructions added** (`ISREADY`, `SWITCHTAG`), so a program built
+  with `saule build` has to be built again.
+
+### Fixed
+
+- **A prelude enum compares equal to itself in every module.**
+  `Os.platform() == OsPlatform.Macos` and `info.kind == FsKind.Dir` held
+  only in the module compiled last.
+- **The installer's instructions** put `SAULE_CHANNEL` and `SAULE_VERSION`
+  on the `sh` after the pipe, where the script sees them.
+
 ## 26.33
 
 A faster virtual machine. Nothing in the language changes; on the benchmark

@@ -109,6 +109,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
                 | Op::UNARYX
                 | Op::TAILCALLK
                 | Op::TAILCALLS
+                | Op::ISREADY
         );
 
         // Register operands. `A` is a register for every format that has
@@ -134,7 +135,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
                     Op::GETMOD | Op::SETMOD => chunk.module_slot_base + chunk.module_slots,
                     Op::NEW => chunk.classes.len(),
                     Op::VARIANT => chunk.variant_refs.len(),
-                    Op::SWITCH => chunk.jump_tables.len(),
+                    Op::SWITCH | Op::SWITCHTAG => chunk.jump_tables.len(),
                     _ => usize::MAX,
                 };
                 if bx >= limit {

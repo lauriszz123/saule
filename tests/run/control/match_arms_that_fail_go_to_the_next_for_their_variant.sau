@@ -1,0 +1,107 @@
+-- A `match` over one enum's variants jumps by the tag to the first arm for
+-- it, and an arm whose guard or payload fails goes on to the next arm that
+-- can still take the value: a later arm for the same variant, a wildcard,
+-- or past the `match` (the compiler's `match_chain`). Each way of failing
+-- and each place to land is here, with what has to come out.
+enum Shape
+  Dot,
+  Line(length: integer),
+  Box(w: integer, h: integer),
+  Ring(r: integer)
+end
+
+-- Two arms for a variant, a guard between them, and other variants' arms
+-- in between: the failed guard skips those.
+local fn size(s: Shape) -> string
+  return match s
+    case Shape.Line(n) when n > 100 then "long " .. n
+    case Shape.Box(w, h) when w == h then "square " .. w
+    case Shape.Dot then "dot"
+    case Shape.Line(n) when n > 10 then "line " .. n
+    case Shape.Box(w, h) then "box " .. (w * h)
+    case Shape.Line(n) then "short " .. n
+    case Shape.Ring(r) then "ring " .. r
+  end
+end
+
+assert(size(Shape.Line(500)) == "long 500")
+assert(size(Shape.Line(50)) == "line 50")
+assert(size(Shape.Line(5)) == "short 5")
+assert(size(Shape.Box(3, 3)) == "square 3")
+assert(size(Shape.Box(3, 4)) == "box 12")
+assert(size(Shape.Dot) == "dot")
+assert(size(Shape.Ring(7)) == "ring 7")
+
+-- A failed guard with no arm left for its variant lands on the wildcard,
+-- and so does a variant no arm names.
+local fn named(s: Shape) -> string
+  return match s
+    case Shape.Line(n) when n > 100 then "long"
+    case Shape.Box(w, h) when w > h then "wide"
+    case Shape.Dot then "dot"
+    case _ then "other"
+  end
+end
+
+assert(named(Shape.Line(500)) == "long")
+assert(named(Shape.Line(1)) == "other")
+assert(named(Shape.Box(9, 1)) == "wide")
+assert(named(Shape.Box(1, 9)) == "other")
+assert(named(Shape.Dot) == "dot")
+assert(named(Shape.Ring(1)) == "other")
+
+-- A payload that has to be a particular value fails like a guard does.
+local fn origin(s: Shape) -> string
+  return match s
+    case Shape.Box(0, h) then "flat " .. h
+    case Shape.Line(0) then "no line"
+    case Shape.Box(w, 0) then "thin " .. w
+    case Shape.Box(w, h) then "box"
+    case Shape.Line(n) then "line"
+    case _ then "else"
+  end
+end
+
+assert(origin(Shape.Box(0, 4)) == "flat 4")
+assert(origin(Shape.Box(4, 0)) == "thin 4")
+assert(origin(Shape.Box(4, 4)) == "box")
+assert(origin(Shape.Line(0)) == "no line")
+assert(origin(Shape.Line(2)) == "line")
+assert(origin(Shape.Ring(2)) == "else")
+
+-- A wildcard with a guard: after it fails the arms below are tried for
+-- whatever the value is.
+local fn late(s: Shape, strict: boolean) -> string
+  return match s
+    case Shape.Line(n) when n > 100 then "long"
+    case _ when strict then "refused"
+    case Shape.Line(n) then "line"
+    case Shape.Dot then "dot"
+    case _ then "other"
+  end
+end
+
+assert(late(Shape.Line(500), true) == "long")
+assert(late(Shape.Line(5), true) == "refused")
+assert(late(Shape.Line(5), false) == "line")
+assert(late(Shape.Dot, false) == "dot")
+assert(late(Shape.Box(1, 1), false) == "other")
+
+-- As a statement, with what an arm changes seen after the `match`, and a
+-- loop over many values.
+local total = 0
+local shapes: table<Shape> = {
+  Shape.Line(200), Shape.Dot, Shape.Box(2, 5), Shape.Line(3), Shape.Ring(9), Shape.Box(4, 4)
+}
+for s in shapes do
+  match s
+    case Shape.Line(n) when n > 100 then total += 1000
+    case Shape.Line(n) then total += n
+    case Shape.Box(w, h) when w == h then total += 100
+    case Shape.Box(w, h) then total += w * h
+    case Shape.Dot then total += 1
+    case _ then total += 0
+  end
+end
+assert(total == 1000 + 1 + 10 + 3 + 0 + 100)
+println("ok")

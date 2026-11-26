@@ -47,7 +47,7 @@ use crate::op::{Instruction, Op};
 use super::call::Site;
 use super::ops::{
     bad_iter_result, cast_holds, convert_to, field_slot_err, float_in_range, index_array,
-    int_in_range, jump, lease_array, not_iterable, operand_err, shift, snapshot_pairs,
+    int_in_range, jump, lease_array, not_iterable, operand_err, put, shift, snapshot_pairs,
 };
 use super::{ALL_RESULTS, Closure, Upvalue, Vm};
 
@@ -151,13 +151,11 @@ impl Vm {
         site: &Site<'_>,
     ) -> Result<(), RuntimeError> {
         let (e_idx, tag) = ((packed >> 16) as usize, packed & 0xffff);
-        // The payload is an array-style table of the positional arguments,
-        // matching what the tree-walker's tuple-variant constructor builds —
-        // pattern destructuring reads it positionally.
+        // The positional arguments, kept in the variant itself — pattern
+        // destructuring reads them by position (`GETPAY`).
         let items: Vec<Value> = (0..n)
             .map(|i| (*self.reg(base + a + 1 + i)).clone())
             .collect();
-        let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(items))));
         let Some(e) = self.shared.enums.get(e_idx) else {
             return Err(RuntimeError::Internal {
                 message: format!("internal: no enum {e_idx}"),
@@ -166,13 +164,13 @@ impl Vm {
         };
         // Prebuilt once per engine — see `build_variant_names`.
         let names = &self.shared.variant_names[e_idx];
-        let v = saule_runtime::value::EnumVariantObject {
-            enum_name: names.enum_name.clone(),
-            variant_name: names.variants[tag as usize].clone(),
+        let v = saule_runtime::value::EnumVariantObject::carrying(
+            names.enum_name.clone(),
+            names.variants[tag as usize].clone(),
             tag,
-            value: std::cell::OnceCell::from(payload),
-            enum_obj: RefCell::new(Some(Rc::clone(e))),
-        };
+            items,
+            Some(Rc::clone(e)),
+        );
         *self.reg_mut(base + a) = Value::EnumVariant(Rc::new(v));
         Ok(())
     }
@@ -426,6 +424,11 @@ impl Vm {
                 )
             };
             let code: &[Instruction] = &proto.code;
+            // `R[0]` of this activation, held as a pointer: see `regs` in
+            // this module's header. Made again whenever the stack may have
+            // moved or `base` changed, which is after every arm but the
+            // ones that only read and write registers.
+            let mut regs: *mut Value = self.stack.as_mut_ptr().wrapping_add(base);
             // The previous instruction of *this* activation, for the pair
             // histogram. Reset on every `continue 'reentry` — a call or a
             // return — because a pair only means something within one
@@ -499,38 +502,115 @@ impl Vm {
                 // out of the loop exactly as it did when it was a nested `match`.
 
                 /// `R[A] = R[B] op R[C]`, integers.
+                /// `R[i]`, read through `regs`.
+                ///
+                /// SAFETY, for this and `w!`: `regs` is `R[0]` of the
+                /// running frame (made again whenever the stack may have
+                /// moved), and the verifier keeps every operand inside the
+                /// frame's registers (§17).
+                macro_rules! r {
+                    ($i:expr) => {
+                        unsafe { &*regs.add($i) }
+                    };
+                }
+                /// `R[i] = v`, through `regs`: what `set_reg` does.
+                macro_rules! w {
+                    ($i:expr, $v:expr) => {
+                        unsafe { put(regs.add($i), $v) }
+                    };
+                }
+                /// The integers in `R[x]` and `R[y]`, or out with the error
+                /// about the first that is not one.
+                macro_rules! ints {
+                    ($x:expr, $y:expr) => {{
+                        let (x, y) = ($x, $y);
+                        match (r!(x), r!(y)) {
+                            (Value::Int(l), Value::Int(r)) => (*l, *r),
+                            _ => {
+                                return Err(self.wrong_among(
+                                    base,
+                                    &[x, y],
+                                    "integer",
+                                    &proto,
+                                    here,
+                                ));
+                            }
+                        }
+                    }};
+                }
+                /// [`ints`], floats.
+                macro_rules! floats {
+                    ($x:expr, $y:expr) => {{
+                        let (x, y) = ($x, $y);
+                        match (r!(x), r!(y)) {
+                            (Value::Float(l), Value::Float(r)) => (*l, *r),
+                            _ => {
+                                return Err(self.wrong_among(base, &[x, y], "float", &proto, here));
+                            }
+                        }
+                    }};
+                }
+
                 macro_rules! int_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
-                        let ($l, $r) = self.int_pair(base, ins, &proto, here)?;
-                        self.set_reg(base + a, Value::Int($e));
+                        let ($l, $r) = ints!(ins.b() as usize, ins.c() as usize);
+                        w!(a, Value::Int($e));
+                        continue;
                     }};
                 }
 
                 /// `R[A] = R[B] op sC`, integer against a signed 8-bit immediate.
                 macro_rules! int_arith_imm {
                     (|$l:ident, $r:ident| $e:expr) => {{
-                        let $l = self.int_at(base + ins.b() as usize, &proto, here)?;
+                        let b = ins.b() as usize;
+                        let Value::Int($l) = *r!(b) else {
+                            return Err(self.wrong_among(base, &[b], "integer", &proto, here));
+                        };
                         let $r = ins.sc();
-                        self.set_reg(base + a, Value::Int($e));
+                        w!(a, Value::Int($e));
+                        continue;
                     }};
                 }
 
                 /// `R[A] = R[B] op R[C]`, floats.
                 macro_rules! float_arith {
                     (|$l:ident, $r:ident| $e:expr) => {{
-                        let ($l, $r) = self.float_pair(base, ins, &proto, here)?;
-                        self.set_reg(base + a, Value::Float($e));
+                        let ($l, $r) = floats!(ins.b() as usize, ins.c() as usize);
+                        w!(a, Value::Float($e));
+                        continue;
                     }};
                 }
 
                 /// Fused compare-and-branch: skip the following `JMP` when the
                 /// comparison holds. `R[A]` against `R[B]`, integers.
+                /// The other half of a conditional jump: the test did not
+                /// skip, so the instruction after it is next, and that is
+                /// most often the `JMP` to the false branch. Taken here, it
+                /// is one instruction fetched and no second trip through
+                /// the dispatch.
+                ///
+                /// A test is never a proto's last instruction and a `JMP`
+                /// lands inside the code (`compile::verify`), so both reads
+                /// are in bounds. `A` of a `JMP` asks for upvalues to be
+                /// closed; that one is left to its own arm.
+                macro_rules! or_jump {
+                    () => {{
+                        // SAFETY: see above.
+                        let next = unsafe { *code.get_unchecked(pc) };
+                        if next.raw_op() == Op::JMP as u8 && next.a() == 0 {
+                            pc = jump(pc + 1, next.sbx());
+                        }
+                    }};
+                }
+
                 macro_rules! jump_int {
                     (|$l:ident, $r:ident| $e:expr) => {{
                         let $l = self.int_at(base + a, &proto, here)?;
                         let $r = self.int_at(base + ins.b() as usize, &proto, here)?;
                         if $e {
                             pc += 1;
+                        } else {
+                            or_jump!();
                         }
                     }};
                 }
@@ -542,6 +622,8 @@ impl Vm {
                         let $r = ins.sc();
                         if $e {
                             pc += 1;
+                        } else {
+                            or_jump!();
                         }
                     }};
                 }
@@ -549,27 +631,40 @@ impl Vm {
                 /// [`jump_int`], floats.
                 macro_rules! jump_float {
                     (|$l:ident, $r:ident| $e:expr) => {{
-                        let $l = self.float_at(base + a, &proto, here)?;
-                        let $r = self.float_at(base + ins.b() as usize, &proto, here)?;
+                        let ($l, $r) = floats!(a, ins.b() as usize);
                         if $e {
                             pc += 1;
+                        } else {
+                            or_jump!();
                         }
+                        continue;
                     }};
                 }
 
                 match op {
                     // ---- §15.1 moves and constants -----------------------
                     Op::MOVE => {
-                        let v = (*self.reg(base + ins.b() as usize)).clone();
-                        self.set_reg(base + a, v);
+                        let v = r!(ins.b() as usize).clone();
+                        w!(a, v);
+                        continue;
                     }
                     Op::LOADK => {
                         let v = chunk.constants[ins.bx() as usize].clone();
-                        self.set_reg(base + a, v);
+                        w!(a, v);
+                        continue;
                     }
-                    Op::LOADI => self.set_reg(base + a, Value::Int(ins.sbx() as i64)),
-                    Op::LOADF => self.set_reg(base + a, Value::Float(ins.sbx() as f64)),
-                    Op::LOADBOOL => self.set_reg(base + a, Value::Bool(ins.b() != 0)),
+                    Op::LOADI => {
+                        w!(a, Value::Int(ins.sbx() as i64));
+                        continue;
+                    }
+                    Op::LOADF => {
+                        w!(a, Value::Float(ins.sbx() as f64));
+                        continue;
+                    }
+                    Op::LOADBOOL => {
+                        w!(a, Value::Bool(ins.b() != 0));
+                        continue;
+                    }
                     Op::LOADNIL => {
                         for i in 0..=ins.b() as usize {
                             *self.reg_mut(base + a + i) = Value::Nil;
@@ -754,6 +849,7 @@ impl Vm {
                             self.close_upvalues((base + a - 1) as u32);
                         }
                         pc = jump(pc, ins.sbx());
+                        continue;
                     }
                     Op::JLTI => jump_int!(|l, r| l < r),
                     Op::JLEI => jump_int!(|l, r| l <= r),
@@ -812,9 +908,12 @@ impl Vm {
                         }
                     }
                     Op::TEST => {
-                        if (*self.reg(base + a)).is_truthy() != (ins.c() != 0) {
+                        if r!(a).is_truthy() != (ins.c() != 0) {
                             pc += 1;
+                        } else {
+                            or_jump!();
                         }
+                        continue;
                     }
                     Op::TESTSET => {
                         let src = (*self.reg(base + ins.b() as usize)).clone();
@@ -824,10 +923,13 @@ impl Vm {
                         }
                     }
                     Op::JNIL | Op::JNOTNIL => {
-                        let is_nil = matches!(*self.reg(base + a), Value::Nil);
+                        let is_nil = matches!(*r!(a), Value::Nil);
                         if is_nil == (op == Op::JNIL) {
                             pc += 1;
+                        } else {
+                            or_jump!();
                         }
+                        continue;
                     }
                     // `LTI` is 21.7% of `sort` and absent everywhere else, and
                     // it is the one hot opcode that measured *worse* with an arm
@@ -886,8 +988,9 @@ impl Vm {
                         }
                     }
                     Op::NOT => {
-                        let t = (*self.reg(base + ins.b() as usize)).is_truthy();
-                        self.set_reg(base + a, Value::Bool(!t));
+                        let t = r!(ins.b() as usize).is_truthy();
+                        w!(a, Value::Bool(!t));
+                        continue;
                     }
 
                     // ---- §15.8 numeric loops ------------------------------
@@ -907,17 +1010,23 @@ impl Vm {
                         }
                     }
                     Op::FORLOOP_I => {
-                        let i = self.int_at(base + a, &proto, here)?;
-                        let limit = self.int_at(base + a + 1, &proto, here)?;
-                        let step = self.int_at(base + a + 2, &proto, here)?;
+                        // The loop's registers are `A` to `A + 3`.
+                        let (Value::Int(i), Value::Int(limit), Value::Int(step)) =
+                            (r!(a), r!(a + 1), r!(a + 2))
+                        else {
+                            let all = [a, a + 1, a + 2];
+                            return Err(self.wrong_among(base, &all, "integer", &proto, here));
+                        };
+                        let (limit, step) = (*limit, *step);
                         // Detect overflow so a too-large step cannot loop
                         // forever — the guard `run_numeric_loop_int` has.
                         let (next, overflow) = i.overflowing_add(step);
                         if !overflow && int_in_range(next, limit, step) {
-                            self.set_reg(base + a, Value::Int(next));
-                            self.set_reg(base + a + 3, Value::Int(next));
+                            w!(a, Value::Int(next));
+                            w!(a + 3, Value::Int(next));
                             pc = jump(pc, ins.sbx());
                         }
+                        continue;
                     }
                     Op::FORPREP_F => {
                         let from = self.float_at(base + a, &proto, here)?;
@@ -935,15 +1044,20 @@ impl Vm {
                         }
                     }
                     Op::FORLOOP_F => {
-                        let i = self.float_at(base + a, &proto, here)?;
-                        let limit = self.float_at(base + a + 1, &proto, here)?;
-                        let step = self.float_at(base + a + 2, &proto, here)?;
+                        let (Value::Float(i), Value::Float(limit), Value::Float(step)) =
+                            (r!(a), r!(a + 1), r!(a + 2))
+                        else {
+                            let all = [a, a + 1, a + 2];
+                            return Err(self.wrong_among(base, &all, "float", &proto, here));
+                        };
+                        let (limit, step) = (*limit, *step);
                         let next = i + step;
                         if float_in_range(next, limit, step) {
-                            self.set_reg(base + a, Value::Float(next));
-                            self.set_reg(base + a + 3, Value::Float(next));
+                            w!(a, Value::Float(next));
+                            w!(a + 3, Value::Float(next));
                             pc = jump(pc, ins.sbx());
                         }
+                        continue;
                     }
 
                     // ---- §15.8 generic iteration -------------------------
@@ -1063,6 +1177,8 @@ impl Vm {
                                     *self.reg_mut(base + a + 5) = Value::Table(lease);
                                     *self.reg_mut(base + a + 1) = Value::Int(-1);
                                     *self.reg_mut(base + a + 2) = Value::Bool(false);
+                                    // `ensure_stack` may have moved it.
+                                    regs = self.stack.as_mut_ptr().wrapping_add(base);
                                     continue;
                                 }
                                 let pairs = snapshot_pairs(&t.borrow());
@@ -1378,6 +1494,10 @@ impl Vm {
                     // of line as `CALLNAT` is: an arm each, though each was
                     // only a call, cost `fib` 6% and `mandel` 8%, which run
                     // none of them. A failure is left in `Vm::fault`.
+                    Op::ISREADY => {
+                        let class = self.extra_arg(code.as_ptr(), &mut pc);
+                        self.is_ready(base + a, base + ins.b() as usize, ins.c(), class);
+                    }
                     Op::GETFIDX | Op::GETFIDXU | Op::SETFIDX | Op::ISNILP => {
                         if !self.outlined(op, base, ins, &proto, here) {
                             return Err(self.take_fault());
@@ -1562,6 +1682,7 @@ impl Vm {
                                 if Rc::ptr_eq(&f.proto, &proto) {
                                     base = f.base as usize;
                                     pc = f.pc as usize;
+                                    regs = self.stack.as_mut_ptr().wrapping_add(base);
                                     continue;
                                 }
                                 continue 'reentry;
@@ -1637,7 +1758,7 @@ impl Vm {
                     }
                     Op::GETF => {
                         let slot = ins.c() as usize;
-                        let v = match self.reg(base + ins.b() as usize) {
+                        let v = match r!(ins.b() as usize) {
                             Value::Instance(i) => {
                                 let i = i.borrow();
                                 match i.fields.get(slot) {
@@ -1656,7 +1777,8 @@ impl Vm {
                         };
                         // What a field is read into is nearly always a
                         // temporary that held a number: see `set_reg`.
-                        self.set_reg(base + a, v);
+                        w!(a, v);
+                        continue;
                     }
                     // `a.b?.c!.d` — every link in one instruction, and only
                     // the value at the end copied. See `FieldPath`.
@@ -1831,6 +1953,7 @@ impl Vm {
                         let f = self.frames.last().expect("frame");
                         base = f.base as usize;
                         pc = f.pc as usize;
+                        regs = self.stack.as_mut_ptr().wrapping_add(base);
                         continue;
                     }
                     Op::CALLSTAT => {
@@ -1899,6 +2022,15 @@ impl Vm {
                         };
                         *self.reg_mut(base + a) = Value::Int(t);
                     }
+                    Op::SWITCHTAG => {
+                        let table = &chunk.jump_tables[ins.bx() as usize];
+                        let tag = match r!(a) {
+                            Value::EnumVariant(v) => v.tag as usize,
+                            other => return Err(operand_err(other, "enum", &proto, here)),
+                        };
+                        pc = table.targets.get(tag).copied().unwrap_or(table.default) as usize;
+                        continue;
+                    }
                     Op::SWITCH => {
                         let table = &chunk.jump_tables[ins.bx() as usize];
                         let tag = match self.reg(base + a) {
@@ -1926,8 +2058,17 @@ impl Vm {
                     // place. What `UNWRAP` + `GETARR` did, minus the copy of
                     // the payload table between them.
                     Op::GETPAY => {
+                        // The field is in the variant itself; the table is
+                        // only where something asked for `.value`.
+                        if let Value::EnumVariant(ev) = r!(ins.b() as usize)
+                            && let Some(field) = ev.field(ins.c() as usize)
+                        {
+                            let v = field.clone();
+                            w!(a, v);
+                            continue;
+                        }
                         let v = match self.reg(base + ins.b() as usize) {
-                            Value::EnumVariant(ev) => match ev.value.get() {
+                            Value::EnumVariant(ev) => match ev.value() {
                                 Some(Value::Table(t)) => {
                                     index_array(&t.borrow(), ins.c() as i64 + 1)
                                 }
@@ -1952,8 +2093,7 @@ impl Vm {
                             // read nil until `GETFX` let `enums.sau` compile
                             // and `SAULE_DIFF=1` put the two side by side.
                             Value::EnumVariant(v) => v
-                                .value
-                                .get()
+                                .value()
                                 .cloned()
                                 .unwrap_or_else(|| Value::Str(v.variant_name.clone())),
                             other => return Err(operand_err(other, "enum", &proto, here)),
@@ -2071,6 +2211,9 @@ impl Vm {
                         });
                     }
                 }
+                // Whatever ran may have grown the stack, which moves it, or
+                // changed `base`. The arms that can do neither skip this.
+                regs = self.stack.as_mut_ptr().wrapping_add(base);
             }
         }
     }

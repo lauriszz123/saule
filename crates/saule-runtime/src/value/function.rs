@@ -110,6 +110,35 @@ pub trait CallSession {
         args: &[Value],
         span: std::ops::Range<usize>,
     ) -> Result<Value, crate::error::RuntimeError>;
+
+    /// What the function is, when it is nothing but one comparison of its
+    /// two arguments: `(a, b) => a < b` and its like. `None` for any other.
+    ///
+    /// A native that would call such a function a million times to learn
+    /// what it can work out itself (`Table.sort`) asks this first.
+    fn compares(&self) -> Option<Comparison> {
+        None
+    }
+}
+
+/// A function of two arguments that only compares them, as
+/// [`CallSession::compares`] tells it: which of the two it wants first,
+/// and of what. It answers for those and nothing else: given any other
+/// values it fails, as a call of it would.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Comparison {
+    /// `a < b`, integers.
+    IntLess,
+    /// `a > b`.
+    IntGreater,
+    /// `a <= b`.
+    IntAtMost,
+    /// `a >= b`.
+    IntAtLeast,
+    /// `a < b`, floats.
+    FloatLess,
+    /// `a > b`.
+    FloatGreater,
 }
 
 /// A [`VmFunction`] held behind a **thin** pointer.

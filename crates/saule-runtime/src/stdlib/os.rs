@@ -801,13 +801,13 @@ fn os_platform(_args: &[Value]) -> Result<Vec<Value>, String> {
     if let Some(v) = installed_variant(&OS_PLATFORM_ENUM, variant_name) {
         return Ok(vec![v]);
     }
-    let variant = EnumVariantObject {
-        enum_name: "OsPlatform".to_string().into(),
-        variant_name: variant_name.to_string().into(),
-        tag: tag_in(&OS_PLATFORM_VARIANTS, variant_name),
-        value: std::cell::OnceCell::from(str_value(platform_str().to_string())),
-        enum_obj: RefCell::new(None),
-    };
+    let variant = EnumVariantObject::valued(
+        "OsPlatform".to_string().into(),
+        variant_name.to_string().into(),
+        tag_in(&OS_PLATFORM_VARIANTS, variant_name),
+        Some(str_value(platform_str().to_string())),
+        None,
+    );
     Ok(vec![Value::EnumVariant(Rc::new(variant))])
 }
 
@@ -1037,13 +1037,13 @@ fn build_enum(name: &str, variants: &[(&str, &str)]) -> Rc<EnumObject> {
     let mut by_tag = Vec::with_capacity(variants.len());
     let mut tags = fxmap();
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
-        let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string().into(),
-            variant_name: (*vname).to_string().into(),
-            tag: tag as u32,
-            value: std::cell::OnceCell::from(Value::Str(SauleStr::new((*vvalue).to_string()))),
-            enum_obj: RefCell::new(None),
-        });
+        let variant = Rc::new(EnumVariantObject::valued(
+            name.to_string().into(),
+            (*vname).to_string().into(),
+            tag as u32,
+            Some(Value::Str(SauleStr::new((*vvalue).to_string()))),
+            None,
+        ));
         variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
         by_tag.push(Some(variant));
         tags.insert((*vname).to_string(), tag as u32);
@@ -1105,13 +1105,13 @@ fn fskind_variant(kind: &str) -> Value {
     if let Some(v) = installed_variant(&FS_KIND_ENUM, kind) {
         return v;
     }
-    Value::EnumVariant(Rc::new(EnumVariantObject {
-        enum_name: "FsKind".to_string().into(),
-        variant_name: kind.to_string().into(),
-        tag: tag_in(&FS_KIND_VARIANTS, kind),
-        value: std::cell::OnceCell::from(Value::Str(SauleStr::new(kind.to_ascii_lowercase()))),
-        enum_obj: RefCell::new(None),
-    }))
+    Value::EnumVariant(Rc::new(EnumVariantObject::valued(
+        "FsKind".to_string().into(),
+        kind.to_string().into(),
+        tag_in(&FS_KIND_VARIANTS, kind),
+        Some(Value::Str(SauleStr::new(kind.to_ascii_lowercase()))),
+        None,
+    )))
 }
 
 /// `Os.fsInfo(path?) -> FsInfo?`

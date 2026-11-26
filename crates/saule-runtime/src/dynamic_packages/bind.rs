@@ -170,13 +170,13 @@ fn build_enum(spec: &EnumSpec) -> Rc<EnumObject> {
     let mut by_tag = Vec::with_capacity(spec.variants.len());
     let mut tags = fxmap();
     for (tag, vname) in spec.variants.iter().enumerate() {
-        let variant = Rc::new(EnumVariantObject {
-            enum_name: SauleStr::new(spec.name.clone()),
-            variant_name: SauleStr::new(vname.clone()),
-            tag: tag as u32,
-            value: std::cell::OnceCell::from(Value::Str(SauleStr::new(vname.clone()))),
-            enum_obj: RefCell::new(None),
-        });
+        let variant = Rc::new(EnumVariantObject::valued(
+            SauleStr::new(spec.name.clone()),
+            SauleStr::new(vname.clone()),
+            tag as u32,
+            Some(Value::Str(SauleStr::new(vname.clone()))),
+            None,
+        ));
         variants.insert(vname.clone(), variant.clone());
         by_tag.push(Some(variant));
         tags.insert(vname.clone(), tag as u32);

@@ -91,6 +91,32 @@ impl Vm {
         }
     }
 
+    /// The error for a typed opcode one of whose operands is not a `want`
+    /// ("integer" or "float"): about the first of `R[at…]` that isn't. What
+    /// [`int_at`](Self::int_at) and its like make, for the arms that read
+    /// registers through `regs` and only come here to fail.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn wrong_among(
+        &self,
+        base: usize,
+        at: &[usize],
+        want: &str,
+        proto: &Proto,
+        here: u32,
+    ) -> RuntimeError {
+        let fits = |v: &Value| match want {
+            "integer" => matches!(v, Value::Int(_)),
+            _ => matches!(v, Value::Float(_)),
+        };
+        let first = at
+            .iter()
+            .map(|i| base + i)
+            .find(|&i| !fits(self.reg(i)))
+            .unwrap_or(base + at.first().copied().unwrap_or(0));
+        operand_err(self.reg(first), want, proto, here)
+    }
+
     // ---- typed operand reads -------------------------------------------
 
     /// Marked `#[inline]` so the error half never materialises on the hot
@@ -285,6 +311,25 @@ pub(crate) fn field_slot_err(slot: usize, have: usize, proto: &Proto, here: u32)
              the chunk disagrees with the layout it was compiled against"
         ),
         span: proto.span_at(here),
+    }
+}
+
+/// Write `v` to the register at `at`: [`Vm::set_reg`] through a pointer.
+///
+/// # Safety
+///
+/// `at` points to a live register: `regs` of the running frame, offset by
+/// an operand the verifier kept inside the frame's registers.
+#[inline(always)]
+pub(crate) unsafe fn put(at: *mut Value, v: Value) {
+    // SAFETY: the caller's; and a scalar owns nothing, so overwriting it
+    // is all that dropping it would do (see `Vm::set_reg`).
+    unsafe {
+        if (*at).is_scalar() {
+            std::ptr::write(at, v);
+        } else {
+            *at = v;
+        }
     }
 }
 
@@ -487,6 +532,28 @@ pub(crate) fn max_frames_from_env() -> usize {
 }
 
 impl Vm {
+    /// `ISREADY`: whether `R[recv]` is an instance of exactly class `class`
+    /// whose field `slot` holds a table (255: no field is asked about), as
+    /// a boolean in `R[dst]`. See the opcode.
+    #[inline(never)]
+    pub(crate) fn is_ready(&mut self, dst: usize, recv: usize, slot: u8, class: u32) {
+        let ready = match self.reg(recv) {
+            Value::Instance(inst) => {
+                let inst = inst.borrow();
+                let exact = self
+                    .shared
+                    .classes
+                    .get(class as usize)
+                    .is_some_and(|c| Rc::ptr_eq(c, &inst.class));
+                exact
+                    && (slot == crate::compile::NO_SLOT
+                        || matches!(inst.fields.get(slot as usize), Some(Value::Table(_))))
+            }
+            _ => false,
+        };
+        self.set_reg(dst, Value::Bool(ready));
+    }
+
     /// The opcodes behind the one arm the dispatch loop has for them (see
     /// the arm). `false` leaves the error in [`Vm::fault`].
     #[inline(never)]

@@ -256,6 +256,189 @@ its own again beside `JNIL` — were each a little faster on the two that
 use it and each `mandel` +12%, with `oop` +9% or `loop_arith` +7% beside
 it. What they had in common was an arm that changes `pc` after a call.
 
+### `Table.sort` by a plain comparison ✓ DONE
+
+`sort` was 1.75x of Lua, and nine tenths of it was not sorting:
+`(a, b) => a < b` is two instructions (`LTI`, `RET1`), and each of the three
+and a half million times a sort of 200 000 numbers asked it, a frame was
+pushed and popped around them (`push_frame_resolved` 29%, `pop_frame` 24%,
+`call_first` 16% of the run). That path had already had its allocations,
+its pool round trip and its downcast taken out; what was left was the call.
+
+So it is not made. A call session says what its function is when it is one
+typed comparison of its two parameters (`CallSession::compares`, told from
+the proto by `frame::comparison_of`: `LTI`, `LEI` or `LTF` over registers 0
+and 1, either way round, and a `RET1` of the answer), and `Table.sort`
+sorts such values itself (`sort_plainly`): integers by any of the four
+comparisons, floats by the two strict ones and only with no NaN among
+them, where the order is the one the merge would give. Anything else, a
+table with another kind of value in it included, is sorted by asking, as
+before.
+
+`sort` 0.150 → 0.018 s (0.21x of Lua), `tablelib` 0.205 → 0.145.
+`tests/run/stdlib/table_sort_by_a_plain_comparison.sau` sorts the same
+values both ways and compares.
+
+A comparator that reads a field (`(a, b) => a.age < b.age`) is still
+called; so is one over strings, which compiles to `ARITHX`.
+
+### `match`: a failed arm goes to the next arm for its variant ✓ DONE
+
+Under a `SWITCH` the first arm for a tag was already entered past its tag
+test. An arm whose guard failed still went to the arm below, which tested
+the tag again, and through every arm between it and the next one for the
+same variant. Now no arm under a switch tests the tag: a failed guard or
+payload jumps to the next arm for that variant, a wildcard, or the end
+(`match_chain`'s `waiting`). A wildcard with a guard keeps the chain,
+since after it fails the tag is anybody's.
+
+And a `JMP` to a `RET0`, a `RET1` or another `JMP` does what that one does
+(`peephole::thread_jumps`): every arm of a `return match …` ended in a jump
+to the one return after the last arm.
+
+`Main.handle` in `benchmarks/sau/match.sau` went from 37 instructions to
+24, and a call of it runs 4 to 7 of them where it ran 5 to 11. **`match`
+itself moved 4%** (0.181 → 0.173, 1.63x of Lua): the arms were a small part
+of it. What is left is the call (`CALLSTAT`, `enter_static`, `RET1`) and
+reading the payload, which is a table inside the variant, three objects a
+value: with the same number of cache misses as Lua it runs at three
+instructions a cycle where Lua runs at four.
+
+### Registers through a pointer in the arms that only use registers ~ PARTLY
+
+`loop_arith` ran 197 machine instructions an iteration, for four of
+Saule's; Lua runs 135 for its four. Each arm found a register by loading
+`self`, then the stack's pointer, then `base`, and adding them, per
+operand. The arithmetic, move, constant, float and loop arms and `GETF`
+now read and write through `regs`, a pointer to `R[0]` held across
+instructions (`r!`, `w!`), made again after any other arm (which may have
+grown the stack or changed `base`) and at the three places that change the
+frame and `continue`. 148 instructions an iteration; every benchmark runs
+1 to 24% fewer.
+
+**In time it is worth less than that:** `loop_arith` and `mandel` about 12%
+(0.043 → 0.037, 0.026 → 0.023), `fib` and `bintree` a few percent, the rest
+level, `interp` and `strings` 2 to 4% slower. With `regs` in a register the
+compiler moved `pc` out of one, so every instruction's fetch waits on a
+store. Four other shapes were measured (`perf stat`, instructions and
+cycles, every benchmark):
+
+- with the compare-and-jump arms through `regs` too: `loop_arith` −25% and
+  `mandel` −19% in cycles, and `fib` +15% (twice the mispredicted
+  branches), `coroutine` +7%;
+- `regs` made again for every instruction, held nowhere: 1 to 5% more
+  instructions on most of the suite;
+- `here` kept in the `Vm` and not in a local: `pc` back in a register,
+  `loop_arith` −17%, and `strings` +8%, `interp` +6%;
+- every function, or every jump target, aligned to 64 or 32 bytes
+  (`-align-all-functions`, `-align-all-nofallthru-blocks`): no steadier.
+
+Instruction counts are the same from run to run and cycles are within 2%,
+so the instrument is sound; what it shows is that at an unchanged
+instruction count a benchmark moves 5 to 15% with how the loop is laid
+out. The next step is the one the note on dispatch below ends on: an
+instruction pointer and a register pointer that the loop cannot spill,
+which means a loop that is not one function.
+
+### Small methods and choosing functions compiled where they are called ✓ DONE
+
+`generic` has nothing generic in its bytecode (see the entry above): it is
+six calls an iteration. What the compiler knows before the program runs is
+most of each of them, and it now uses it.
+
+**A small method, behind a test of the receiver's class**
+(`compile::inline`). `st.push(x)` is `push`'s own instructions laid down
+in the caller's registers from the receiver on (a method's frame starts
+at its receiver, so nothing is shuffled), after one new instruction,
+`ISREADY`, asks what cannot be known earlier: that the object is of
+exactly the class the type checker proved, a subclass not being it, and
+that the table the body indexes is there. Any other receiver takes the
+`CALLM` kept beside the body. Only a body that cannot fail once the test
+has passed is taken, so that no stack trace is a frame short: moves and
+constants, typed arithmetic that cannot divide by zero, comparisons and
+jumps, fields of `self`, and an element of a table `self` holds in a
+field. At most twelve instructions, from this module, compiled before the
+call that uses it.
+
+**A constructor that only stores** needs no test: the object was made
+by the `NEW` on the line above. `Point(x, y)` is a `NEW` and two `SETF`.
+
+**A static function that only chooses** (`inline_static_call`).
+`Main.pickMax(a, b, better)`, where `pickMax` is `return` after at most
+two `if c then return e end`, every expression a parameter, a call of a
+parameter, or arithmetic that cannot fail, and `better` is a lambda this
+function holds in a local for its whole life: the body is compiled in
+place, with the lambda's own body where it is called
+(`inline_lambda_call`, which was there). A generic function over "how to
+compare" becomes the comparison: `LTI`, `TEST`, two `MOVE`.
+
+`generic` 0.190 → 0.139 s (1.68x of Lua → 1.25x), 34% fewer machine
+instructions; `oop` 0.048 → 0.033 (1.31x → 0.92x); `vecops` 0.325 → 0.281;
+`interp` 0.489 → 0.443. The rest run the same instructions as before.
+
+What is left in `generic` is the test, three instructions a call
+(`ISREADY`, `TEST`, `JMP`), and the table read out of the field into a
+register for each index (`GETFIDX` names register 0 without saying so,
+and cannot be moved to another frame's registers). A local that holds
+what a constructor made and is never assigned again needs no test of its
+class; the names for that are there (`assigned_names`), and it is not
+done.
+
+A call site that sees several classes pays the test and then calls: two
+instructions more than before. `entity`, whose `score` is overridden in
+both subclasses, is level.
+
+### `match`: the fields in the variant, and four instructions fewer a turn ✓ DONE
+
+`match` ran 0.183 s against Lua's 0.104 after the routing above. It
+executed *fewer* machine instructions than Lua and took half again as
+many cycles: eleven dispatches a turn of the loop, and three objects read
+for each event.
+
+**The fields are in the variant.** `Event.Click(x, y)` was a variant
+holding a table holding an array: three allocations, and `GETPAY` went
+through all three. The fields are now in the variant object itself, one
+or two in place and more in a slice (`EnumVariantObject::carrying`).
+`.value` still answers with a table of them, made the first time it is
+asked for and kept; it may be written to, so from then on it is what the
+variant carries and `GETPAY` reads it as before. Building the 200 000
+events went from 128M cycles to 101M (Lua: 137M).
+
+**A function that is one `match` over its argument** is compiled where
+it is called, by the same road as `pickMax` (`inline_static_call`): arms
+that are variants with their fields named, guards and bodies that only
+choose. The parameter has to be an enum by its declared type; a nullable
+one keeps the call.
+
+**An operand beside such a call is read where it is.** `total = total +
+Main.handle(e)` copied `total` aside before a call that is no longer
+made. `operand_is_pure` now asks `runs_in_place`, which reads the same
+plan the emission does; `call_to_want` refuses to compile a call that
+was promised in place and came out a call, so a divergence between the
+two is a compile error and never a wrong program.
+
+**`SWITCHTAG`** is `GETTAG` and `SWITCH` as one instruction: the tag was
+read into a register nothing else looked at.
+
+**An arm that is one of its fields**, `case Key(c) then c`, reads the
+field straight into the destination (`field_to`), where it was bound to
+a register and moved.
+
+**A test that does not skip takes the `JMP` after it** (`or_jump!` in
+the dispatch): the false branch of every `if` was a second trip through
+the dispatch for the jump. This one is not `match`'s alone: `fib` -19%
+cycles, `nullsafe` -20%, `bytes` -14%, the coroutine three -8 to -12%,
+4.8% off the suite's geometric mean, with the instruction counts nearly
+unchanged. The peephole already turned `test; JMP +1` round, so what is
+left to fuse is the jump that goes somewhere.
+
+`match` 0.183 → 0.107 s (1.76x of Lua → 1.03x); 746M cycles → 462M, Lua
+469M. The loop is `GETIDXU`, `SWITCHTAG`, the arm, `ADDI`, `FORLOOP_I`.
+
+What is left: each arm but the last ends in a `JMP` to the end of the
+`match`, and the two arms for one variant each read the field the guard
+needed.
+
 ## The profiles these tasks are built on
 
 Leaf-weighted, `sample`, release build. **Do not re-measure these to start a

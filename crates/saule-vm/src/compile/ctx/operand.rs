@@ -151,6 +151,9 @@ impl Compiler<'_> {
                 lhs,
                 rhs,
             } => self.operand_is_pure(lhs) && self.operand_is_pure(rhs),
+            // A static function compiled in place of its call, given
+            // arguments that are pure themselves: no call is made.
+            Expr::Call { .. } => self.runs_in_place(e),
             _ => self.in_place_operand(e).is_some(),
         }
     }
