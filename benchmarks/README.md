@@ -1,6 +1,6 @@
 # Benchmarks
 
-Thirty-one small programs, each written twice: `sau/NAME.sau` and
+Thirty-two small programs, each written twice: `sau/NAME.sau` and
 `lua/NAME.lua`, line for line the same algorithm producing the same output.
 Lua is the reference because Saule borrows its runtime model, so the two are
 directly comparable and any gap is a gap in the implementation rather than in
@@ -55,6 +55,7 @@ One language primitive each, with as little else in the way as possible.
 | `strings` | `..` concatenation and `String.len` |
 | `closure` | calling a lambda through a local variable |
 | `sort` | `Table.sort` with a Saule comparator — comparator call volume |
+| `treewalk` | a tree of objects walked child list by child list: `for … in` over thousands of short lists |
 
 ### Language features
 
