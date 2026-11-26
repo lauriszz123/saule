@@ -1,0 +1,71 @@
+-- A tree of objects walked over and over, child list by child list.
+--
+-- What a user interface does every frame: each node holds a short list of
+-- children, and laying out, ticking or drawing the tree is a `for … in`
+-- over every one of those lists, thousands of loops of a handful of steps
+-- each. `entity` walks one long list and spends its time in the calls it
+-- makes; here the loops themselves are the work — how much it costs to
+-- begin one, and to take a step.
+--
+-- A loop sees its table as it was when the loop began, which used to mean
+-- copying every child list before going over it. The second half goes
+-- over one list with the index and the value both bound.
+class Node
+	size: integer
+	children: table<Node>
+
+	fn init(size: integer)
+		self.size = size
+		self.children = {}
+	end
+end
+
+class Main
+	static fn build(depth: integer, fan: integer, seed: integer) -> Node
+		local node: Node = Node(seed % 17 + 1)
+
+		if depth > 0 then
+			for i: integer = 1, fan do
+				Table.insert(node.children, Main.build(depth - 1, fan, seed * 31 + i))
+			end
+		end
+
+		return node
+	end
+
+	static fn weigh(node: Node) -> integer
+		local total: integer = node.size
+
+		for child in node.children do
+			total = total + Main.weigh(child)
+		end
+
+		return total
+	end
+
+	static fn main()
+		-- 1 + 4 + 16 + … + 4096 nodes, each inner one with four children.
+		local root: Node = Main.build(6, 4, 7)
+		local sum: integer = 0
+
+		for round: integer = 1, 250 do
+			sum = sum + Main.weigh(root)
+		end
+
+		local row: table<Node> = {}
+
+		for i: integer = 1, 48 do
+			Table.insert(row, Node(i % 9 + 1))
+		end
+
+		local weighted: integer = 0
+
+		for round: integer = 1, 60000 do
+			for i, node in row do
+				weighted = weighted + i * node.size
+			end
+		end
+
+		println(sum .. " " .. weighted)
+	end
+end

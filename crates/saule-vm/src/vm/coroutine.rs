@@ -47,7 +47,13 @@
 //! [`VmShared`]: a coroutine kept in a module slot would otherwise close the
 //! cycle `VmShared → slot → coroutine → VmShared` and leak the whole
 //! program, for the reason [`Closure::shared`](super::Closure) is `Weak`.
-//! The `Vm` is rebuilt around the register file on every resume.
+//!
+//! The register file is a `Vm`, kept whole from one resume to the next: a
+//! suspended one holds [`NOBODY`]'s shared state where the program's was,
+//! and gets the program's back as it is resumed. It used to be taken apart
+//! into its fields as it suspended and built again around them as it
+//! resumed, which was the `Vm` copied four times and a box made and freed
+//! for every round trip: a fifth of what one cost.
 //!
 //! The body is handed a separate [`Yielder`], not the coroutine itself, so
 //! that a suspended body does not hold its own coroutine alive from its
@@ -59,7 +65,7 @@ use std::rc::{Rc, Weak};
 use saule_runtime::value::{CoroutineRef, VmCoroutine, VmFunctionRef};
 use saule_runtime::{RuntimeError, Value};
 
-use super::{Frame, Upvalue, Vm, VmShared};
+use super::{Vm, VmShared};
 
 thread_local! {
     /// The coroutine whose code is running now, by address, or 0 outside
@@ -69,23 +75,19 @@ thread_local! {
     static CURRENT: Cell<usize> = const { Cell::new(0) };
 }
 
-/// A register file put aside: everything a [`Vm`] holds except the shared
-/// program state, which a suspended coroutine must not keep alive.
-struct Suspended {
-    stack: Vec<Value>,
-    frames: Vec<Frame>,
-    open_upvals: Vec<Rc<RefCell<Upvalue>>>,
-    parked: Vec<u32>,
-    high_water: usize,
-    yield_slot: (usize, u8),
-    results: Vec<Value>,
+thread_local! {
+    /// The shared state of no program at all: what a suspended coroutine's
+    /// `Vm` holds, so that it holds nothing of the program's (see
+    /// "Ownership" above). Never run against.
+    static NOBODY: Rc<VmShared> = Rc::new(VmShared::nobody());
 }
 
 enum State {
     /// Created and never resumed. The first `resume` calls the body.
     Fresh(Rc<VmFunctionRef>),
-    /// Stopped at a `yield`.
-    Suspended(Box<Suspended>),
+    /// Stopped at a `yield`: its register file, upvalues parked, with
+    /// [`NOBODY`]'s shared state.
+    Suspended(Box<Vm>),
     /// Its code is running, or it is waiting on a coroutine it resumed.
     /// Which of the two is [`CURRENT`]'s to say.
     Running,
@@ -107,19 +109,33 @@ pub struct Coroutine {
 /// The handle a coroutine's body is called with: the thing that yields.
 pub struct Yielder {
     co: Weak<CoroutineRef>,
+    /// The coroutine's address ([`Coroutine::addr`]), once it has one: what
+    /// its register file knows it by. Asked on every `yield`, where going
+    /// through `co` for it meant a reference taken and given back.
+    addr: Cell<usize>,
 }
 
 impl Coroutine {
     /// A coroutine that will run `body` when first resumed.
     pub(crate) fn create(body: Rc<VmFunctionRef>, shared: Weak<VmShared>) -> Rc<CoroutineRef> {
-        Rc::new_cyclic(|me: &Weak<CoroutineRef>| {
+        let made = Rc::new_cyclic(|me: &Weak<CoroutineRef>| {
             CoroutineRef::wrap(Coroutine {
                 state: RefCell::new(State::Fresh(body)),
-                yielder: CoroutineRef::new(Yielder { co: me.clone() }),
+                yielder: CoroutineRef::new(Yielder {
+                    co: me.clone(),
+                    addr: Cell::new(0),
+                }),
                 shared,
                 error: RefCell::new(None),
             })
-        })
+        });
+        // It has an address now, and keeps it: tell its yielder.
+        if let Some(co) = made.as_any().downcast_ref::<Coroutine>()
+            && let Some(yielder) = co.yielder.as_any().downcast_ref::<Yielder>()
+        {
+            yielder.addr.set(co.addr());
+        }
+        made
     }
 
     /// This coroutine's identity: the address [`Vm::coroutine`] and
@@ -184,18 +200,18 @@ impl Coroutine {
         let prior = std::mem::replace(&mut *self.state.borrow_mut(), State::Running);
         let mut vm = match prior {
             State::Fresh(body) => {
-                let mut vm = Vm::from_shared(shared);
+                let mut vm = Box::new(Vm::from_shared(shared));
                 vm.coroutine = self.addr();
                 let mut call_args = Vec::with_capacity(args.len() + 1);
                 call_args.push(Value::Coroutine(Rc::clone(&self.yielder)));
                 call_args.extend_from_slice(args);
                 if let Err(e) = vm.enter_invocation(&body, &call_args, span) {
-                    return Ok(self.fail(vm, e));
+                    return Ok(self.fail(&mut vm, e));
                 }
                 vm
             }
-            State::Suspended(s) => {
-                let mut vm = Vm::from_suspended(shared, *s, self.addr());
+            State::Suspended(mut vm) => {
+                vm.shared = shared;
                 vm.unpark_upvalues();
                 // What `resume` was passed is what the pending `yield` call
                 // returns inside the coroutine.
@@ -216,12 +232,17 @@ impl Coroutine {
                 Ok(std::mem::take(&mut vm.results))
             }
             Err(RuntimeError::Yield) => {
-                let out = std::mem::take(&mut vm.results);
+                // Copied out, not taken: the register file keeps the room
+                // it collects a yield's values in, where giving it away
+                // meant growing a new one from nothing at every yield.
+                let out = vm.results.clone();
+                vm.results.clear();
                 vm.park_upvalues();
-                *self.state.borrow_mut() = State::Suspended(Box::new(vm.into_suspended()));
+                vm.shared = NOBODY.with(Rc::clone);
+                *self.state.borrow_mut() = State::Suspended(vm);
                 Ok(out)
             }
-            Err(e) => Ok(self.fail(vm, e)),
+            Err(e) => Ok(self.fail(&mut vm, e)),
         }
     }
 
@@ -252,7 +273,7 @@ impl Coroutine {
 
     /// The body failed: record why, close what it leaves behind, and answer
     /// the `resume` with `nil`.
-    fn fail(&self, mut vm: Vm, e: RuntimeError) -> Vec<Value> {
+    fn fail(&self, vm: &mut Vm, e: RuntimeError) -> Vec<Value> {
         // A `throw` reports the value thrown, which is what a program that
         // threw a string wants back; anything else reports itself.
         let message = match &e {
@@ -385,9 +406,7 @@ impl VmCoroutine for Yielder {
             )
             .with_help("its only method is `yield`"));
         }
-        let running = self
-            .coroutine_addr()
-            .is_some_and(|addr| addr == CURRENT.with(Cell::get));
+        let running = self.co.strong_count() > 0 && self.addr.get() == CURRENT.with(Cell::get);
         Err(match self.co.upgrade() {
             None => RuntimeError::fault(
                 "cannot yield: the coroutine this yielder belongs to no longer exists",
@@ -414,10 +433,11 @@ impl VmCoroutine for Yielder {
 }
 
 impl Yielder {
-    fn coroutine_addr(&self) -> Option<usize> {
-        let co = self.co.upgrade()?;
-        let addr = co.as_any().downcast_ref::<Coroutine>()?.addr();
-        Some(addr)
+    /// Whether this is the yielder of the coroutine at `addr`, still
+    /// there. (A coroutine that is gone may have left its address to
+    /// another: its yielder is nobody's.)
+    fn belongs_to(&self, addr: usize) -> bool {
+        self.addr.get() == addr && self.co.strong_count() > 0
     }
 }
 
@@ -434,32 +454,66 @@ impl std::fmt::Debug for Yielder {
 }
 
 impl Vm {
-    /// `yield` reached the dispatch loop as a method call on `c`. Decide
-    /// whether this register file is the one it suspends, and if so make it
-    /// ready to: save where to continue, and collect what is yielded.
+    /// Whether a `yield` called on `c` is one this register file suspends
+    /// for: it is a coroutine's, and `c` is that coroutine's yielder.
     ///
-    /// `true` means the caller must leave the loop with
-    /// [`RuntimeError::Yield`]. `false` means this is not that register file
-    /// — not a coroutine at all, or a different coroutine's, or a callback
-    /// running on behalf of one — and the call goes on to the runtime,
-    /// which explains why it cannot yield from here.
-    pub(crate) fn try_yield(
+    /// Not so for a register file that is no coroutine's, or another
+    /// coroutine's, or a callback's running on behalf of one: the call
+    /// then goes on to the runtime, which explains why it cannot yield
+    /// from there.
+    #[inline]
+    pub(crate) fn yields_here(&self, c: &CoroutineRef) -> bool {
+        self.coroutine != 0
+            && c.as_any()
+                .downcast_ref::<Yielder>()
+                .is_some_and(|yielder| yielder.belongs_to(self.coroutine))
+    }
+
+    /// `CALLMX` with the name constant `k`, in a coroutine's register file:
+    /// whether it is that coroutine's own `yield`, in which case this file
+    /// is ready to suspend when this returns ([`begin_yield`]
+    /// (Self::begin_yield)) and the caller leaves the loop.
+    ///
+    /// Asked before the call is made at all, and not found out on its way
+    /// through the dynamic call and back out as an error: a yield is the
+    /// commonest thing a coroutine does.
+    #[inline(never)]
+    pub(crate) fn yield_at(
         &mut self,
-        c: &Rc<CoroutineRef>,
+        k: u32,
+        ins: crate::op::Instruction,
         recv: usize,
-        n_args: usize,
-        n_ret: u8,
+        chunk: &crate::chunk::Chunk,
         pc: usize,
     ) -> bool {
-        if self.coroutine == 0 {
-            return false;
-        }
-        let Some(yielder) = c.as_any().downcast_ref::<Yielder>() else {
+        let Value::Coroutine(c) = self.reg(recv) else {
             return false;
         };
-        if yielder.coroutine_addr() != Some(self.coroutine) {
+        if !self.yields_here(c) {
             return false;
         }
+        let Some(Value::Str(name)) = chunk.constants.get(k as usize) else {
+            return false;
+        };
+        if name.as_str() != "yield" {
+            return false;
+        }
+        // Operands as `call_member_by_name` reads them.
+        let n_args = (ins.b() as usize).saturating_sub(1);
+        let n_ret = if ins.c() == 0 {
+            super::ALL_RESULTS
+        } else {
+            ins.c() - 1
+        };
+        self.begin_yield(recv, n_args, n_ret, pc);
+        true
+    }
+
+    /// Make this register file ready to suspend at the `yield` whose
+    /// receiver is in register `recv`: save where to continue, and collect
+    /// what is yielded. The caller then leaves the loop with
+    /// [`RuntimeError::Yield`].
+    pub(crate) fn begin_yield(&mut self, recv: usize, n_args: usize, n_ret: u8, pc: usize) {
         // Continue after the `CALLMX` — the saved pc is what the loop reads
         // on re-entry, and the loop's own copy is about to be discarded.
         self.frames.last_mut().expect("a yield runs in a frame").pc = pc as u32;
@@ -469,34 +523,5 @@ impl Vm {
             self.results.push(v);
         }
         self.yield_slot = (recv, n_ret);
-        true
-    }
-
-    /// Put this register file aside, letting go of the shared state.
-    fn into_suspended(self) -> Suspended {
-        Suspended {
-            stack: self.stack,
-            frames: self.frames,
-            open_upvals: self.open_upvals,
-            parked: self.parked,
-            high_water: self.high_water,
-            yield_slot: self.yield_slot,
-            results: self.results,
-        }
-    }
-
-    /// Rebuild a `Vm` around a register file [`into_suspended`] put aside.
-    fn from_suspended(shared: Rc<VmShared>, s: Suspended, coroutine: usize) -> Vm {
-        Vm {
-            shared,
-            stack: s.stack,
-            frames: s.frames,
-            open_upvals: s.open_upvals,
-            high_water: s.high_water,
-            parked: s.parked,
-            coroutine,
-            yield_slot: s.yield_slot,
-            results: s.results,
-        }
     }
 }

@@ -13,11 +13,23 @@ use crate::stdlib::{missing_arg, wrong_arg};
 // Every function here names itself by its bare name (`"sqrt"`), the way the
 // tree-walker did. A message has to say `Math.sqrt`, which is what was
 // written, so the two arity checks qualify it on the way out.
+// The count is looked at before the name is written out: `Math.{name}` is
+// only wanted for the message of a call that got it wrong, and writing it
+// for every call that got it right — a `String` made and freed each time —
+// was a third of what a `Math` call cost.
+#[inline(always)]
 fn expect_arity(name: &str, args: &[Value], n: usize) -> Result<(), String> {
+    if args.len() == n {
+        return Ok(());
+    }
     crate::stdlib::expect_arity(&format!("Math.{name}"), args, n)
 }
 
+#[inline(always)]
 fn expect_min_arity(name: &str, args: &[Value], n: usize) -> Result<(), String> {
+    if args.len() >= n {
+        return Ok(());
+    }
     crate::stdlib::expect_min_arity(&format!("Math.{name}"), args, n)
 }
 
@@ -25,6 +37,22 @@ fn expect_min_arity(name: &str, args: &[Value], n: usize) -> Result<(), String> 
 fn takes(name: &str, counts: &str, got: usize) -> String {
     format!("`Math.{name}` takes {counts} arguments, got {got}")
 }
+/// A `Math` function that only works a number out of numbers, with the
+/// shorter way in such a native has (`NativeFn::quick`): the function
+/// itself, its error dropped. Thirteen of these to a loop is what numeric
+/// code looks like, and the call was most of what each cost.
+///
+/// Not `random` or `randomseed`, which change something each call.
+macro_rules! pure {
+    ($name:literal, $func:ident) => {
+        Value::Native(Rc::new(crate::value::NativeFn::pure(
+            $name,
+            $func,
+            |args| $func(args).ok(),
+        )))
+    };
+}
+
 use crate::value::SauleStr;
 use crate::value::{ClassObject, Value};
 
@@ -46,22 +74,22 @@ fn empty_builtins() -> saule_semantic::builtins::Builtins {
 
 pub fn install(env: &std::rc::Rc<std::cell::RefCell<Prelude>>) {
     let mut static_fields = fxmap();
-    static_fields.insert("abs".to_string(), native("Math.abs", math_abs));
-    static_fields.insert("acos".to_string(), native("Math.acos", math_acos));
-    static_fields.insert("asin".to_string(), native("Math.asin", math_asin));
-    static_fields.insert("atan".to_string(), native("Math.atan", math_atan));
-    static_fields.insert("min".to_string(), native("Math.min", math_min));
-    static_fields.insert("max".to_string(), native("Math.max", math_max));
-    static_fields.insert("cos".to_string(), native("Math.cos", math_cos));
-    static_fields.insert("sin".to_string(), native("Math.sin", math_sin));
-    static_fields.insert("tan".to_string(), native("Math.tan", math_tan));
-    static_fields.insert("deg".to_string(), native("Math.deg", math_deg));
-    static_fields.insert("rad".to_string(), native("Math.rad", math_rad));
-    static_fields.insert("exp".to_string(), native("Math.exp", math_exp));
-    static_fields.insert("floor".to_string(), native("Math.floor", math_floor));
-    static_fields.insert("ceil".to_string(), native("Math.ceil", math_ceil));
-    static_fields.insert("fmod".to_string(), native("Math.fmod", math_fmod));
-    static_fields.insert("log".to_string(), native("Math.log", math_log));
+    static_fields.insert("abs".to_string(), pure!("Math.abs", math_abs));
+    static_fields.insert("acos".to_string(), pure!("Math.acos", math_acos));
+    static_fields.insert("asin".to_string(), pure!("Math.asin", math_asin));
+    static_fields.insert("atan".to_string(), pure!("Math.atan", math_atan));
+    static_fields.insert("min".to_string(), pure!("Math.min", math_min));
+    static_fields.insert("max".to_string(), pure!("Math.max", math_max));
+    static_fields.insert("cos".to_string(), pure!("Math.cos", math_cos));
+    static_fields.insert("sin".to_string(), pure!("Math.sin", math_sin));
+    static_fields.insert("tan".to_string(), pure!("Math.tan", math_tan));
+    static_fields.insert("deg".to_string(), pure!("Math.deg", math_deg));
+    static_fields.insert("rad".to_string(), pure!("Math.rad", math_rad));
+    static_fields.insert("exp".to_string(), pure!("Math.exp", math_exp));
+    static_fields.insert("floor".to_string(), pure!("Math.floor", math_floor));
+    static_fields.insert("ceil".to_string(), pure!("Math.ceil", math_ceil));
+    static_fields.insert("fmod".to_string(), pure!("Math.fmod", math_fmod));
+    static_fields.insert("log".to_string(), pure!("Math.log", math_log));
     static_fields.insert("modf".to_string(), native("Math.modf", math_modf));
     static_fields.insert("random".to_string(), native("Math.random", math_random));
     static_fields.insert(
@@ -69,12 +97,12 @@ pub fn install(env: &std::rc::Rc<std::cell::RefCell<Prelude>>) {
         native("Math.randomseed", math_randomseed),
     );
     static_fields.insert("type".to_string(), native("Math.type", math_type));
-    static_fields.insert("ult".to_string(), native("Math.ult", math_ult));
-    static_fields.insert("round".to_string(), native("Math.round", math_round));
-    static_fields.insert("sqrt".to_string(), native("Math.sqrt", math_sqrt));
-    static_fields.insert("pow".to_string(), native("Math.pow", math_pow));
-    static_fields.insert("clamp".to_string(), native("Math.clamp", math_clamp));
-    static_fields.insert("sign".to_string(), native("Math.sign", math_sign));
+    static_fields.insert("ult".to_string(), pure!("Math.ult", math_ult));
+    static_fields.insert("round".to_string(), pure!("Math.round", math_round));
+    static_fields.insert("sqrt".to_string(), pure!("Math.sqrt", math_sqrt));
+    static_fields.insert("pow".to_string(), pure!("Math.pow", math_pow));
+    static_fields.insert("clamp".to_string(), pure!("Math.clamp", math_clamp));
+    static_fields.insert("sign".to_string(), pure!("Math.sign", math_sign));
     static_fields.insert("pi".to_string(), Value::Float(std::f64::consts::PI));
     static_fields.insert("huge".to_string(), Value::Float(f64::INFINITY));
     static_fields.insert("maxinteger".to_string(), Value::Int(i64::MAX));
@@ -214,7 +242,7 @@ pub fn register_sigs() {
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
-    Value::Native(Rc::new(crate::value::NativeFn { name, func }))
+    Value::Native(Rc::new(crate::value::NativeFn::new(name, func)))
 }
 
 #[derive(Clone, Copy)]
@@ -259,6 +287,7 @@ impl Number {
     }
 }
 
+#[inline(always)]
 fn number_at(args: &[Value], idx: usize, fn_name: &str) -> Result<Number, String> {
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(Number::Int(*n)),

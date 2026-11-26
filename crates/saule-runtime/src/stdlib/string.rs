@@ -215,7 +215,7 @@ pub fn register_sigs() {
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
-    Value::Native(Rc::new(crate::value::NativeFn { name, func }))
+    Value::Native(Rc::new(crate::value::NativeFn::new(name, func)))
 }
 
 /// Wrap a multi-return native function as a `NativeClosure` so the call

@@ -208,7 +208,7 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
             // `type descriptor C`
             Op::CHKTY => Some((ins.c() as usize, chunk.type_descs.len(), "type descriptor")),
             // `paths[C]`
-            Op::GETPATH => Some((ins.c() as usize, proto.paths.len(), "field path")),
+            Op::GETPATH | Op::ISNILP => Some((ins.c() as usize, proto.paths.len(), "field path")),
             _ => None,
         };
         if let Some((idx, limit, what)) = table
@@ -262,7 +262,8 @@ fn verify_proto(chunk: &Chunk, proto: &crate::chunk::Proto) -> Result<(), Verify
 /// `JMP`'s `A` is a close-upvalues threshold, not a register to read, and it
 /// is legitimately 0 when nothing needs closing.
 fn needs_register_a(op: Op) -> bool {
-    !matches!(op, Op::JMP | Op::RET0 | Op::EXTRAARG)
+    // `SETFIDX`'s `A` is a field slot: its receiver is register 0.
+    !matches!(op, Op::JMP | Op::RET0 | Op::EXTRAARG | Op::SETFIDX)
 }
 
 #[cfg(test)]
@@ -289,6 +290,23 @@ mod tests {
             2,
         );
         assert_eq!(verify(&c), Ok(()));
+    }
+
+    #[test]
+    fn a_field_slot_in_a_is_not_taken_for_a_register() {
+        // `SETFIDX`'s `A` is the slot of a field of `self`: a class with
+        // more fields than the method has registers is nothing wrong.
+        let c = chunk_with(
+            vec![I::abc(Op::SETFIDX, 9, 1, 1), I::abc(Op::RET0, 0, 0, 0)],
+            2,
+        );
+        assert_eq!(verify(&c), Ok(()));
+        // Its destination, in `GETFIDX`, is one.
+        let c = chunk_with(
+            vec![I::abc(Op::GETFIDX, 9, 0, 1), I::abc(Op::RET0, 0, 0, 0)],
+            2,
+        );
+        assert!(verify(&c).is_err());
     }
 
     #[test]

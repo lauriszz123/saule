@@ -219,7 +219,7 @@ pub struct Vm {
     parked: Vec<u32>,
     /// The coroutine this register file belongs to, by address, or 0 for
     /// every other `Vm`. A `yield` is honoured only by the register file of
-    /// the coroutine it names — see [`Vm::try_yield`].
+    /// the coroutine it names — see [`Vm::yields_here`].
     coroutine: usize,
     /// While suspended: the register the pending `yield` call's results go
     /// to, and how many it wants. The values the next `resume` passes in
@@ -232,6 +232,9 @@ pub struct Vm {
     /// outermost return, once per invocation. Handing back a fresh `Vec`
     /// each time was a malloc and a free per comparison on `sort`.
     results: Vec<Value>,
+    /// The error of a method call that found no callee, between
+    /// [`Vm::callee_packed`] leaving it and the `CALLM` arm taking it.
+    fault: Option<Box<saule_runtime::RuntimeError>>,
 }
 
 impl Vm {
@@ -322,11 +325,30 @@ impl Vm {
             coroutine: 0,
             yield_slot: (0, 0),
             results: Vec::new(),
+            fault: None,
         }
     }
 }
 
 impl VmShared {
+    /// The shared state of no program: no modules, no classes, nothing to
+    /// run. What a suspended coroutine's register file holds in place of
+    /// its program's (see `coroutine`'s "Ownership").
+    pub(crate) fn nobody() -> VmShared {
+        VmShared {
+            chunks: Vec::new(),
+            modules: RefCell::new(Vec::new()),
+            closure_cache: Vec::new(),
+            classes: Vec::new(),
+            class_of: Default::default(),
+            statics: Vec::new(),
+            enums: Vec::new(),
+            variant_names: Vec::new(),
+            max_frames: 0,
+            reentry_pool: RefCell::new(Vec::new()),
+        }
+    }
+
     /// A `Vm` for a re-entrant call — recycled if one is parked.
     fn take_vm(self: &Rc<Self>) -> Box<Vm> {
         match self.reentry_pool.borrow_mut().pop() {

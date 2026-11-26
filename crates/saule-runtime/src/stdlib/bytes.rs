@@ -140,7 +140,7 @@ pub fn register_sigs() {
 }
 
 fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
-    Value::Native(Rc::new(NativeFn { name, func }))
+    Value::Native(Rc::new(NativeFn::new(name, func)))
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────

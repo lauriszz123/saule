@@ -318,6 +318,26 @@ impl Compiler<'_> {
                 return Ok(());
             }
 
+            // `self.items[i] = v`: written into the field's table where it
+            // lies (`SETFIDX`). The field is read as the write is made, so
+            // nothing the index or the value does may come between: both
+            // have to be unable to run code.
+            if let Some(slot) = self.self_table_field(obj)
+                && self.operand_is_pure(index)
+                && match value {
+                    Rhs::Expr(e) => self.operand_is_pure(e),
+                    Rhs::Reg(_) => true,
+                }
+            {
+                let m = self.mark();
+                let k = self.operand_to_reg(index, true)?;
+                let v = self.rhs_operand(value, true)?;
+                let (b, c) = (self.reg8(k, span)?, self.reg8(v, span)?);
+                self.emit(Instruction::abc(Op::SETFIDX, slot, b, c), span);
+                self.free_to(m);
+                return Ok(());
+            }
+
             // `t[i] = …` on operands already in registers is the write half
             // of the shape `index_to` already reads in place, and it emitted
             // two `MOVE`s per store: one for the table, one for the key. The

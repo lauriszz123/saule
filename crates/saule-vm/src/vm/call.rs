@@ -45,6 +45,10 @@ impl Site<'_> {
     }
 }
 
+/// What [`Vm::callee_packed`] answers when it has no callee to give. No
+/// module and proto pack to it: a proto index is 16 bits wide.
+pub(crate) const NO_HIT: u64 = u64::MAX;
+
 impl Vm {
     /// [`vtable_lookup`](Self::vtable_lookup) behind a per-call-site
     /// monomorphic inline cache (§8.5).
@@ -78,6 +82,67 @@ impl Vm {
         let (module, target) = self.vtable_lookup(recv, slot, proto, here)?;
         self.remember_callee(recv, proto, here, module, target);
         Ok((module, target))
+    }
+
+    /// [`vtable_lookup_cached`](Self::vtable_lookup_cached) for the `CALLM`
+    /// arms, with its answer in one register: `module << 32 | proto`, or
+    /// [`NO_HIT`] when there is none to give — the receiver is no instance,
+    /// or of no class of this program — and the error is left in
+    /// [`Vm::fault`] for the arm to take ([`take_fault`](Self::take_fault)).
+    ///
+    /// Nearly every method call is a cache hit, and a hit used to come back
+    /// as a `Result<(usize, u32), RuntimeError>`: written to memory by the
+    /// callee and read back by the arm, to carry an error a hit never has.
+    #[inline(never)]
+    pub(crate) fn callee_packed(
+        &mut self,
+        recv: usize,
+        slot: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> u64 {
+        if let Value::Instance(inst) = &self.stack[recv] {
+            let inst = inst.borrow();
+            if let Some((module, target)) = proto
+                .caches
+                .borrow()
+                .get(here as usize)
+                .and_then(|c| c.probe(&inst.class))
+            {
+                return (module as u64) << 32 | target as u64;
+            }
+        }
+        self.callee_missed(recv, slot, proto, here)
+    }
+
+    /// The call site's cache had nothing: look the method up and remember
+    /// it, or leave the error to be taken.
+    #[cold]
+    #[inline(never)]
+    fn callee_missed(&mut self, recv: usize, slot: usize, proto: &Proto, here: u32) -> u64 {
+        match self.vtable_lookup(recv, slot, proto, here) {
+            Ok((module, target)) => {
+                self.remember_callee(recv, proto, here, module, target);
+                (module as u64) << 32 | target as u64
+            }
+            Err(e) => {
+                self.fault = Some(Box::new(e));
+                NO_HIT
+            }
+        }
+    }
+
+    /// The error [`callee_packed`](Self::callee_packed) left.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn take_fault(&mut self) -> RuntimeError {
+        match self.fault.take() {
+            Some(e) => *e,
+            None => RuntimeError::Internal {
+                message: "internal: a method call failed and left no error".into(),
+                span: 0..0,
+            },
+        }
     }
 
     /// The call-site cache's answer for the receiver in `recv`, if this site
@@ -440,6 +505,18 @@ impl Vm {
         // returns, once the registers they may land in are this file's again.
         match callee {
             Value::Native(nf) => {
+                // A native that only works something out (`NativeFn::quick`)
+                // can run no Saule code, so nothing is set up for that, and
+                // its answer comes back in registers and not as a `Result`
+                // through memory. Refused, or with the profiler on (which
+                // wants the native's name), the call goes the long way.
+                if let Some(quick) = nf.quick
+                    && !crate::sampling::on()
+                    && let Some(v) = quick(&self.stack[args_from..args_from + n_args])
+                {
+                    self.store_one(dst, v, n_ret);
+                    return Ok(());
+                }
                 let running = crate::sampling::enter_native(nf.name);
                 let v = self.foreign(|vm| (nf.func)(&vm.stack[args_from..args_from + n_args]));
                 crate::sampling::leave_native(running);

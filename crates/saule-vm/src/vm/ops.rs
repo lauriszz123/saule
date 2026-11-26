@@ -154,6 +154,46 @@ impl Vm {
         ))
     }
 
+    /// `GETPATH`: `R[dst] := ` the value at the end of `path` from
+    /// `R[start]`. `false` leaves the error in [`Vm::fault`].
+    ///
+    /// Out of line, and answering in a register: in the arm, the walk and
+    /// its `Result` were the arm's size, and what that costs the loop is
+    /// paid by programs with no path in them (`loop_arith`, `fib` and
+    /// `mandel` moved 8 to 10% with it).
+    #[inline(never)]
+    pub(crate) fn path_into(
+        &mut self,
+        dst: usize,
+        start: usize,
+        path: &FieldPath,
+        proto: &Proto,
+    ) -> bool {
+        match self.follow_path(start, path, proto) {
+            Ok(at) => {
+                // SAFETY: `follow_path` answers a pointer into an
+                // instance's fields or to `R[start]`, and nothing has been
+                // written since: this is the read it is for.
+                //
+                // An object or a table at the end of a path is as common as
+                // a number — it is what `row.mid != nil` reads — and those
+                // two are counted here, in line, where `Value::clone` goes
+                // out to a function for anything that is not a number.
+                let v = match unsafe { &*at } {
+                    Value::Instance(i) => Value::Instance(Rc::clone(i)),
+                    Value::Table(t) => Value::Table(Rc::clone(t)),
+                    other => other.clone(),
+                };
+                self.set_reg(dst, v);
+                true
+            }
+            Err(e) => {
+                self.fault = Some(Box::new(e));
+                false
+            }
+        }
+    }
+
     /// `GETPATH`'s walk: `R[start]` followed through every link of `path`,
     /// and the value at the end.
     ///
@@ -164,13 +204,25 @@ impl Vm {
     ///
     /// A failure blames the link it happened on, with the span that link's
     /// own instruction would have carried.
+    ///
+    /// **Answers where the value is, not the value.** Answering a `Value`
+    /// meant an `Ok(clone)`, and a path that ends at an object or a table
+    /// — every `row.mid != nil`, every `row.mid?.tags` — had its clone
+    /// written to the stack, copied into the `Result`, read back out of it
+    /// and written to the stack again before it reached its register:
+    /// three round trips through memory, a fifth of `nullsafe`. The arm
+    /// clones once, from here to the register.
+    ///
+    /// The pointer is into an instance's fields (or the register the walk
+    /// began at) and is good until something is written: the caller reads
+    /// it at once.
     #[inline]
     pub(crate) fn follow_path(
         &self,
         start: usize,
         path: &FieldPath,
         proto: &Proto,
-    ) -> Result<Value, RuntimeError> {
+    ) -> Result<*const Value, RuntimeError> {
         let mut cur: &Value = self.reg(start);
         for link in path.links.iter() {
             let inst = match cur {
@@ -206,7 +258,7 @@ impl Vm {
                 return Err(RuntimeError::ForceUnwrapNil { span: link.span() });
             }
         }
-        Ok(cur.clone())
+        Ok(cur as *const Value)
     }
 }
 
@@ -364,6 +416,29 @@ pub(crate) fn shift(a: i64, n: i64) -> i64 {
     }
 }
 
+/// The lease of `t`'s array, for a `for … in` to go over it where it is:
+/// `None` for a table the loop has to take a copy of ([`snapshot_pairs`]) —
+/// one with entries outside its array, whose order has to be worked out —
+/// and for an empty one, which is the copy's business too (the loop never
+/// begins).
+///
+/// A table that is all array is most of what is looped over, and copying
+/// it for every loop was most of what a loop cost. The loop reads the
+/// array itself instead, element `i` on step `i`, and what a loop has to
+/// see — the table as it was when the loop began — is kept by the array:
+/// written to while a loop holds its lease, it leaves the loop a copy
+/// there (`saule_runtime::value::ArrayPart`).
+///
+/// Entries added outside the array while the loop runs are not the loop's
+/// either way: it began with none.
+pub(crate) fn lease_array(t: &Rc<RefCell<TableObject>>) -> Option<Rc<RefCell<TableObject>>> {
+    let mut t = t.try_borrow_mut().ok()?;
+    if t.array.is_empty() || !t.map.is_empty() {
+        return None;
+    }
+    Some(t.array.lease())
+}
+
 /// Flatten a table into `[k1, v1, k2, v2, …]`, array part first and then map
 /// entries **sorted by key**.
 ///
@@ -409,4 +484,146 @@ pub(crate) fn max_frames_from_env() -> usize {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_MAX_FRAMES)
+}
+
+impl Vm {
+    /// The opcodes behind the one arm the dispatch loop has for them (see
+    /// the arm). `false` leaves the error in [`Vm::fault`].
+    #[inline(never)]
+    pub(crate) fn outlined(
+        &mut self,
+        op: crate::op::Op,
+        base: usize,
+        ins: Instruction,
+        proto: &Proto,
+        here: u32,
+    ) -> bool {
+        use crate::op::Op;
+        match op {
+            Op::ISNILP => {
+                // SAFETY: the verifier proved `C < paths.len()` (§17).
+                let path = unsafe { proto.paths.get_unchecked(ins.c() as usize) };
+                match self.follow_path(base + ins.b() as usize, path, proto) {
+                    Ok(at) => {
+                        // SAFETY: as in `path_into` — looked at before
+                        // anything is written.
+                        let nil = matches!(unsafe { &*at }, Value::Nil);
+                        self.set_reg(base + ins.a() as usize, Value::Bool(nil));
+                        true
+                    }
+                    Err(e) => {
+                        self.fault = Some(Box::new(e));
+                        false
+                    }
+                }
+            }
+            Op::SETFIDX => self.field_index_set(base, ins, proto, here),
+            _ => self.field_index_get(base, ins, proto, here, op == Op::GETFIDXU),
+        }
+    }
+
+    /// `GETFIDX` and, with `unwrap`, `GETFIDXU`: `R[A] := R[0].field[B][R[C]]`.
+    ///
+    /// What `GETF` and `GETIDX` (or `GETIDXU`) do one after the other, with
+    /// each one's own failure, and the table read where it lies in the
+    /// field. `false` leaves the error in [`Vm::fault`].
+    #[inline]
+    fn field_index_get(
+        &mut self,
+        base: usize,
+        ins: Instruction,
+        proto: &Proto,
+        here: u32,
+        unwrap: bool,
+    ) -> bool {
+        let read = || -> Result<Value, RuntimeError> {
+            let Value::Instance(inst) = self.reg(base) else {
+                return Err(operand_err(self.reg(base), "instance", proto, here));
+            };
+            let inst = inst.borrow();
+            let slot = ins.b() as usize;
+            let Some(field) = inst.fields.get(slot) else {
+                return Err(field_slot_err(slot, inst.fields.len(), proto, here));
+            };
+            let Value::Table(t) = field else {
+                return Err(operand_err(field, "table", proto, here));
+            };
+            let t = t.borrow();
+            let key = self.reg(base + ins.c() as usize);
+            let v = match key {
+                Value::Int(i) => match t.array_index(*i) {
+                    Some(at) => t.array[at].clone(),
+                    None => t.get(key),
+                },
+                _ => t.get(key),
+            };
+            if unwrap && matches!(v, Value::Nil) {
+                return Err(RuntimeError::ForceUnwrapNil {
+                    span: proto.span_at(here),
+                });
+            }
+            Ok(v)
+        };
+        match read() {
+            Ok(v) => {
+                self.set_reg(base + ins.a() as usize, v);
+                true
+            }
+            Err(e) => {
+                self.fault = Some(Box::new(e));
+                false
+            }
+        }
+    }
+
+    /// `SETFIDX`: `R[0].field[A][R[B]] := R[C]`.
+    ///
+    /// What `GETF` and `SETIDX` do one after the other. The table is held
+    /// for the write and the instance let go of first, so that the write
+    /// finds what `SETIDX` finds: the table borrowed, and nothing else.
+    /// `false` leaves the error in [`Vm::fault`].
+    #[inline]
+    fn field_index_set(&mut self, base: usize, ins: Instruction, proto: &Proto, here: u32) -> bool {
+        let write = || -> Result<(), RuntimeError> {
+            let v = (*self.reg(base + ins.c() as usize)).clone();
+            let t = {
+                let Value::Instance(inst) = self.reg(base) else {
+                    return Err(operand_err(self.reg(base), "instance", proto, here));
+                };
+                let inst = inst.borrow();
+                let slot = ins.a() as usize;
+                let Some(field) = inst.fields.get(slot) else {
+                    return Err(field_slot_err(slot, inst.fields.len(), proto, here));
+                };
+                let Value::Table(t) = field else {
+                    return Err(operand_err(field, "table", proto, here));
+                };
+                Rc::clone(t)
+            };
+            let key = self.reg(base + ins.b() as usize);
+            let mut t = t.borrow_mut();
+            // An integer inside the array part, written in place, with
+            // `on_store` first: `SETIDX`'s own two lines.
+            let at = match key {
+                Value::Int(i) => t.array_index(*i),
+                _ => None,
+            };
+            let done = match at {
+                Some(at) => {
+                    saule_runtime::gc::on_store(&v);
+                    t.array[at] = v;
+                    Ok(())
+                }
+                None => t.set(key, v),
+            };
+            done.map_err(|m| saule_runtime::members::table_write_failed(m, proto.span_at(here)))
+        };
+        match write() {
+            Ok(()) => true,
+            Err(e) => {
+                self.fault = Some(Box::new(e));
+                false
+            }
+        }
+    }
 }

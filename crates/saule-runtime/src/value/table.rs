@@ -8,7 +8,9 @@
 
 use crate::fxhash::FxHashMap as HashMap;
 use std::borrow::Borrow;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use super::{SauleStr, Value};
 
@@ -197,10 +199,115 @@ impl TableKey {
     }
 }
 
+/// The array part of a table: a `Vec<Value>`, read and written as one
+/// (it derefs to it), which also knows when a `for … in` is going over it.
+///
+/// ## Why it is not a plain `Vec`
+///
+/// A loop over a table sees the table **as it was when the loop began**
+/// (LANGUAGE §11.2): what the body adds, removes or replaces does not
+/// change what the loop goes on to see. The way to get that used to be to
+/// copy the whole table as every loop began, which is two allocations and
+/// a reference count taken and given back for every element — paid by
+/// every loop, to guard against the rare one that changes what it is going
+/// over. A view tree walked every frame is hundreds of such loops.
+///
+/// Now the copy is made **only if the array is written to while a loop is
+/// going over it**, and then once:
+///
+/// * a loop beginning takes the array's *lease* ([`ArrayPart::lease`]): an
+///   empty table shared between this array and every loop going over it
+///   as it is now;
+/// * the loop reads the live array, for as long as its lease is empty;
+/// * every write to the array goes through `DerefMut` — there is no other
+///   way to get a `&mut Vec` out of this — which first copies the array
+///   into the lease, if a loop still holds it, and lets go of it. The
+///   loops read the copy from then on, and a loop beginning after gets a
+///   new lease.
+///
+/// An array nothing changes keeps its lease from one loop to the next, so
+/// going over it again allocates nothing at all. The cost to everything
+/// else is one `Option` test per `&mut` access; a read is the `Vec`'s own.
+///
+/// A lease is told from a copy by being empty: a loop over an empty array
+/// never begins, so a copy has at least one element.
+#[derive(Debug, Default)]
+pub struct ArrayPart {
+    items: Vec<Value>,
+    lease: Option<Rc<RefCell<TableObject>>>,
+}
+
+impl ArrayPart {
+    /// The lease of the array as it is now, for a loop about to go over
+    /// it: the one it has, or a new one.
+    pub fn lease(&mut self) -> Rc<RefCell<TableObject>> {
+        Rc::clone(
+            self.lease
+                .get_or_insert_with(|| Rc::new(RefCell::new(TableObject::new()))),
+        )
+    }
+
+    /// Whether `lease` is still this array's: nothing has written to it
+    /// since the loop holding `lease` began, and the loop reads it as it is.
+    #[inline(always)]
+    pub fn leased_to(&self, lease: &Rc<RefCell<TableObject>>) -> bool {
+        match &self.lease {
+            Some(mine) => Rc::ptr_eq(mine, lease),
+            None => false,
+        }
+    }
+
+    /// The array is about to be written to: the loops going over it keep
+    /// what it holds now.
+    #[cold]
+    #[inline(never)]
+    fn written(&mut self) {
+        if let Some(lease) = self.lease.take()
+            && Rc::strong_count(&lease) > 1
+        {
+            lease.borrow_mut().array.items = self.items.clone();
+        }
+    }
+}
+
+impl From<Vec<Value>> for ArrayPart {
+    fn from(items: Vec<Value>) -> Self {
+        Self { items, lease: None }
+    }
+}
+
+impl std::ops::Deref for ArrayPart {
+    type Target = Vec<Value>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Vec<Value> {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for ArrayPart {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Vec<Value> {
+        if self.lease.is_some() {
+            self.written();
+        }
+        &mut self.items
+    }
+}
+
+impl<'a> IntoIterator for &'a ArrayPart {
+    type Item = &'a Value;
+    type IntoIter = std::slice::Iter<'a, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.items.iter()
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TableObject {
     /// 1-based logical indices stored 0-based here.
-    pub array: Vec<Value>,
+    pub array: ArrayPart,
     /// All non-array entries (non-integer keys or sparse integer keys).
     pub map: HashMap<TableKey, Value>,
 }
@@ -212,7 +319,7 @@ impl TableObject {
 
     pub fn from_array(items: Vec<Value>) -> Self {
         Self {
-            array: items,
+            array: items.into(),
             map: HashMap::default(),
         }
     }
@@ -373,5 +480,53 @@ impl TableObject {
             return Value::Nil;
         };
         self.map.remove(&k).unwrap_or(Value::Nil)
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use super::*;
+
+    #[test]
+    fn an_array_nothing_writes_to_keeps_its_lease_and_is_never_copied() {
+        let mut t = TableObject::from_array(vec![Value::Int(1), Value::Int(2)]);
+        let first = t.array.lease();
+        assert!(t.array.leased_to(&first));
+        // Read as much as wanted: still the same lease, and empty.
+        assert_eq!(t.array.len(), 2);
+        assert!(t.array.iter().all(|v| matches!(v, Value::Int(_))));
+        let again = t.array.lease();
+        assert!(Rc::ptr_eq(&first, &again));
+        assert!(RefCell::borrow(&first).array.is_empty());
+    }
+
+    #[test]
+    fn a_write_leaves_the_loops_holding_the_lease_what_the_array_held() {
+        let mut t = TableObject::from_array(vec![Value::Int(1), Value::Int(2)]);
+        let lease = t.array.lease();
+        t.array.push(Value::Int(3));
+        // The loop's copy is the array as it was; the array has moved on,
+        // and is no longer leased to that loop.
+        assert!(!t.array.leased_to(&lease));
+        assert_eq!(RefCell::borrow(&lease).array.len(), 2);
+        assert_eq!(t.array.len(), 3);
+        // A second write copies nothing more, and a loop beginning now
+        // gets a lease of its own.
+        t.array.push(Value::Int(4));
+        assert_eq!(RefCell::borrow(&lease).array.len(), 2);
+        let later = t.array.lease();
+        assert!(!Rc::ptr_eq(&lease, &later));
+        assert!(RefCell::borrow(&later).array.is_empty());
+    }
+
+    #[test]
+    fn a_write_with_no_loop_going_copies_nothing() {
+        let mut t = TableObject::from_array(vec![Value::Int(1)]);
+        // The loop is over: its lease was let go of.
+        drop(t.array.lease());
+        t.array.push(Value::Int(2));
+        let fresh = t.array.lease();
+        assert!(RefCell::borrow(&fresh).array.is_empty());
+        assert_eq!(t.array.len(), 2);
     }
 }

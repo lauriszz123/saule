@@ -206,10 +206,15 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::GETPAY as u8, 133);
     assert_eq!(Op::CALLSELF as u8, 134);
     assert_eq!(Op::ISTYPE as u8, 135);
+    // The three that index a table `self` holds in a field, as one block.
+    assert_eq!(Op::GETFIDX as u8, 136);
+    assert_eq!(Op::GETFIDXU as u8, 137);
+    assert_eq!(Op::SETFIDX as u8, 138);
+    assert_eq!(Op::ISNILP as u8, 139);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::ISTYPE),
-        "a new opcode was appended after ISTYPE — extend this assertion rather than \
+        Some(Op::ISNILP),
+        "a new opcode was appended after ISNILP — extend this assertion rather than \
          inserting one in the middle"
     );
 }

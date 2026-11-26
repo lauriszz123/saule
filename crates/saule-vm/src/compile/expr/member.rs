@@ -327,6 +327,30 @@ impl Compiler<'_> {
         false
     }
 
+    /// The slot of the field `e` reads, when `e` is `self.name` in a method
+    /// and `name` is a field declared as a table: what
+    /// [`GETFIDX`](Op::GETFIDX) and [`SETFIDX`](Op::SETFIDX) index without
+    /// loading.
+    ///
+    /// `self` only, because the two opcodes take their receiver from
+    /// register 0. A declared table only: an `any` or a class there indexes
+    /// through something else (`OpIndex`, a run-time lookup), and a `table?`
+    /// is tested for nil first.
+    pub(crate) fn self_table_field(&self, e: &Spanned<Expr>) -> Option<u8> {
+        let Expr::Member { obj, name } = &e.value else {
+            return None;
+        };
+        if !matches!(obj.value, Expr::Self_) || !self.f.in_method {
+            return None;
+        }
+        if !matches!(self.types.get(&e.id), Some(saule_ast::Type::Table { .. })) {
+            return None;
+        }
+        let class = self.class_of_expr(obj)?;
+        let slot = self.chunk.classes[class as usize].layout.slot(name)?;
+        u8::try_from(slot).ok()
+    }
+
     /// The instruction that loads a resolved member into `a` from a
     /// receiver in `b`.
     pub(crate) fn member_load(&self, access: MemberAccess, a: u8, b: u8) -> Instruction {
@@ -432,6 +456,23 @@ impl Compiler<'_> {
                 let a = self.reg8(dst, bang)?;
                 self.emit(Instruction::abc(Op::UNWRAPNIL, a, a, 0), bang);
             }
+            return Ok(());
+        }
+
+        // `self.items[i]`: the element read out of the field's table where
+        // it lies (`GETFIDX`), not after a `GETF` has copied the table into
+        // a register.
+        if let Some(slot) = self.self_table_field(obj)
+            && self.operand_is_pure(index)
+        {
+            let m = self.mark();
+            let i = self.operand_to_reg(index, true)?;
+            let (a, c) = (self.reg8(dst, span)?, self.reg8(i, span)?);
+            match unwrap_at {
+                Some(bang) => self.emit(Instruction::abc(Op::GETFIDXU, a, slot, c), bang),
+                None => self.emit(Instruction::abc(Op::GETFIDX, a, slot, c), span),
+            }
+            self.free_to(m);
             return Ok(());
         }
 

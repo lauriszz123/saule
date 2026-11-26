@@ -666,6 +666,64 @@ define_ops! {
     /// Appended after `CALLSELF`, never inserted: the numbering is the
     /// chunk ABI.
     ISTYPE: Abc,
+
+    // ---- §15.9 Tables (continued) ----------------------------------------
+    /// `R[A] := R[0].field[B][R[C]]` — an element of a table that `self`
+    /// holds in a field: `self.items[i]`, in a method.
+    ///
+    /// It was `GETF` and a `GETIDX`, and what that cost was not the second
+    /// instruction but the table **copied into a register between them**: a
+    /// reference count taken and, when the register was next written, given
+    /// back, each through a call, around every element read. A class that
+    /// keeps a list in a field — a stack, a buffer, a list of children —
+    /// reads it this way in its innermost loops. Here the table is borrowed
+    /// where it lies.
+    ///
+    /// The receiver is `R[0]` and not an operand, which is what leaves room
+    /// for the field's slot: inside a method `self` is always register 0.
+    /// The compiler emits it only there, for a field whose declared type is
+    /// a table, with an index that can run no code (so that nothing comes
+    /// between the read of the field and the read of the element, as
+    /// nothing did between `GETF` and `GETIDX`).
+    ///
+    /// Appended after `ISTYPE`, never inserted: the numbering is the chunk
+    /// ABI.
+    GETFIDX: Abc,
+    /// [`GETFIDX`](Op::GETFIDX) and the `!` after it, as
+    /// [`GETIDXU`](Op::GETIDXU) is `GETIDX`'s: a nil element is an error,
+    /// at the `!`'s span.
+    GETFIDXU: Abc,
+    /// `R[0].field[A][R[B]] := R[C]` — the write [`GETFIDX`](Op::GETFIDX)
+    /// is the read of: `self.items[i] = v`, in a method. `A` is the field's
+    /// slot, not a register.
+    SETFIDX: Abc,
+
+    // ---- §15.12 Nullability (continued) ----------------------------------
+    /// `R[A] := ` whether the value at the end of `paths[C]` from `R[B]` is
+    /// nil, **looked at where it lies**.
+    ///
+    /// `if row.mid != nil` was a `GETF` and a `JNOTNIL`, and
+    /// `if row.mid!.inner != nil` a `GETPATH` and one: the object read into
+    /// a register — a reference count taken, and given back when the
+    /// register was next written — to be compared with nil and never
+    /// looked at again. Every guard before a `!` is this. Now the answer
+    /// is read into the register, a boolean, and a `TEST` branches on it.
+    ///
+    /// The path is [`GETPATH`](Op::GETPATH)'s, with a single `.name` a path
+    /// of one link, and fails as that does: a `!` link that meets nil is
+    /// still an error, at that link.
+    ///
+    /// **Not a jump**, though a jump would be one instruction fewer. Tried
+    /// as one (`JNILP`, skipping the next instruction itself), in four
+    /// shapes of arm: each was `nullsafe` and `bintree` faster by a little
+    /// more than this, and `mandel` 12% slower with `oop` or `loop_arith`
+    /// beside it — programs that run no such instruction. An arm that
+    /// moves `pc` after a call is what the loop would not have. This one
+    /// shares the arm `GETFIDX` has, unchanged.
+    ///
+    /// Appended after `SETFIDX`, never inserted: the numbering is the chunk
+    /// ABI.
+    ISNILP: Abc,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

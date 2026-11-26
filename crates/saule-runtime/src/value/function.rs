@@ -181,6 +181,44 @@ impl fmt::Debug for VmFunctionRef {
 pub struct NativeFn {
     pub name: &'static str,
     pub func: fn(&[Value]) -> Result<Value, String>,
+    /// A shorter way in, for a native that only works something out from
+    /// its arguments: `func`'s own answer where it has one, and `None`
+    /// where `func` would fail, which sends the call to `func` for the
+    /// failure. It is `func` itself with its error let go of (see
+    /// [`NativeFn::pure`]), so the two cannot disagree.
+    ///
+    /// Only for a native that calls nothing back and changes nothing: the
+    /// caller skips, for such a call, what it sets up in case a native
+    /// runs Saule code, and a refused call runs twice.
+    pub quick: Option<QuickFn>,
+}
+
+/// A native's shorter way in: see [`NativeFn::quick`].
+pub type QuickFn = fn(&[Value]) -> Option<Value>;
+
+impl NativeFn {
+    /// A native with nothing but `func`.
+    pub fn new(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Self {
+        Self {
+            name,
+            func,
+            quick: None,
+        }
+    }
+
+    /// A native that only works something out from its arguments, with
+    /// its shorter way in (see `quick`).
+    pub fn pure(
+        name: &'static str,
+        func: fn(&[Value]) -> Result<Value, String>,
+        quick: QuickFn,
+    ) -> Self {
+        Self {
+            name,
+            func,
+            quick: Some(quick),
+        }
+    }
 }
 
 impl fmt::Debug for NativeFn {

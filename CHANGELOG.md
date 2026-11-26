@@ -4,6 +4,42 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## 26.33
+
+A faster virtual machine. Nothing in the language changes; on the benchmark
+suite programs take about a tenth less time, and the mean against Lua 5.4
+goes from 1.37x to 1.24x. `PERF_TASKS.md` has each change with what was
+measured.
+
+### Changed
+
+- **A loop over a list no longer copies it.** `for v in t` sees `t` as it
+  was when the loop began, and got that by copying the table before the
+  first step. A table that is all array is now read where it is, and copied
+  only if it is written to while a loop is going over it. A loop over a list
+  of objects takes about half the time. What a loop sees is unchanged,
+  whatever its body does to the table.
+- **`Math` calls cost about half.** Each one wrote its own name out as a
+  string, for the message of a call with the wrong number of arguments,
+  before looking at how many it had.
+- **Coroutines switch faster.** A suspended coroutine keeps its register
+  file whole, where it was taken apart and built again around every
+  `yield`, and a `yield` is recognised before the call is made. About a
+  quarter less time for a round trip.
+- **A call into a native package** makes one allocation, not three.
+- **Method calls and field reads.** A method-cache hit and the value at the
+  end of a field path (`row.mid?.inner`) are answered in a register, not
+  through memory, and a field read no longer runs a destructor for the
+  number it overwrites.
+- **`self.items[i]` in a method** indexes the table where it lies in the
+  field (`GETFIDX`, `GETFIDXU`, `SETFIDX`), and **`if row.mid != nil`** asks
+  the field without reading the object out of it (`ISNILP`). Four opcodes,
+  appended after `ISTYPE`: every existing number keeps its meaning.
+- **A program built with `saule build` has to be built again**, as after
+  every release: bytecode is tied to the version that wrote it.
+- `benchmarks/` has a thirty-second program, `treewalk`: a tree of objects
+  walked child list by child list, which nothing in the suite did.
+
 ## 26.32
 
 ### Added

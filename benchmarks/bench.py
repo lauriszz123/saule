@@ -25,11 +25,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-# Grouped only for readability: 31 rows is too many to scan flat. Nothing in
+# Grouped only for readability: 32 rows is too many to scan flat. Nothing in
 # the timing depends on the grouping — every engine still runs every
 # benchmark back to back within a rep.
 GROUPS = (
-    ("core mechanisms", "loop_arith fib array map oop mandel strings closure sort"),
+    ("core mechanisms", "loop_arith fib array map oop mandel strings closure sort treewalk"),
     ("language features", "coroutine coro_pipe coro_tree vecops iface generic errors nullsafe match"),
     ("standard library", "stringlib pattern tablelib iterlib mathlib bytes"),
     ("whole programs", "bintree matrix entity wordfreq json interp"),

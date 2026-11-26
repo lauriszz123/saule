@@ -116,7 +116,7 @@ pub(crate) fn define_native(
 ) {
     env.borrow_mut().define(
         name.to_string(),
-        Value::Native(Rc::new(NativeFn { name, func })),
+        Value::Native(Rc::new(NativeFn::new(name, func))),
     );
 }
 

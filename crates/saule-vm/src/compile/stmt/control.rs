@@ -303,6 +303,12 @@ impl Compiler<'_> {
             _ => return Ok(None),
         };
 
+        // A field, or a chain of them: asked where it lies, with the object
+        // it may hold never read into a register (`ISNILP` and a `TEST`).
+        if self.nil_test_on_path(value, o == Op::JNIL, span)? {
+            return Ok(Some(self.emit_jump(Op::JMP, 0, span)));
+        }
+
         let m = self.mark();
         let r = self.operand_to_reg(value, self.operand_is_pure(value))?;
         let a = self.reg8(r, span)?;
