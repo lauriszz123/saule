@@ -1081,8 +1081,8 @@ mod tests {
     #[test]
     fn the_ends_of_a_table_without_copying_it() {
         let source = ints(&[1, 2, 3, 4]);
-        assert!(matches!(iter_first(&[source.clone()]).unwrap()[0], Value::Int(1)));
-        assert!(matches!(iter_last(&[source.clone()]).unwrap()[0], Value::Int(4)));
+        assert!(matches!(iter_first(std::slice::from_ref(&source)).unwrap()[0], Value::Int(1)));
+        assert!(matches!(iter_last(std::slice::from_ref(&source)).unwrap()[0], Value::Int(4)));
         assert!(matches!(iter_first(&[ints(&[])]).unwrap()[0], Value::Nil));
         assert!(matches!(iter_last(&[ints(&[])]).unwrap()[0], Value::Nil));
         let take = |n: i64| as_ints(&iter_take(&[source.clone(), Value::Int(n)]).unwrap()[0]);
