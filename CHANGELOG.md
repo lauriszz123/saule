@@ -54,6 +54,34 @@ history.
   all ASCII is matched where it lies and not decoded first, and a search
   goes straight to the next place the pattern's first item can match.
   What they return is unchanged.
+- **`Iter`'s combinators and `Table.sort` with a function** call it in
+  about two thirds of the time. The function's result is read where it
+  left it and not copied on the way, and the table is read where it is:
+  it was copied whole for each call of a combinator, in case the function
+  wrote to it, and is now copied only when one does. `Iter.first`,
+  `last`, `take` and `skip` no longer copy the table to take a part of
+  it. What they return is unchanged, a function that writes to the table
+  it is called about included.
+- **A table of numbers is freed** without a call for each number.
+- **A numeric `for` whose body is arithmetic** runs in about 60% of the
+  time: its numbers are taken out of their registers when it starts,
+  worked on as plain integers and floats, and put back when it leaves.
+  The body may hold comparisons, `if`, `while`, `break`, `continue`,
+  conversions between integer and float, loops of the same kind, and
+  reads and writes of numbers in a table by index (`a[i][k] * b[k][j]`);
+  a call or a field in it leaves the loop as it was. A `while` that is
+  not inside a `for` is run the same way once it has gone round a few
+  times. Nothing a program does or reports changes, a division by zero
+  or an index past the end in such a loop included.
+- **A call through an interface** takes about 80% of the time, and a
+  method that returns nothing comes back without a call into the
+  runtime.
+- **`for v in coroutine`** and `resume` take about nine tenths of the time: a
+  `yield` leaves the coroutine without an error value being copied on
+  the way out.
+- **Reading an object, a table or a number out of a table by index, a
+  field into a local and a local into a field** copy the value as the
+  kind it is, which the processor does not have to wait for.
 - **Two instructions added** (`ISREADY`, `SWITCHTAG`), so a program built
   with `saule build` has to be built again.
 

@@ -157,6 +157,71 @@ impl Value {
         )
     }
 
+    /// [`Clone::clone`] for a value that was written a moment ago by code
+    /// that writes a tag and a payload: a register an instruction has just
+    /// filled, the result of a function that has just returned.
+    ///
+    /// `clone` copies a scalar as its sixteen bytes in one load. That is
+    /// the right copy everywhere but here: a load that straddles two
+    /// stores still on their way to memory waits for both to land, a dozen
+    /// cycles, where a load of the same part that was stored does not wait
+    /// at all. This reads the tag and then the payload, as they were
+    /// written. Not for general use: it is the jump on the tag that
+    /// `clone` was rewritten to be rid of.
+    #[inline(always)]
+    pub fn clone_parts(&self) -> Value {
+        match self {
+            Value::Int(n) => Value::Int(*n),
+            Value::Float(f) => Value::Float(*f),
+            Value::Bool(b) => Value::Bool(*b),
+            Value::Nil => Value::Nil,
+            _ => self.clone_heap(),
+        }
+    }
+
+    /// `*self = v`, without the call to drop glue that the assignment
+    /// makes to drop a number: [`is_scalar`](Self::is_scalar)'s reason.
+    #[inline(always)]
+    pub fn store(&mut self, v: Value) {
+        if self.is_scalar() {
+            // SAFETY: what is overwritten owns nothing, so there is no
+            // destructor to skip; `self` is a valid `&mut Value`.
+            unsafe { std::ptr::write(self, v) };
+        } else {
+            *self = v;
+        }
+    }
+
+    /// `*self = from.clone_parts()`, written from inside each arm.
+    ///
+    /// Written as the one assignment, the four arms meet in a temporary on
+    /// the stack, filled as a tag and a payload and then read back whole to
+    /// be stored: the very load [`clone_parts`](Self::clone_parts) is there
+    /// to avoid, made a line later.
+    #[inline(always)]
+    pub fn store_parts(&mut self, from: &Value) {
+        match from {
+            Value::Int(n) => self.store(Value::Int(*n)),
+            Value::Float(f) => self.store(Value::Float(*f)),
+            Value::Bool(b) => self.store(Value::Bool(*b)),
+            Value::Nil => self.store(Value::Nil),
+            other => *self = other.clone_heap(),
+        }
+    }
+
+    /// Push `from.clone_parts()` onto `out`: [`store_parts`](Self::store_parts)
+    /// for the end of a list.
+    #[inline(always)]
+    pub fn push_parts(out: &mut Vec<Value>, from: &Value) {
+        match from {
+            Value::Int(n) => out.push(Value::Int(*n)),
+            Value::Float(f) => out.push(Value::Float(*f)),
+            Value::Bool(b) => out.push(Value::Bool(*b)),
+            Value::Nil => out.push(Value::Nil),
+            other => out.push(other.clone_heap()),
+        }
+    }
+
     /// The refcounting half of [`Clone`], deliberately out of line.
     ///
     /// Not `cold` — strings and tables are ordinary traffic. Just too big to

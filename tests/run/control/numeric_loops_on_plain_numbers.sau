@@ -1,0 +1,585 @@
+-- Numeric `for` loops whose bodies are arithmetic, comparisons and jumps.
+--
+-- Such a loop is run on the numbers themselves, taken out of their
+-- registers when it starts and put back when it leaves (`saule-vm`'s
+-- `vm/plain.rs`); any other loop is run an instruction at a time. Which of
+-- the two ran is nothing a program can see, so every shape here is
+-- computed twice: once as written, and once with a read of a table in the
+-- body, which is not arithmetic and keeps that loop an instruction at a
+-- time. The two have to agree, and where the answer is easy to know it is
+-- asserted too. `scripts/test_plain.sh` runs this whole file both ways as
+-- well.
+--
+-- `assert` throughout: run_tests.sh gates exit status only.
+
+class Loops
+	-- A table whose one element is 0: reading it changes no sum and
+	-- makes a loop one that is not run on plain numbers.
+	static zero: table<integer> = {0}
+	static nought: table<float> = {0.0}
+
+	-- ─── sums, steps, and loops that do not run ──────────────────────────
+
+	static fn sum(low: integer, to: integer, step: integer) -> integer
+		local s: integer = 0
+		for i: integer = low, to, step do
+			s = s + i * 2 - 1
+		end
+		return s
+	end
+
+	static fn sumSlow(low: integer, to: integer, step: integer) -> integer
+		local s: integer = 0
+		for i: integer = low, to, step do
+			s = s + i * 2 - 1 + Loops.zero[1]!
+		end
+		return s
+	end
+
+	-- ─── floats, and a float for the loop itself ─────────────────────────
+
+	static fn area(steps: integer) -> float
+		local total: float = 0.0
+		local width: float = 1.0 / (steps as float)
+		for i: integer = 0, steps - 1 do
+			local x: float = ((i as float) + 0.5) * width
+			total = total + 4.0 / (1.0 + x * x) * width
+		end
+		return total
+	end
+
+	static fn areaSlow(steps: integer) -> float
+		local total: float = 0.0
+		local width: float = 1.0 / (steps as float)
+		for i: integer = 0, steps - 1 do
+			local x: float = ((i as float) + 0.5) * width
+			total = total + 4.0 / (1.0 + x * x) * width + Loops.nought[1]!
+		end
+		return total
+	end
+
+	static fn ramp(low: float, to: float, step: float) -> float
+		local total: float = 0.0
+		for x: float = low, to, step do
+			total = total + x * x - x / 2.0
+		end
+		return total
+	end
+
+	static fn rampSlow(low: float, to: float, step: float) -> float
+		local total: float = 0.0
+		for x: float = low, to, step do
+			total = total + x * x - x / 2.0 + Loops.nought[1]!
+		end
+		return total
+	end
+
+	-- ─── loops in loops, `while` in `for`, `if`, `break`, `continue` ─────
+
+	static fn escapes(size: integer, most: integer) -> integer
+		local count: integer = 0
+		for py: integer = 0, size - 1 do
+			local y0: float = (py as float) / (size as float) * 2.0 - 1.0
+			for px: integer = 0, size - 1 do
+				local x0: float = (px as float) / (size as float) * 3.0 - 2.0
+				local x: float = 0.0
+				local y: float = 0.0
+				local it: integer = 0
+				while x * x + y * y <= 4.0 and it < most do
+					local xt: float = x * x - y * y + x0
+					y = 2.0 * x * y + y0
+					x = xt
+					it = it + 1
+				end
+				if it == most then
+					count = count + 1
+				end
+			end
+		end
+		return count
+	end
+
+	static fn escapesSlow(size: integer, most: integer) -> integer
+		local count: integer = 0
+		for py: integer = 0, size - 1 do
+			local y0: float = (py as float) / (size as float) * 2.0 - 1.0
+			for px: integer = 0, size - 1 do
+				local x0: float = (px as float) / (size as float) * 3.0 - 2.0
+				local x: float = 0.0
+				local y: float = 0.0
+				local it: integer = 0
+				while x * x + y * y <= 4.0 and it < most do
+					local xt: float = x * x - y * y + x0
+					y = 2.0 * x * y + y0
+					x = xt
+					it = it + 1 + Loops.zero[1]!
+				end
+				if it == most then
+					count = count + 1
+				end
+			end
+		end
+		return count
+	end
+
+	-- Collatz steps for every start up to `to`: `%`, `/`, `if` and `else`,
+	-- a `while`, and a `break` out of the `for`.
+	static fn collatz(to: integer, stop: integer) -> integer
+		local total: integer = 0
+		for start: integer = 1, to do
+			local n: integer = start
+			local steps: integer = 0
+			while n != 1 do
+				if n % 2 == 0 then
+					n = n / 2
+				else
+					n = n * 3 + 1
+				end
+				steps = steps + 1
+			end
+			if steps > stop then
+				break
+			end
+			if start % 7 == 3 then
+				continue
+			end
+			total = total + steps
+		end
+		return total
+	end
+
+	static fn collatzSlow(to: integer, stop: integer) -> integer
+		local total: integer = 0
+		for start: integer = 1, to do
+			local n: integer = start
+			local steps: integer = 0
+			while n != 1 do
+				if n % 2 == 0 then
+					n = n / 2
+				else
+					n = n * 3 + 1
+				end
+				steps = steps + 1 + Loops.zero[1]!
+			end
+			if steps > stop then
+				break
+			end
+			if start % 7 == 3 then
+				continue
+			end
+			total = total + steps
+		end
+		return total
+	end
+
+	-- A triangle of loops whose bounds are the loops outside them, one of
+	-- them counting down.
+	static fn triangle(n: integer) -> integer
+		local total: integer = 0
+		for i: integer = 1, n do
+			for j: integer = i, 1, -1 do
+				for k: integer = j, i do
+					total = total + i * j - k
+				end
+			end
+		end
+		return total
+	end
+
+	static fn triangleSlow(n: integer) -> integer
+		local total: integer = 0
+		for i: integer = 1, n do
+			for j: integer = i, 1, -1 do
+				for k: integer = j, i do
+					total = total + i * j - k + Loops.zero[1]!
+				end
+			end
+		end
+		return total
+	end
+
+	-- ─── what is left in the variables afterwards ────────────────────────
+
+	-- Booleans kept low inside, a variable written only on some turns,
+	-- the loop's variable changed in its body, and numbers that wrap.
+	static fn left(n: integer) -> string
+		local seen: boolean = false
+		local big: boolean = true
+		local last: integer = -1
+		local wraps: integer = 9223372036854775800
+		local scale: float = 1.0
+		for i: integer = 1, n do
+			local j: integer = i
+			j = j * j
+			if j % 5 == 0 then
+				last = j
+				seen = not seen
+			end
+			big = big and j < 1000
+			wraps = wraps + j
+			scale = scale * 1.5 - (i as float)
+			i = i + 1
+		end
+		local flags: integer = 0
+		if seen then
+			flags = flags + 1
+		end
+		if big then
+			flags = flags + 2
+		end
+		return "" .. flags .. " " .. last .. " " .. wraps .. " " .. (scale as integer)
+	end
+
+	static fn leftSlow(n: integer) -> string
+		local seen: boolean = false
+		local big: boolean = true
+		local last: integer = -1
+		local wraps: integer = 9223372036854775800
+		local scale: float = 1.0
+		for i: integer = 1, n do
+			local j: integer = i
+			j = j * j + Loops.zero[1]!
+			if j % 5 == 0 then
+				last = j
+				seen = not seen
+			end
+			big = big and j < 1000
+			wraps = wraps + j
+			scale = scale * 1.5 - (i as float)
+			i = i + 1
+		end
+		local flags: integer = 0
+		if seen then
+			flags = flags + 1
+		end
+		if big then
+			flags = flags + 2
+		end
+		return "" .. flags .. " " .. last .. " " .. wraps .. " " .. (scale as integer)
+	end
+
+	-- ─── `while` on its own ──────────────────────────────────────────────
+
+	-- The greatest common divisor of every pair up to `n`, by the loop
+	-- everyone writes for it.
+	static fn divisors(n: integer) -> integer
+		local total: integer = 0
+		local a: integer = 1
+		while a <= n do
+			local b: integer = 1
+			while b <= n do
+				local x: integer = a
+				local y: integer = b
+				while y != 0 do
+					local r: integer = x % y
+					x = y
+					y = r
+				end
+				total = total + x
+				b = b + 1
+			end
+			a = a + 1
+		end
+		return total
+	end
+
+	static fn divisorsSlow(n: integer) -> integer
+		local total: integer = 0
+		local a: integer = 1
+		while a <= n do
+			local b: integer = 1
+			while b <= n do
+				local x: integer = a
+				local y: integer = b
+				while y != 0 do
+					local r: integer = x % y
+					x = y
+					y = r + Loops.zero[1]!
+				end
+				total = total + x + Loops.zero[1]!
+				b = b + 1
+			end
+			a = a + 1 + Loops.zero[1]!
+		end
+		return total
+	end
+
+	-- A square root by Newton's steps: a `while` over floats that goes
+	-- round a different number of times for each `x`.
+	static fn root(x: float) -> float
+		local guess: float = x / 2.0 + 0.5
+		local turns: integer = 0
+		while turns < 60 do
+			local better: float = (guess + x / guess) / 2.0
+			if better == guess then
+				break
+			end
+			guess = better
+			turns = turns + 1
+		end
+		return guess
+	end
+
+	static fn rootSlow(x: float) -> float
+		local guess: float = x / 2.0 + 0.5
+		local turns: integer = 0
+		while turns < 60 do
+			local better: float = (guess + x / guess) / 2.0 + Loops.nought[1]!
+			if better == guess then
+				break
+			end
+			guess = better
+			turns = turns + 1
+		end
+		return guess
+	end
+
+	-- ─── tables: read, written, and found wanting ────────────────────────
+
+	-- The product of two square matrices, the three loops of it.
+	static fn product(a: table<table<float>>, b: table<table<float>>, n: integer) -> float
+		local c: table<table<float>> = {}
+		for i: integer = 1, n do
+			local row: table<float> = {}
+			for j: integer = 1, n do
+				Table.insert(row, 0.0)
+			end
+			Table.insert(c, row)
+		end
+		for i: integer = 1, n do
+			local ai: table<float> = a[i]!
+			local ci: table<float> = c[i]!
+			for k: integer = 1, n do
+				local aik: float = ai[k]!
+				local bk: table<float> = b[k]!
+				for j: integer = 1, n do
+					ci[j] = ci[j]! + aik * bk[j]!
+				end
+			end
+		end
+		local total: float = 0.0
+		for i: integer = 1, n do
+			total = total + c[i]![i]! * (i as float)
+		end
+		return total
+	end
+
+	static fn productSlow(a: table<table<float>>, b: table<table<float>>, n: integer) -> float
+		local c: table<table<float>> = {}
+		for i: integer = 1, n do
+			local row: table<float> = {}
+			for j: integer = 1, n do
+				Table.insert(row, 0.0)
+			end
+			Table.insert(c, row)
+		end
+		for i: integer = 1, n do
+			local ai: table<float> = a[i]!
+			local ci: table<float> = c[i]!
+			for k: integer = 1, n do
+				local aik: float = ai[k]!
+				local bk: table<float> = b[k]!
+				for j: integer = 1, n do
+					ci[j] = ci[j]! + aik * bk[j]! + Loops.nought[1]!
+				end
+			end
+		end
+		local total: float = 0.0
+		for i: integer = 1, n do
+			total = total + c[i]![i]! * (i as float) + Loops.nought[1]!
+		end
+		return total
+	end
+
+	static fn square(n: integer, seed: integer) -> table<table<float>>
+		local m: table<table<float>> = {}
+		local s: integer = seed
+		for i: integer = 1, n do
+			local row: table<float> = {}
+			for j: integer = 1, n do
+				s = (s * 1103515245 + 12345) % 2147483648
+				Table.insert(row, ((s % 1000) as float) / 1000.0)
+			end
+			Table.insert(m, row)
+		end
+		return m
+	end
+
+	-- A sieve: integers and booleans in and out of tables, a `while`
+	-- inside a `for`, and `#`.
+	static fn primes(upTo: integer) -> integer
+		local composite: table<boolean> = {}
+		for i: integer = 1, upTo do
+			Table.insert(composite, false)
+		end
+		local found: table<integer> = {}
+		for i: integer = 1, upTo do
+			Table.insert(found, 0)
+		end
+		local count: integer = 0
+		for i: integer = 2, #composite do
+			if not composite[i]! then
+				count = count + 1
+				found[count] = i
+				local at: integer = i * i
+				while at <= upTo do
+					composite[at] = true
+					at = at + i
+				end
+			end
+		end
+		local sum: integer = 0
+		for i: integer = 1, count do
+			sum = sum + found[i]!
+		end
+		return sum * 1000 + count
+	end
+
+	static fn primesSlow(upTo: integer) -> integer
+		local composite: table<boolean> = {}
+		for i: integer = 1, upTo do
+			Table.insert(composite, false)
+		end
+		local found: table<integer> = {}
+		for i: integer = 1, upTo do
+			Table.insert(found, 0)
+		end
+		local count: integer = 0
+		for i: integer = 2, #composite do
+			if not composite[i]! then
+				count = count + 1 + Loops.zero[1]!
+				found[count] = i
+				local at: integer = i * i
+				while at <= upTo do
+					composite[at] = true
+					at = at + i + Loops.zero[1]!
+				end
+			end
+		end
+		local sum: integer = 0
+		for i: integer = 1, count do
+			sum = sum + found[i]! + Loops.zero[1]!
+		end
+		return sum * 1000 + count
+	end
+
+	-- A random walk, as the benchmarks seed themselves.
+	static fn walk(turns: integer) -> integer
+		local seed: integer = 24601
+		local at: integer = 0
+		for turn: integer = 1, turns do
+			seed = (seed * 1103515245 + 12345) % 2147483648
+			if seed % 3 == 0 then
+				at = at + seed % 11
+			elseif seed % 3 == 1 then
+				at = at - seed % 7
+			else
+				at = -at
+			end
+		end
+		return at
+	end
+
+	static fn walkSlow(turns: integer) -> integer
+		local seed: integer = 24601
+		local at: integer = 0
+		for turn: integer = 1, turns do
+			seed = (seed * 1103515245 + 12345) % 2147483648 + Loops.zero[1]!
+			if seed % 3 == 0 then
+				at = at + seed % 11
+			elseif seed % 3 == 1 then
+				at = at - seed % 7
+			else
+				at = -at
+			end
+		end
+		return at
+	end
+end
+
+-- Sums, by the closed form: the sum of `2i - 1` for 1..n is n squared.
+assert(Loops.sum(1, 1000, 1) == 1000000)
+assert(Loops.sum(1, 1000, 1) == Loops.sumSlow(1, 1000, 1))
+for step in {1, 2, 3, 7, -1, -4, 1000, -1000} do
+	for low in {-20, 0, 1, 13} do
+		for to in {-20, 0, 1, 13, 500} do
+			assert(Loops.sum(low, to, step) == Loops.sumSlow(low, to, step))
+		end
+	end
+end
+-- A loop that does not run leaves its sum where it was.
+assert(Loops.sum(5, 1, 1) == 0 and Loops.sum(1, 5, -1) == 0)
+-- Up to the largest integer: the step that would pass it ends the loop.
+assert(Loops.sum(9223372036854775805, 9223372036854775807, 1) == Loops.sumSlow(9223372036854775805, 9223372036854775807, 1))
+assert(Loops.sum(-9223372036854775805, -9223372036854775807, -2) == Loops.sumSlow(-9223372036854775805, -9223372036854775807, -2))
+
+-- Floats: the same additions in the same order, so the same float.
+assert(Loops.area(1000) == Loops.areaSlow(1000))
+assert(Loops.area(1000) > 3.14159 and Loops.area(1000) < 3.1416)
+assert(Loops.area(0) == 0.0)
+for step in {0.25, 1.0, -0.5, 3.0} do
+	assert(Loops.ramp(0.0, 10.0, step) == Loops.rampSlow(0.0, 10.0, step))
+	assert(Loops.ramp(10.0, -3.0, step) == Loops.rampSlow(10.0, -3.0, step))
+end
+
+-- Loops in loops.
+assert(Loops.escapes(40, 30) == Loops.escapesSlow(40, 30))
+assert(Loops.escapes(40, 30) > 0)
+assert(Loops.collatz(300, 1000) == Loops.collatzSlow(300, 1000))
+assert(Loops.collatz(300, 100) == Loops.collatzSlow(300, 100))
+assert(Loops.collatz(27, 110) == Loops.collatzSlow(27, 110))
+assert(Loops.triangle(25) == Loops.triangleSlow(25))
+assert(Loops.triangle(0) == 0)
+
+-- What is left afterwards.
+for n in {0, 1, 4, 5, 37, 200} do
+	assert(Loops.left(n) == Loops.leftSlow(n), "left " .. n)
+end
+assert(Loops.left(0) == "2 -1 9223372036854775800 1")
+assert(Loops.walk(5000) == Loops.walkSlow(5000))
+
+-- `while` on its own.
+assert(Loops.divisors(40) == Loops.divisorsSlow(40))
+assert(Loops.divisors(1) == 1 and Loops.divisors(0) == 0)
+for x in {2.0, 9.0, 1e-9, 12345.678, 1e300} do
+	assert(Loops.root(x) == Loops.rootSlow(x))
+end
+assert(Loops.root(9.0) == 3.0)
+
+-- Tables.
+local left: table<table<float>> = Loops.square(24, 12345)
+local right: table<table<float>> = Loops.square(24, 67890)
+assert(Loops.product(left, right, 24) == Loops.productSlow(left, right, 24))
+assert(Loops.product(left, right, 24) > 0.0)
+assert(Loops.primes(2000) == Loops.primesSlow(2000))
+assert(Loops.primes(30) == 129010)
+-- The same table for both sides of a product: read and written in turn.
+assert(Loops.product(left, left, 24) == Loops.productSlow(left, left, 24))
+
+-- A loop at the top of a file, over variables a function has taken hold of
+-- before it runs and reads after.
+local held: integer = 0
+local read: fn() -> integer = fn() -> integer
+	return held
+end
+for i: integer = 1, 100 do
+	held = held + i
+end
+assert(read() == 5050)
+
+-- A variable that is not a number until the loop makes it one, and one the
+-- loop never gets round to.
+local found: integer? = nil
+local never: integer? = nil
+for i: integer = 1, 50 do
+	if i * i > 200 then
+		found = i
+		break
+	end
+	if i > 100 then
+		never = i
+	end
+end
+assert(found == 15 and never == nil)
+
+println("ok")

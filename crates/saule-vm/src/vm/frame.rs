@@ -254,6 +254,26 @@ impl CallSession for Calls {
         }
     }
 
+    fn call_ref(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<&Value, RuntimeError> {
+        let Some(vm) = self.vm.as_mut() else {
+            return Err(RuntimeError::Internal {
+                message: "internal: a call session is used after one of its calls failed".into(),
+                span,
+            });
+        };
+        if let Err(e) = vm.invoke_kept(&self.handle, &self.proto, &self.chunk, args, span) {
+            // As in `call_first`.
+            let mut vm = self.vm.take().expect("checked just above");
+            vm.abandon();
+            return Err(e);
+        }
+        Ok(self.vm.as_ref().expect("checked just above").kept())
+    }
+
     fn compares(&self) -> Option<saule_runtime::value::Comparison> {
         comparison_of(&self.proto)
     }

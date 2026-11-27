@@ -111,6 +111,23 @@ pub trait CallSession {
         span: std::ops::Range<usize>,
     ) -> Result<Value, crate::error::RuntimeError>;
 
+    /// [`call_first`](Self::call_first), lending the result where the
+    /// function left it instead of handing it over. It is good until the
+    /// next call of this session.
+    ///
+    /// For a native that calls once for each element of a table. Handed
+    /// over, the result went from the function's register into a buffer,
+    /// out of the buffer into a `Result`, and through one or two more on
+    /// its way to whoever asked, each a copy of sixteen bytes read back
+    /// the moment it was written and seldom in the parts it was written
+    /// in. Most callers want one thing of it — whether it is true — and
+    /// can ask that where it lies.
+    fn call_ref(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<&Value, crate::error::RuntimeError>;
+
     /// What the function is, when it is nothing but one comparison of its
     /// two arguments: `(a, b) => a < b` and its like. `None` for any other.
     ///

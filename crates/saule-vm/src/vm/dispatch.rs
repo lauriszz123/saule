@@ -848,7 +848,23 @@ impl Vm {
                         if a > 0 {
                             self.close_upvalues((base + a - 1) as u32);
                         }
-                        pc = jump(pc, ins.sbx());
+                        let by = ins.sbx();
+                        pc = jump(pc, by);
+                        // A jump back ends a loop, and a loop of nothing
+                        // but arithmetic is run on plain numbers from
+                        // here on, once it has gone round a few times
+                        // (`plain`): a `while` has no `FORPREP` to be
+                        // handed over at.
+                        if by < 0
+                            && a == 0
+                            && !PROFILE
+                            && let Some(plan) = proto.plain_loop(here, &chunk)
+                            && plan.due()
+                            // SAFETY: as at `FORPREP_I`.
+                            && let Some(next) = unsafe { plan.run(regs) }
+                        {
+                            pc = next;
+                        }
                         continue;
                     }
                     Op::JLTI => jump_int!(|l, r| l < r),
@@ -1005,6 +1021,21 @@ impl Vm {
                         }
                         if int_in_range(from, limit, step) {
                             self.set_reg(base + a + 3, Value::Int(from));
+                            // A loop of nothing but arithmetic on registers
+                            // is run on plain numbers (`plain`), which
+                            // comes back with where to go on from, or
+                            // with nothing done.
+                            if !PROFILE
+                                && let Some(plan) = proto.plain_loop(here, &chunk)
+                                && plan.worth(super::plain::turns(from, limit, step))
+                                // SAFETY: `regs` is this frame's `R[0]`,
+                                // and the proto is the verified one the
+                                // plan was made from.
+                                && let Some(next) = unsafe { plan.run(regs) }
+                            {
+                                pc = next;
+                                continue;
+                            }
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -1039,6 +1070,16 @@ impl Vm {
                         }
                         if float_in_range(from, limit, step) {
                             self.set_reg(base + a + 3, Value::Float(from));
+                            // As `FORPREP_I`.
+                            if !PROFILE
+                                && let Some(plan) = proto.plain_loop(here, &chunk)
+                                && plan.worth(super::plain::turns_float(from, limit, step))
+                                // SAFETY: as there.
+                                && let Some(next) = unsafe { plan.run(regs) }
+                            {
+                                pc = next;
+                                continue;
+                            }
                         } else {
                             pc = jump(pc, ins.sbx());
                         }
@@ -1321,7 +1362,45 @@ impl Vm {
                             let key = self.reg(base + ins.c() as usize);
                             match key {
                                 Value::Int(i) => match t.array_index(*i) {
-                                    Some(slot) => t.array[slot].clone(),
+                                    // An object, a table or a number in
+                                    // the array is written to the register
+                                    // from here, as the kind it is, once
+                                    // the table is let go of (the register
+                                    // may be the one the table is in).
+                                    // Cloned as a value of any kind it was
+                                    // put together on the stack as a tag
+                                    // and a payload and copied from there
+                                    // whole, a load that waits on both
+                                    // (`Value::clone_parts`): a tenth of
+                                    // `entity`, whose loop is
+                                    // `es[i]!.update(dt)`.
+                                    Some(slot) => match &t.array[slot] {
+                                        Value::Instance(o) => {
+                                            let o = Rc::clone(o);
+                                            drop(t);
+                                            w!(a, Value::Instance(o));
+                                            continue;
+                                        }
+                                        Value::Table(o) => {
+                                            let o = Rc::clone(o);
+                                            drop(t);
+                                            w!(a, Value::Table(o));
+                                            continue;
+                                        }
+                                        Value::Int(n) => {
+                                            let n = *n;
+                                            drop(t);
+                                            w!(a, Value::Int(n));
+                                            continue;
+                                        }
+                                        Value::Float(f) => {
+                                            let f = *f;
+                                            drop(t);
+                                            w!(a, Value::Float(f));
+                                            continue;
+                                        }
+                                        other => other.clone(),
+                                    },
                                     None => t.get(key),
                                 },
                                 _ => t.get(key),
@@ -1646,6 +1725,45 @@ impl Vm {
                         continue 'reentry;
                     }
                     Op::RET0 => {
+                        // `RET1`'s short way back, for a function that
+                        // returns nothing — every method that only changes
+                        // its object — to a caller that wants nothing or
+                        // one value, which is then `nil`. What `pop_frame`
+                        // does for the same frame, without the call and
+                        // the copy of the frame out of the stack.
+                        //
+                        // Not when the profiler has a sample due: a loop
+                        // that calls nothing is charged to its function
+                        // when the function returns (`crate::sampling`),
+                        // and `pop_frame` is where that is done.
+                        let n = self.frames.len();
+                        if n > entry_depth
+                            && n >= 2
+                            && self.open_upvals.is_empty()
+                            && !crate::sampling::due()
+                        {
+                            // SAFETY: `n >= 2`.
+                            let f = unsafe { self.frames.get_unchecked(n - 1) };
+                            if f.n_ret <= 1 && !f.owns_func {
+                                let (dst, wanted) = (f.ret_to as usize, f.n_ret);
+                                // SAFETY: as in `RET1`: the frame owns
+                                // nothing, so forgetting it skips no
+                                // destructor.
+                                unsafe { self.frames.set_len(n - 1) };
+                                if wanted == 1 {
+                                    self.set_reg(dst, Value::Nil);
+                                }
+                                // SAFETY: `n >= 2`, so a frame remains.
+                                let f = unsafe { self.frames.get_unchecked(n - 2) };
+                                if Rc::ptr_eq(&f.proto, &proto) {
+                                    base = f.base as usize;
+                                    pc = f.pc as usize;
+                                    regs = self.stack.as_mut_ptr().wrapping_add(base);
+                                    continue;
+                                }
+                                continue 'reentry;
+                            }
+                        }
                         if self.pop_frame(base, 0) {
                             return Ok(());
                         }
@@ -1672,8 +1790,21 @@ impl Vm {
                                 // so forgetting it instead of dropping it
                                 // skips no destructor.
                                 unsafe { self.frames.set_len(n - 1) };
-                                let v = std::mem::replace(self.reg_mut(base + a), Value::Nil);
-                                self.set_reg(dst, v);
+                                // A number is returned by its parts, and
+                                // left where it was: it is what the
+                                // instruction before this one wrote
+                                // (`Value::clone_parts`), and it owns
+                                // nothing.
+                                match *self.reg(base + a) {
+                                    Value::Int(v) => self.set_reg(dst, Value::Int(v)),
+                                    Value::Float(v) => self.set_reg(dst, Value::Float(v)),
+                                    Value::Bool(v) => self.set_reg(dst, Value::Bool(v)),
+                                    _ => {
+                                        let v =
+                                            std::mem::replace(self.reg_mut(base + a), Value::Nil);
+                                        self.set_reg(dst, v);
+                                    }
+                                }
                                 // Back into the same function — a recursive
                                 // call returning — leaves code, constants and
                                 // chunk as they are; only the frame moved.
@@ -1758,10 +1889,26 @@ impl Vm {
                     }
                     Op::GETF => {
                         let slot = ins.c() as usize;
+                        // An integer or a float is read out by its parts
+                        // and written by them, after the instance is let
+                        // go of (the register may be the one it is in):
+                        // see `Value::clone_parts` for why by parts.
                         let v = match r!(ins.b() as usize) {
                             Value::Instance(i) => {
                                 let i = i.borrow();
                                 match i.fields.get(slot) {
+                                    Some(Value::Int(n)) => {
+                                        let n = *n;
+                                        drop(i);
+                                        w!(a, Value::Int(n));
+                                        continue;
+                                    }
+                                    Some(Value::Float(f)) => {
+                                        let f = *f;
+                                        drop(i);
+                                        w!(a, Value::Float(f));
+                                        continue;
+                                    }
                                     Some(v) => v.clone(),
                                     None => {
                                         return Err(field_slot_err(
@@ -1791,16 +1938,20 @@ impl Vm {
                     }
                     Op::SETF => {
                         let slot = ins.b() as usize;
-                        let v = (*self.reg(base + ins.c() as usize)).clone();
+                        let from = self.reg(base + ins.c() as usize);
                         // The VM's instance write, the counterpart of
                         // `InstanceObject::set_field`. See `saule_runtime::gc`.
-                        saule_runtime::gc::on_store(&v);
+                        saule_runtime::gc::on_store(from);
                         match self.reg(base + a) {
                             Value::Instance(i) => {
                                 let mut i = i.borrow_mut();
                                 let n = i.fields.len();
                                 match i.fields.get_mut(slot) {
-                                    Some(dst) => *dst = v,
+                                    // By its parts, when it is a number:
+                                    // it is as often as not what the
+                                    // instruction before this one wrote
+                                    // (`Value::store_parts`).
+                                    Some(dst) => dst.store_parts(from),
                                     None => return Err(field_slot_err(slot, n, &proto, here)),
                                 }
                             }
@@ -1917,8 +2068,11 @@ impl Vm {
                         let slot = ins.c() as usize;
                         let n_args = (ins.b() as usize).saturating_sub(1);
                         let n_ret = if c == 0 { ALL_RESULTS } else { c - 1 };
-                        let (tm, target) =
-                            self.itable_lookup_cached(recv, iface, slot, &proto, here)?;
+                        let hit = self.iface_callee_packed(recv, iface, slot, &proto, here);
+                        if hit == super::call::NO_HIT {
+                            return Err(self.take_fault());
+                        }
+                        let (tm, target) = ((hit >> 32) as usize, hit as u32);
                         self.frames.last_mut().expect("frame").pc = pc as u32;
                         if self.enter_static(
                             tm,
@@ -2167,6 +2321,15 @@ impl Vm {
                             &Site::Code(&proto, here),
                             pc,
                         ) {
+                            // A yield is on its way out and has thrown
+                            // nothing. Named again here, and not handed
+                            // on: an error is eleven words, and passed
+                            // through `native_throw` and back all eleven
+                            // were copied twice to carry the one that
+                            // says which error it is.
+                            if matches!(e, RuntimeError::Yield) {
+                                return Err(RuntimeError::Yield);
+                            }
                             self.native_throw(e, pc, &proto, here)?;
                             continue 'reentry;
                         }

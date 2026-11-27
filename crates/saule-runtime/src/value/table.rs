@@ -270,6 +270,28 @@ impl ArrayPart {
     }
 }
 
+impl Drop for ArrayPart {
+    /// Let go of the elements without a call for each one that is a
+    /// number.
+    ///
+    /// A `Vec<Value>` drops by calling `Value`'s drop glue once for every
+    /// element, to find for a table of numbers that there was nothing to
+    /// do each time. Asked first whether it owns anything, an element that
+    /// does not costs a compare.
+    fn drop(&mut self) {
+        for value in self.items.iter_mut() {
+            if !value.is_scalar() {
+                // Dropped here, and what is left in its place owns nothing.
+                *value = Value::Nil;
+            }
+        }
+        // SAFETY: every element is now a scalar, which has no destructor:
+        // forgetting them is all that dropping them would do. The buffer
+        // is still the `Vec`'s to free.
+        unsafe { self.items.set_len(0) };
+    }
+}
+
 impl From<Vec<Value>> for ArrayPart {
     fn from(items: Vec<Value>) -> Self {
         Self { items, lease: None }

@@ -1,0 +1,16 @@
+-- A `for` with a step of zero inside a loop of arithmetic.
+--
+-- The outer loop is run on plain numbers (`saule-vm`'s `vm/plain.rs`); the
+-- inner one's step becomes zero on the third turn, and starting it is the
+-- main loop's to refuse, as it refuses any `for` with a step of zero.
+class Main
+	static fn main()
+		local total: integer = 0
+		for i: integer = 2, -2, -1 do
+			for j: integer = 1, 10, i do
+				total = total + j
+			end
+		end
+		println(total)
+	end
+end

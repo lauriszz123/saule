@@ -54,6 +54,7 @@ pub mod coroutine;
 pub mod dispatch;
 pub mod frame;
 pub mod ops;
+pub(crate) mod plain;
 pub mod trace;
 pub mod unwind;
 pub mod upval;
@@ -232,6 +233,11 @@ pub struct Vm {
     /// outermost return, once per invocation. Handing back a fresh `Vec`
     /// each time was a malloc and a free per comparison on `sort`.
     results: Vec<Value>,
+    /// Set for a call whose result is to stay in its register
+    /// ([`Vm::invoke_kept`]), and where it then is: see
+    /// [`Vm::pop_frame`](Self::pop_frame).
+    keep_result: bool,
+    kept_at: u32,
     /// The error of a method call that found no callee, between
     /// [`Vm::callee_packed`] leaving it and the `CALLM` arm taking it.
     fault: Option<Box<saule_runtime::RuntimeError>>,
@@ -325,6 +331,8 @@ impl Vm {
             coroutine: 0,
             yield_slot: (0, 0),
             results: Vec::new(),
+            keep_result: false,
+            kept_at: 0,
             fault: None,
         }
     }
@@ -540,6 +548,46 @@ impl Vm {
         };
         self.results.clear();
         Ok(first)
+    }
+
+    /// [`invoke_first_resolved`](Self::invoke_first_resolved), leaving the
+    /// first result in the register the function returned it from:
+    /// [`kept`](Self::kept) lends it, until the next call on this file.
+    ///
+    /// The arguments are copied in by their parts and the result is not
+    /// copied at all, so nothing on the way reads sixteen bytes that were
+    /// written as two stores a moment before (`Value::clone_parts`).
+    pub(crate) fn invoke_kept(
+        &mut self,
+        handle: &Rc<VmFunctionRef>,
+        proto: &Rc<crate::chunk::Proto>,
+        chunk: &Rc<crate::chunk::Chunk>,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<(), RuntimeError> {
+        let base = self.free_base();
+        self.ensure_stack(base as usize + args.len());
+        for (i, a) in args.iter().enumerate() {
+            self.reg_mut(base as usize + i).store_parts(a);
+        }
+        // SAFETY: as in `invoke_first_resolved`, for all three.
+        let (p, c, f) = unsafe { (frame::hold(proto), frame::hold(chunk), frame::hold(handle)) };
+        // `push_frame_raw`, as the call instructions take it: the `Result`
+        // of `push_frame_resolved` is 64 bytes written and tested for each
+        // call, to carry an error that is made here when there is one.
+        if self.push_frame_raw(f, false, p, c, base, args.len(), base, ALL_RESULTS) {
+            return Err(self.stack_overflow(&Site::Known(span)));
+        }
+        self.keep_result = true;
+        let ran = self.execute();
+        self.keep_result = false;
+        ran.map_err(|e| self.attribute(e))
+    }
+
+    /// The first result of the last [`invoke_kept`](Self::invoke_kept).
+    #[inline(always)]
+    pub(crate) fn kept(&self) -> &Value {
+        self.reg(self.kept_at as usize)
     }
 
     /// [`invoke`](Self::invoke) for a caller that wants a single value, with

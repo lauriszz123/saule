@@ -373,6 +373,8 @@ impl Writer {
             owner_class,
             entries,
             source,
+            // Runtime scratch, found again from the code.
+            plain_loops: _,
         } = p;
         self.option(name.as_ref(), Self::rc_str);
         self.u8(*n_params);

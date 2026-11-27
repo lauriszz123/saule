@@ -530,15 +530,22 @@ fn invoke_comp(
             super::wrong_arg("Table.sort", 1, "a function", comp)
         ));
     }
-    buf.clear();
-    buf.push(a.clone());
-    buf.push(b.clone());
-    let result = match session {
-        Some(s) => s.call_first(buf, 0..0),
-        None => crate::call::call_value_first(comp, buf, 0..0),
+    let failed = |e: crate::error::RuntimeError| format!("Table.sort: comparator failed: {e}");
+    match session {
+        // A bytecode comparator: its answer is read where it left it, and
+        // the two arguments are lent from here (`CallSession::call_ref`).
+        Some(s) => {
+            let asked = [a.clone_parts(), b.clone_parts()];
+            Ok(s.call_ref(&asked, 0..0).map_err(failed)?.is_truthy())
+        }
+        None => {
+            buf.clear();
+            buf.push(a.clone());
+            buf.push(b.clone());
+            let result = crate::call::call_value_first(comp, buf, 0..0).map_err(failed)?;
+            Ok(result.is_truthy())
+        }
     }
-    .map_err(|e| format!("Table.sort: comparator failed: {e}"))?;
-    Ok(result.is_truthy())
 }
 
 // ─── Table.concat ────────────────────────────────────────────────────────────

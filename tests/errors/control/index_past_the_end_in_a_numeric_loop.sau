@@ -1,0 +1,21 @@
+-- An index past the end of a table, part of the way through a loop of
+-- arithmetic over tables.
+--
+-- Such a loop is run on plain numbers (`saule-vm`'s `vm/plain.rs`), which
+-- reads an element where it lies when the index is inside the array and
+-- hands the instruction to the main loop when it is not: the error is the
+-- main loop's, at the line it always was. `scripts/test_plain.sh` compares
+-- what is printed with and without.
+class Main
+	static fn main()
+		local squares: table<integer> = {}
+		for i: integer = 1, 200 do
+			Table.insert(squares, i * i)
+		end
+		local total: integer = 0
+		for i: integer = 1, 250 do
+			total = total + squares[i]! % 7
+		end
+		println(total)
+	end
+end

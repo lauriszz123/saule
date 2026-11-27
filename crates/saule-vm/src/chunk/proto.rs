@@ -41,6 +41,10 @@ pub struct Proto {
     /// proto so an error inside an imported module renders against the right
     /// file — the job `FunctionObject.source` does today.
     pub source: Option<Rc<miette::NamedSource<String>>>,
+    /// The numeric `for` loops that are run on plain numbers (`vm::plain`),
+    /// worked out the first time one of this proto's loops starts.
+    /// Runtime scratch, not serialized.
+    pub(crate) plain_loops: std::cell::OnceCell<crate::vm::plain::Plans>,
 }
 
 impl Proto {
@@ -61,7 +65,22 @@ impl Proto {
             owner_class: None,
             entries: Vec::new(),
             source: None,
+            plain_loops: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The plan for the numeric `for` whose `FORPREP` is at `pc`, when
+    /// the loop is one that can be run on plain numbers: see `vm::plain`.
+    /// `chunk` is this proto's own.
+    #[inline(always)]
+    pub(crate) fn plain_loop(
+        &self,
+        pc: u32,
+        chunk: &super::Chunk,
+    ) -> Option<&crate::vm::plain::Plan> {
+        self.plain_loops
+            .get_or_init(|| crate::vm::plain::Plans::of(self.label(), &self.code, chunk))
+            .at(pc)
     }
 
     /// Source span for a program counter, for diagnostics. Binary search
