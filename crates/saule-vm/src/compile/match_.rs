@@ -25,7 +25,7 @@ use std::ops::Range;
 use saule_ast::{Expr, MatchArm, MatchBody, Pattern, Spanned};
 
 use super::CompileError;
-use super::ctx::Compiler;
+use super::ctx::{Compiler, Label};
 
 /// What a `match`'s scrutinee produced, from the pattern matcher's side.
 ///
@@ -279,9 +279,7 @@ impl Compiler<'_> {
         span: &Range<usize>,
     ) -> Result<(), CompileError> {
         let n_variants = self.chunk.enums[e_idx as usize].variants.len();
-        let tag_reg = self.alloc(span)?;
-        let (ta, sa) = (self.reg8(tag_reg, span)?, self.reg8(sc, span)?);
-        self.emit(Instruction::abc(Op::GETTAG, ta, sa, 0), span);
+        let sa = self.reg8(sc, span)?;
 
         let table_idx = self.chunk.jump_tables.len() as u16;
         self.chunk.jump_tables.push(JumpTable {
@@ -291,7 +289,7 @@ impl Compiler<'_> {
         // The table's entries are instruction indices into *this* function,
         // so the peephole has to know it is this function's to relocate.
         self.f.jump_tables.push(table_idx);
-        self.emit(Instruction::abx(Op::SWITCH, ta, table_idx), span);
+        self.emit(Instruction::abx(Op::SWITCHTAG, sa, table_idx), span);
         // The switch always jumps, so nothing falls through to here; the
         // placeholder is replaced once every arm's entry point is known.
         let mut to_end = Vec::new();
@@ -313,6 +311,10 @@ impl Compiler<'_> {
                             span: arm.span.clone(),
                         })?;
                     targets[tag as usize] = entry;
+                    if self.field_to(sc, arm, dst)? {
+                        to_end.push(self.emit_jump(Op::JMP, 0, span));
+                        continue;
+                    }
                     self.f.enter_scope();
                     // `switchable` admitted this arm only because every
                     // payload sub-pattern is irrefutable, so nothing here can
@@ -374,21 +376,39 @@ impl Compiler<'_> {
         });
         let mut table = None;
         if let Some((_, n)) = switch {
-            let tag_reg = self.alloc(span)?;
-            let (ta, sa) = (self.reg8(tag_reg, span)?, self.reg8(sc, span)?);
-            self.emit(Instruction::abc(Op::GETTAG, ta, sa, 0), span);
+            let sa = self.reg8(sc, span)?;
             let idx = self.chunk.jump_tables.len() as u16;
             self.chunk.jump_tables.push(JumpTable {
                 targets: vec![0; n],
                 default: 0,
             });
             self.f.jump_tables.push(idx);
-            self.emit(Instruction::abx(Op::SWITCH, ta, idx), span);
+            self.emit(Instruction::abx(Op::SWITCHTAG, sa, idx), span);
             table = Some(idx);
         }
         let n_tags = switch.map_or(0, |(_, n)| n);
         let mut first_for_tag = vec![usize::MAX; n_tags];
         let mut first_wildcard = usize::MAX;
+        // Under the switch a failed arm goes straight to the next arm that
+        // can still take the value, and no arm tests the tag at all: the
+        // switch has already decided it. An arm's guard or payload that
+        // fails knows the tag is its own variant's, so the only arms left
+        // to try are the later ones for that variant, and a wildcard. Its
+        // jumps wait here, by tag, for whichever of those comes first, or
+        // for the end of the `match`.
+        //
+        // The chain this replaces sent every failure to the arm below,
+        // which tested the tag again: `Key(c) when c > 100` failing went
+        // through a `JIFTAG` to reach `Key(c)` right under it, and through
+        // one for each arm in between when they were further apart.
+        //
+        // Not when a wildcard has a guard: after it fails the tag is
+        // anybody's, and only the chain's own tests can find the next arm.
+        let routed = switch.is_some()
+            && !arms
+                .iter()
+                .any(|arm| matches!(arm.pattern.value, Pattern::Wildcard) && arm.guard.is_some());
+        let mut waiting: Vec<Vec<Label>> = (0..n_tags).map(|_| Vec::new()).collect();
 
         let mut to_end = Vec::new();
         for arm in arms {
@@ -415,6 +435,8 @@ impl Compiler<'_> {
             // above is actually about.
             self.f.enter_scope();
             let mut pattern_failed = Vec::new();
+            // The tag this arm is routed by, when it is (see `routed`).
+            let mut routed_tag = None;
             match (&arm.pattern.value, switch) {
                 // Under the switch, the tag test is done inline so the
                 // switch can land just past it: arriving there, the tag is
@@ -428,13 +450,35 @@ impl Compiler<'_> {
                     Some(_),
                 ) => {
                     let tag = self.variant_tag(enum_name, variant, span)?;
-                    let ra = self.reg8(sc, span)?;
-                    self.emit(Instruction::abc(Op::JIFTAG, ra, tag as u8, 0), span);
-                    pattern_failed.push(self.emit_jump(Op::JMP, 0, span));
+                    if routed && (tag as usize) < n_tags {
+                        // Arrived at only with this tag: by the switch,
+                        // or from an arm above for the same variant.
+                        routed_tag = Some(tag as usize);
+                        for l in std::mem::take(&mut waiting[tag as usize]) {
+                            self.patch_here(l)?;
+                        }
+                    } else {
+                        let ra = self.reg8(sc, span)?;
+                        self.emit(Instruction::abc(Op::JIFTAG, ra, tag as u8, 0), span);
+                        pattern_failed.push(self.emit_jump(Op::JMP, 0, span));
+                    }
                     if let Some(slot) = first_for_tag.get_mut(tag as usize)
                         && *slot == usize::MAX
                     {
                         *slot = self.f.label_here();
+                    }
+                    if self.field_to(sc, arm, dst)? {
+                        self.f.leave_scope();
+                        to_end.push(self.emit_jump(Op::JMP, 0, span));
+                        match routed_tag {
+                            Some(tag) => waiting[tag].extend(pattern_failed),
+                            None => {
+                                for l in pattern_failed {
+                                    self.patch_here(l)?;
+                                }
+                            }
+                        }
+                        continue;
                     }
                     self.bind_payload(sc, fields, &mut pattern_failed, span)?;
                 }
@@ -446,6 +490,13 @@ impl Compiler<'_> {
                     // Every tag no earlier arm names starts here.
                     for slot in first_for_tag.iter_mut().filter(|s| **s == usize::MAX) {
                         *slot = here;
+                    }
+                    // And every arm above that failed, whatever its tag:
+                    // a wildcard takes them all.
+                    if routed {
+                        for l in waiting.iter_mut().flat_map(std::mem::take) {
+                            self.patch_here(l)?;
+                        }
                     }
                 }
                 _ => self.test_and_bind(sc, values, &arm.pattern, &mut pattern_failed, span)?,
@@ -459,13 +510,21 @@ impl Compiler<'_> {
             self.arm_body(&arm.body, dst)?;
             self.f.leave_scope();
             to_end.push(self.emit_jump(Op::JMP, 0, span));
-            // Every failure path lands here: the next arm.
-            for l in pattern_failed.into_iter().chain(guard_failed) {
-                self.patch_here(l)?;
+            let failed = pattern_failed.into_iter().chain(guard_failed);
+            match routed_tag {
+                // To the next arm for this variant, wherever that is.
+                Some(tag) => waiting[tag].extend(failed),
+                // Every failure path lands here: the next arm.
+                None => {
+                    for l in failed {
+                        self.patch_here(l)?;
+                    }
+                }
             }
         }
         let end = self.f.label_here();
-        for l in to_end {
+        // No arm left for them: past the whole `match`.
+        for l in to_end.into_iter().chain(waiting.into_iter().flatten()) {
             self.patch_here(l)?;
         }
         if let Some(idx) = table {
@@ -747,6 +806,41 @@ impl Compiler<'_> {
             }
         }
         Ok(())
+    }
+
+    /// `case Some(v) then v`: an arm whose whole value is one of the fields
+    /// its pattern names. The field is read straight into the `match`'s
+    /// destination, where binding it first cost a register and a `MOVE`.
+    /// `false` when the arm is anything else, and nothing was emitted.
+    ///
+    /// No guard, and no field that can refuse: nothing may fail once the
+    /// destination is written, as the destination may be the very register
+    /// the arms below still match on.
+    fn field_to(&mut self, sc: u16, arm: &MatchArm, dst: u16) -> Result<bool, CompileError> {
+        let (Pattern::Variant { fields, .. }, None, MatchBody::Expr(body)) =
+            (&arm.pattern.value, &arm.guard, &arm.body)
+        else {
+            return Ok(false);
+        };
+        let Expr::Ident(wanted) = &body.value else {
+            return Ok(false);
+        };
+        if !fields.iter().all(|f| irrefutable(&f.value)) {
+            return Ok(false);
+        }
+        let mut named = fields
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| matches!(&f.value, Pattern::Bind(n) if n == wanted));
+        let (Some((at, _)), None) = (named.next(), named.next()) else {
+            return Ok(false);
+        };
+        let Ok(c) = u8::try_from(at) else {
+            return Ok(false);
+        };
+        let (d, s) = (self.reg8(dst, &arm.span)?, self.reg8(sc, &arm.span)?);
+        self.emit(Instruction::abc(Op::GETPAY, d, s, c), &arm.span);
+        Ok(true)
     }
 
     fn arm_body(&mut self, body: &MatchBody, dst: u16) -> Result<(), CompileError> {

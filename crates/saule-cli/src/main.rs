@@ -140,6 +140,12 @@ fn real_main(stack_size: usize) {
     if let Some(code) = bundle::run_embedded() {
         std::process::exit(code);
     }
+    // `saule run FILE …` with a built program for FILE: the first line of
+    // one built with `--shared` asks for exactly this. Everything after
+    // the file is the program's.
+    if let Some(code) = bundle::run_given() {
+        std::process::exit(code);
+    }
 
     let cli = Cli::parse();
 

@@ -211,10 +211,12 @@ fn opcode_numbering_is_stable() {
     assert_eq!(Op::GETFIDXU as u8, 137);
     assert_eq!(Op::SETFIDX as u8, 138);
     assert_eq!(Op::ISNILP as u8, 139);
+    assert_eq!(Op::ISREADY as u8, 140);
+    assert_eq!(Op::SWITCHTAG as u8, 141);
     assert_eq!(
         Op::ALL.last().copied(),
-        Some(Op::ISNILP),
-        "a new opcode was appended after ISNILP — extend this assertion rather than \
+        Some(Op::SWITCHTAG),
+        "a new opcode was appended after SWITCHTAG — extend this assertion rather than \
          inserting one in the middle"
     );
 }

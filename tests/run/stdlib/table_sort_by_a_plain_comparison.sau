@@ -1,0 +1,99 @@
+-- `Table.sort` with a comparator that only compares its two arguments,
+-- `(a, b) => a < b` and its like, sorts numbers without calling it
+-- (`saule_runtime::stdlib::table::sort_plainly`). What comes out has to be
+-- what calling it gives: each such comparator is here beside one written
+-- so that it is called, over the same values.
+local fn joined(t: table<integer>) -> string
+  local out = ""
+  for v in t do
+    out = out .. v .. " "
+  end
+  return out
+end
+
+local fn copy(t: table<integer>) -> table<integer>
+  local out: table<integer> = {}
+  for v in t do
+    Table.insert(out, v)
+  end
+  return out
+end
+
+-- A comparator that is called: the comparison, and something else.
+local asked = 0
+local fn less(a: integer, b: integer) -> boolean
+  asked += 1
+  return a < b
+end
+local fn more(a: integer, b: integer) -> boolean
+  asked += 1
+  return a > b
+end
+
+local values: table<integer> = {}
+local seed = 7
+for i = 1, 500 do
+  seed = (seed * 1103515245 + 12345) % 2147483648
+  Table.insert(values, seed % 97 - 40)
+end
+
+local up = copy(values)
+Table.sort(up, less)
+local down = copy(values)
+Table.sort(down, more)
+assert(asked > 0)
+
+local a = copy(values)
+Table.sort(a, (x, y) => x < y)
+assert(joined(a) == joined(up))
+local b = copy(values)
+Table.sort(b, (x, y) => x <= y)
+assert(joined(b) == joined(up))
+local c = copy(values)
+Table.sort(c, (x, y) => x > y)
+assert(joined(c) == joined(down))
+local d = copy(values)
+Table.sort(d, (x, y) => x >= y)
+assert(joined(d) == joined(down))
+local e = copy(values)
+Table.sort(e, fn(x: integer, y: integer) -> boolean return x < y end)
+assert(joined(e) == joined(up))
+
+-- The ends: nothing to sort, one value, all the same, already sorted.
+local none: table<integer> = {}
+Table.sort(none, (x, y) => x < y)
+assert(#none == 0)
+local one: table<integer> = {5}
+Table.sort(one, (x, y) => x > y)
+assert(one[1] == 5)
+local same: table<integer> = {2, 2, 2}
+Table.sort(same, (x, y) => x < y)
+assert(joined(same) == "2 2 2 ")
+local sorted: table<integer> = {-3, 0, 1, 9}
+Table.sort(sorted, (x, y) => x < y)
+assert(joined(sorted) == "-3 0 1 9 ")
+
+-- Floats, both ways.
+local f: table<float> = {2.5, -1.0, 10.25, 0.0, 3.0}
+Table.sort(f, (x, y) => x < y)
+assert(f[1] == -1.0 and f[2] == 0.0 and f[3] == 2.5 and f[4] == 3.0 and f[5] == 10.25)
+Table.sort(f, (x, y) => x > y)
+assert(f[1] == 10.25 and f[5] == -1.0)
+
+-- Strings are compared by a call, as before, and sort the same.
+local words: table<string> = {"pear", "apple", "fig"}
+Table.sort(words, (x, y) => x < y)
+assert(words[1] == "apple" and words[2] == "fig" and words[3] == "pear")
+
+-- A loop over the table while it is sorted keeps the order it began with.
+local t: table<integer> = {3, 1, 2}
+local seen = ""
+for v in t do
+  if v == 3 then
+    Table.sort(t, (x, y) => x < y)
+  end
+  seen = seen .. v
+end
+assert(seen == "312")
+assert(joined(t) == "1 2 3 ")
+println("ok")

@@ -698,8 +698,12 @@ const RUNTIME_ONLY: &[&str] = &[
     // (a zero divisor or step, a `nil` key, a failing assertion) only the
     // run knows.
     "classes/missing_member_through_any",
+    // Both fail on a value a loop worked out as it ran.
+    "control/division_by_zero_in_a_numeric_loop",
     "control/for_zero_step",
+    "control/index_past_the_end_in_a_numeric_loop",
     "control/iterate_a_non_iterable",
+    "control/zero_step_in_a_numeric_loop",
     "functions/call_a_non_function",
     "stdlib/assert_failed",
     "syntax/dynamic_arithmetic_on_string",

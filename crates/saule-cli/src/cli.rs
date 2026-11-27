@@ -82,7 +82,7 @@ pub(crate) enum Command {
     Test(TestArgs),
 }
 
-/// `saule build [TARGET] [-o OUT] [--keep-source]`
+/// `saule build [TARGET] [-o OUT] [--keep-source] [--shared[=SAULE]]`
 #[derive(Debug, Args)]
 #[command(
     about = "Build a project into one executable",
@@ -104,7 +104,17 @@ directory, and Project.root points there. The bytecode keeps line numbers
 for error messages but not the source text, unless --keep-source is given.
 
 The executable runs on the platform it was built on, with the same Saule
-version inside it."
+version inside it.
+
+  saule build --shared              leave the runtime out: this saule runs it
+  saule build --shared=/bin/saule   the saule at that path does
+
+With --shared the output is the program alone, a few hundred kilobytes, and
+the saule it names runs it: several programs then share one runtime on a
+machine. That saule has to be the build this one is, and the native packages
+the program imports are loaded from its home (SAULE_HOME) instead of
+travelling in the file. On Unix the output is executable as it is; anywhere,
+`saule run <output>` runs it."
 )]
 pub(crate) struct BuildArgs {
     /// Project directory or `.sau` file. Defaults to the current directory.
@@ -119,6 +129,18 @@ pub(crate) struct BuildArgs {
     /// offending line as `saule run` does.
     #[arg(long)]
     pub keep_source: bool,
+
+    /// Leave the runtime and the native packages out of the output: it is
+    /// run by the saule at this path (this one, when no path is given).
+    #[arg(
+        long,
+        value_name = "SAULE",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        value_parser = path_arg
+    )]
+    pub shared: Option<PathBuf>,
 }
 
 /// `saule test [TARGET] [--filter TEXT]`
@@ -250,6 +272,7 @@ Run a project or a single source file.
   saule run <file> a b       that file, with Os.args() = [\"a\", \"b\"]
   saule run -- a b           the current project, with Os.args() = [\"a\", \"b\"]
   saule run <file> -- -v     that file, with a script argument starting `-`
+  saule run <built> a -v     a program `saule build` made: all that follows is its own
 
 TARGET picks project mode when it is a directory (or absent) and single-file
 mode when it is a file. The first positional is the target; every positional

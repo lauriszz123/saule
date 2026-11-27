@@ -92,6 +92,7 @@ fn pass(
     owned: &[u16],
 ) -> usize {
     let n = code.len();
+    thread_jumps(code);
     let targets = jump_targets(code, handlers, entries, tables, owned);
     let mut dead = vec![false; n];
     let mut removed = 0;
@@ -194,6 +195,55 @@ fn pass(
         relocate(code, lines, handlers, entries, tables, owned, &dead);
     }
     removed
+}
+
+/// A jump that only leads to another instruction of control flow does what
+/// that one does, itself:
+///
+/// * `JMP` to a `RET0` or a `RET1` returns, where it jumped to a return.
+///   Every arm of a `return match …` ends in a jump to the one `RET1` after
+///   the last arm, and every `return` inside an `if` chain that the compiler
+///   gathered the same way: one instruction run on each call, to reach the
+///   next one.
+/// * `JMP` to a `JMP` goes where the second one goes.
+///
+/// Rewritten in place, so nothing is renumbered: the word is the same
+/// word, and what jumped to it or skipped it still does. Only a plain
+/// `JMP`: with `A > 0` it closes upvalues on the way, which a return does
+/// for itself and another jump may not do for it.
+fn thread_jumps(code: &mut [Instruction]) {
+    let n = code.len();
+    for pc in 0..n {
+        // A chain of jumps is followed to its end; the bound is the code's
+        // own length, past which a chain can only be a loop.
+        for _ in 0..n {
+            let ins = code[pc];
+            if ins.op() != Some(Op::JMP) || ins.a() != 0 {
+                break;
+            }
+            let target = pc as i64 + 1 + ins.sbx() as i64;
+            if target < 0 || target as usize >= n || target as usize == pc {
+                break;
+            }
+            let there = code[target as usize];
+            match there.op() {
+                Some(Op::RET0) | Some(Op::RET1) => {
+                    code[pc] = there;
+                    break;
+                }
+                Some(Op::JMP) if there.a() == 0 => {
+                    let onward = target + 1 + there.sbx() as i64;
+                    let disp = onward - (pc as i64 + 1);
+                    // The same place already, or further than a jump says.
+                    if disp == ins.sbx() as i64 || i16::try_from(disp).is_err() {
+                        break;
+                    }
+                    code[pc] = Instruction::asbx(Op::JMP, 0, disp as i32);
+                }
+                _ => break,
+            }
+        }
+    }
 }
 
 /// The test that skips the next instruction exactly when `ins` does not.

@@ -301,6 +301,86 @@ fn elements(name: &str, args: &[Value], idx: usize) -> Result<Vec<Value>, String
     }
 }
 
+/// What `read` makes of the array part of the table at `idx`, without
+/// copying it: for a combinator that wants a few of its elements and runs
+/// nothing of the program's while it looks. `Iter.first` of a thousand
+/// elements copied a thousand to hand back one.
+fn with_array<T>(
+    name: &str,
+    args: &[Value],
+    idx: usize,
+    read: impl FnOnce(&[Value]) -> Result<T, String>,
+) -> Result<T, String> {
+    match args.get(idx) {
+        Some(Value::Table(t)) => read(&t.borrow().array),
+        Some(other) => Err(super::wrong_arg(name, idx, "a `table`", other)),
+        None => Err(super::missing_arg(name, idx)),
+    }
+}
+
+/// The array part of the table at `idx`, read where it is: for the
+/// combinators that call a function for each element.
+///
+/// [`elements`] copies the array because the function may write to the
+/// table it was called about. A `for` loop has the same worry and does not
+/// copy: it takes the array's *lease* (`ArrayPart::lease`), reads the
+/// array itself for as long as nothing writes to it, and is handed a copy
+/// by the first write that happens while it is going. This is that, for a
+/// native: what each element was when the combinator was called, with a
+/// copy made only by a function that does change the table, and then once.
+///
+/// The copy was a thousand values in and a thousand dropped again for each
+/// combinator over a thousand elements, as much as calling the function
+/// for them cost.
+struct Source<'a> {
+    table: &'a Rc<RefCell<TableObject>>,
+    lease: Rc<RefCell<TableObject>>,
+}
+
+impl<'a> Source<'a> {
+    fn of(name: &str, args: &'a [Value], idx: usize) -> Result<Self, String> {
+        match args.get(idx) {
+            Some(Value::Table(table)) => {
+                let lease = table.borrow_mut().array.lease();
+                Ok(Source { table, lease })
+            }
+            Some(other) => Err(super::wrong_arg(name, idx, "a `table`", other)),
+            None => Err(super::missing_arg(name, idx)),
+        }
+    }
+
+    /// How many elements there are to go over.
+    fn len(&self) -> usize {
+        let table = self.table.borrow();
+        if table.array.leased_to(&self.lease) {
+            table.array.len()
+        } else {
+            self.lease.borrow().array.len()
+        }
+    }
+
+    /// Copy element `i` (from 0) into `into`; `false`, with `into` left as
+    /// it was, when there is none. Nothing is borrowed once this returns,
+    /// so the function called with `into` may do what it likes to the
+    /// table.
+    #[inline(always)]
+    fn read(&self, i: usize, into: &mut Value) -> bool {
+        let table = self.table.borrow();
+        if table.array.leased_to(&self.lease) {
+            match table.array.get(i) {
+                Some(element) => into.store_parts(element),
+                None => return false,
+            }
+        } else {
+            match self.lease.borrow().array.get(i) {
+                Some(element) => into.store_parts(element),
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
 fn expect_int(name: &str, args: &[Value], idx: usize) -> Result<i64, String> {
     match args.get(idx) {
         Some(Value::Int(n)) => Ok(*n),
@@ -316,25 +396,28 @@ fn table_value(items: Vec<Value>) -> Value {
 /// A combinator's callback, prepared once and then called once per element.
 ///
 /// Every `Iter` combinator that takes a function calls it in a loop, and
-/// three things used to happen inside that loop which do not depend on the
-/// element: the callee was re-checked for being callable, its arguments were
-/// built in a fresh `Vec` — a malloc and a free per element — and, for a
-/// compiled callee, a register file was taken from the re-entry pool and
-/// handed back. All three move out here, to once per combinator.
+/// what does not depend on the element is done once, here: the callee is
+/// checked for being callable, and, for a compiled callee, a register file
+/// is taken from the re-entry pool and held ([`crate::value::CallSession`]).
+///
+/// The arguments are lent, and so is the result: it is read where the
+/// function left it, good until the next call. Most combinators only ask
+/// whether it is true; the ones that keep it copy it out by its parts
+/// (`Value::clone_parts`).
 struct Callback<'a> {
     f: &'a Value,
     what: &'static str,
-    /// Scratch for the arguments, reused across every element.
-    args: Vec<Value>,
     /// `None` for a native callee, which has nothing to hold open — see
     /// [`crate::call::call_value_session`].
     session: Option<Box<dyn crate::value::CallSession>>,
+    /// What a native callee answered last, which has nowhere else to be.
+    last: Value,
 }
 
 impl<'a> Callback<'a> {
     /// Prepare `f`, reporting here rather than at the first element if it is
     /// not callable at all.
-    fn new(f: &'a Value, what: &'static str, arity: usize) -> Result<Self, String> {
+    fn new(f: &'a Value, what: &'static str) -> Result<Self, String> {
         if !matches!(
             f,
             Value::Native(_) | Value::NativeClosure(_) | Value::VmFunction(_)
@@ -347,40 +430,47 @@ impl<'a> Callback<'a> {
         Ok(Callback {
             f,
             what,
-            args: Vec::with_capacity(arity),
             session: crate::call::call_value_session(f),
+            last: Value::Nil,
         })
     }
 
     /// Call with no arguments — `Iter.collect`'s step function.
-    fn call0(&mut self) -> Result<Value, String> {
-        self.args.clear();
-        self.run()
+    #[inline]
+    fn call0(&mut self) -> Result<&Value, String> {
+        self.run(&[])
     }
 
     /// Call with one argument, which is every other combinator.
-    fn call1(&mut self, a: Value) -> Result<Value, String> {
-        self.args.clear();
-        self.args.push(a);
-        self.run()
+    #[inline]
+    fn call1(&mut self, a: &Value) -> Result<&Value, String> {
+        self.run(std::slice::from_ref(a))
     }
 
     /// Call with two — `Iter.reduce`'s `(acc, element)` and `Iter.zipWith`.
-    fn call2(&mut self, a: Value, b: Value) -> Result<Value, String> {
-        self.args.clear();
-        self.args.push(a);
-        self.args.push(b);
-        self.run()
+    #[inline]
+    fn call2(&mut self, a: &Value, b: &Value) -> Result<&Value, String> {
+        self.run(&[a.clone_parts(), b.clone_parts()])
     }
 
-    fn run(&mut self) -> Result<Value, String> {
+    #[inline]
+    fn run(&mut self, args: &[Value]) -> Result<&Value, String> {
         let what = self.what;
         match self.session.as_deref_mut() {
-            Some(s) => s.call_first(&self.args, 0..0),
-            None => crate::call::call_value_first(self.f, &self.args, 0..0),
+            Some(s) => s.call_ref(args, 0..0).map_err(|e| failed(what, e)),
+            None => {
+                self.last = crate::call::call_value_first(self.f, args, 0..0)
+                    .map_err(|e| failed(what, e))?;
+                Ok(&self.last)
+            }
         }
-        .map_err(|e| format!("{what}: {e}"))
     }
+}
+
+#[cold]
+#[inline(never)]
+fn failed(what: &str, e: impl std::fmt::Display) -> String {
+    format!("{what}: {e}")
 }
 
 /// `a == b` by the language's own rule, so `OpEq` is honoured.
@@ -410,12 +500,12 @@ fn lt(a: &Value, b: &Value, what: &str) -> Result<bool, String> {
 /// which is the one thing the lazy design would have bought.
 fn iter_collect(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.collect", args, 1)?;
-    let mut step = Callback::new(&args[0], "Iter.collect", 0)?;
+    let mut step = Callback::new(&args[0], "Iter.collect")?;
     let mut out: Vec<Value> = Vec::new();
     loop {
         match step.call0()? {
             Value::Nil => break,
-            v => out.push(v),
+            v => out.push(v.clone_parts()),
         }
     }
     Ok(vec![table_value(out)])
@@ -425,45 +515,54 @@ fn iter_collect(args: &[Value]) -> Result<Vec<Value>, String> {
 
 fn iter_map(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.map", args, 2)?;
-    let src = elements("Iter.map", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.map", 1)?;
+    let src = Source::of("Iter.map", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.map")?;
     let mut out = Vec::with_capacity(src.len());
-    for element in src {
-        out.push(f.call1(element)?);
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        Value::push_parts(&mut out, f.call1(&element)?);
+        i += 1;
     }
     Ok(vec![table_value(out)])
 }
 
 fn iter_filter(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.filter", args, 2)?;
-    let src = elements("Iter.filter", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.filter", 1)?;
+    let src = Source::of("Iter.filter", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.filter")?;
     let mut out = Vec::new();
-    for element in src {
-        if f.call1(element.clone())?.is_truthy() {
-            out.push(element);
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if f.call1(&element)?.is_truthy() {
+            Value::push_parts(&mut out, &element);
         }
+        i += 1;
     }
     Ok(vec![table_value(out)])
 }
 
 fn iter_reduce(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.reduce", args, 3)?;
-    let src = elements("Iter.reduce", args, 0)?;
-    let mut f = Callback::new(&args[2], "Iter.reduce", 2)?;
+    let src = Source::of("Iter.reduce", args, 0)?;
+    let mut f = Callback::new(&args[2], "Iter.reduce")?;
     let mut acc = args[1].clone();
-    for element in src {
-        acc = f.call2(acc, element)?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        let next = f.call2(&acc, &element)?;
+        acc.store_parts(next);
+        i += 1;
     }
     Ok(vec![acc])
 }
 
 fn iter_for_each(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.forEach", args, 2)?;
-    let src = elements("Iter.forEach", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.forEach", 1)?;
-    for element in src {
-        f.call1(element)?;
+    let src = Source::of("Iter.forEach", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.forEach")?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        f.call1(&element)?;
+        i += 1;
     }
     Ok(vec![Value::Nil])
 }
@@ -472,24 +571,28 @@ fn iter_for_each(args: &[Value]) -> Result<Vec<Value>, String> {
 
 fn iter_find(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.find", args, 2)?;
-    let src = elements("Iter.find", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.find", 1)?;
-    for element in src {
-        if f.call1(element.clone())?.is_truthy() {
+    let src = Source::of("Iter.find", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.find")?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if f.call1(&element)?.is_truthy() {
             return Ok(vec![element]);
         }
+        i += 1;
     }
     Ok(vec![Value::Nil])
 }
 
 fn iter_find_index(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.findIndex", args, 2)?;
-    let src = elements("Iter.findIndex", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.findIndex", 1)?;
-    for (i, element) in src.into_iter().enumerate() {
-        if f.call1(element)?.is_truthy() {
+    let src = Source::of("Iter.findIndex", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.findIndex")?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if f.call1(&element)?.is_truthy() {
             return Ok(vec![Value::Int(i as i64 + 1)]);
         }
+        i += 1;
     }
     Ok(vec![Value::Nil])
 }
@@ -500,37 +603,43 @@ fn iter_find_index(args: &[Value]) -> Result<Vec<Value>, String> {
 /// a filtered-to-nothing list should not report a violation it never saw.
 fn iter_any(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.any", args, 2)?;
-    let src = elements("Iter.any", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.any", 1)?;
-    for element in src {
-        if f.call1(element)?.is_truthy() {
+    let src = Source::of("Iter.any", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.any")?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if f.call1(&element)?.is_truthy() {
             return Ok(vec![Value::Bool(true)]);
         }
+        i += 1;
     }
     Ok(vec![Value::Bool(false)])
 }
 
 fn iter_all(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.all", args, 2)?;
-    let src = elements("Iter.all", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.all", 1)?;
-    for element in src {
-        if !f.call1(element)?.is_truthy() {
+    let src = Source::of("Iter.all", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.all")?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if !f.call1(&element)?.is_truthy() {
             return Ok(vec![Value::Bool(false)]);
         }
+        i += 1;
     }
     Ok(vec![Value::Bool(true)])
 }
 
 fn iter_count(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.count", args, 2)?;
-    let src = elements("Iter.count", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.count", 1)?;
+    let src = Source::of("Iter.count", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.count")?;
     let mut n: i64 = 0;
-    for element in src {
-        if f.call1(element)?.is_truthy() {
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        if f.call1(&element)?.is_truthy() {
             n += 1;
         }
+        i += 1;
     }
     Ok(vec![Value::Int(n)])
 }
@@ -542,28 +651,34 @@ fn iter_count(args: &[Value]) -> Result<Vec<Value>, String> {
 /// paging through a list should not have to check the length first.
 fn iter_take(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.take", args, 2)?;
-    let src = elements("Iter.take", args, 0)?;
-    let n = expect_int("Iter.take", args, 1)?.max(0) as usize;
-    Ok(vec![table_value(src.into_iter().take(n).collect())])
+    let n = expect_int("Iter.take", args, 1);
+    let taken = with_array("Iter.take", args, 0, |array| {
+        let n = n.clone()?.max(0) as usize;
+        Ok(array[..n.min(array.len())].to_vec())
+    })?;
+    Ok(vec![table_value(taken)])
 }
 
 fn iter_skip(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.skip", args, 2)?;
-    let src = elements("Iter.skip", args, 0)?;
-    let n = expect_int("Iter.skip", args, 1)?.max(0) as usize;
-    Ok(vec![table_value(src.into_iter().skip(n).collect())])
+    let n = expect_int("Iter.skip", args, 1);
+    let rest = with_array("Iter.skip", args, 0, |array| {
+        let n = n.clone()?.max(0) as usize;
+        Ok(array[n.min(array.len())..].to_vec())
+    })?;
+    Ok(vec![table_value(rest)])
 }
 
 fn iter_first(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_min_arity("Iter.first", args, 1)?;
-    let src = elements("Iter.first", args, 0)?;
-    Ok(vec![src.into_iter().next().unwrap_or(Value::Nil)])
+    let first = with_array("Iter.first", args, 0, |array| Ok(array.first().cloned()))?;
+    Ok(vec![first.unwrap_or(Value::Nil)])
 }
 
 fn iter_last(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_min_arity("Iter.last", args, 1)?;
-    let src = elements("Iter.last", args, 0)?;
-    Ok(vec![src.into_iter().next_back().unwrap_or(Value::Nil)])
+    let last = with_array("Iter.last", args, 0, |array| Ok(array.last().cloned()))?;
+    Ok(vec![last.unwrap_or(Value::Nil)])
 }
 
 fn iter_chunk(args: &[Value]) -> Result<Vec<Value>, String> {
@@ -589,12 +704,14 @@ fn iter_chunk(args: &[Value]) -> Result<Vec<Value>, String> {
 /// hand the callback a value its parameter type forbids.
 fn iter_zip_with(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.zipWith", args, 3)?;
-    let left = elements("Iter.zipWith", args, 0)?;
-    let right = elements("Iter.zipWith", args, 1)?;
-    let mut f = Callback::new(&args[2], "Iter.zipWith", 2)?;
+    let left = Source::of("Iter.zipWith", args, 0)?;
+    let right = Source::of("Iter.zipWith", args, 1)?;
+    let mut f = Callback::new(&args[2], "Iter.zipWith")?;
     let mut out = Vec::with_capacity(left.len().min(right.len()));
-    for (a, b) in left.into_iter().zip(right) {
-        out.push(f.call2(a, b)?);
+    let (mut a, mut b, mut i) = (Value::Nil, Value::Nil, 0);
+    while left.read(i, &mut a) && right.read(i, &mut b) {
+        Value::push_parts(&mut out, f.call2(&a, &b)?);
+        i += 1;
     }
     Ok(vec![table_value(out)])
 }
@@ -769,12 +886,14 @@ impl<'a> UniqueKey<'a> {
 /// The sort is stable: elements with equal keys keep their input order.
 fn iter_sort_by(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.sortBy", args, 2)?;
-    let src = elements("Iter.sortBy", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.sortBy", 1)?;
+    let src = Source::of("Iter.sortBy", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.sortBy")?;
     let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(src.len());
-    for element in src {
-        let key = f.call1(element.clone())?;
-        keyed.push((key, element));
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        let key = f.call1(&element)?.clone_parts();
+        keyed.push((key, element.clone()));
+        i += 1;
     }
 
     // Bottom-up merge sort, for the same reason `Table.sort` uses one: the
@@ -822,11 +941,12 @@ fn iter_sort_by(args: &[Value]) -> Result<Vec<Value>, String> {
 /// that produced it, which is more use than a bare "invalid key".
 fn iter_group_by(args: &[Value]) -> Result<Vec<Value>, String> {
     expect_arity("Iter.groupBy", args, 2)?;
-    let src = elements("Iter.groupBy", args, 0)?;
-    let mut f = Callback::new(&args[1], "Iter.groupBy", 1)?;
+    let src = Source::of("Iter.groupBy", args, 0)?;
+    let mut f = Callback::new(&args[1], "Iter.groupBy")?;
     let out = Rc::new(RefCell::new(TableObject::new()));
-    for (i, element) in src.into_iter().enumerate() {
-        let key = f.call1(element.clone())?;
+    let (mut element, mut i) = (Value::Nil, 0);
+    while src.read(i, &mut element) {
+        let key = f.call1(&element)?.clone_parts();
         if !matches!(key, Value::Str(_) | Value::Int(_) | Value::Bool(_)) {
             return Err(format!(
                 "Iter.groupBy: the key for element {} is a `{}`; a table can only be keyed by \
@@ -849,7 +969,135 @@ fn iter_group_by(args: &[Value]) -> Result<Vec<Value>, String> {
                 fresh
             }
         };
-        bucket.borrow_mut().array.push(element);
+        bucket.borrow_mut().array.push(element.clone());
+        i += 1;
     }
     Ok(vec![Value::Table(out)])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::value::NativeFn;
+
+    fn ints(values: &[i64]) -> Value {
+        table_value(values.iter().map(|&n| Value::Int(n)).collect())
+    }
+
+    fn as_ints(value: &Value) -> Vec<i64> {
+        let Value::Table(t) = value else {
+            panic!("not a table: {value:?}");
+        };
+        t.borrow()
+            .array
+            .iter()
+            .map(|v| match v {
+                Value::Int(n) => *n,
+                other => panic!("not an integer: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn native(name: &'static str, func: fn(&[Value]) -> Result<Value, String>) -> Value {
+        Value::Native(Rc::new(NativeFn {
+            name,
+            func,
+            quick: None,
+        }))
+    }
+
+    fn int(args: &[Value], at: usize) -> i64 {
+        match args.get(at) {
+            Some(Value::Int(n)) => *n,
+            other => panic!("not an integer: {other:?}"),
+        }
+    }
+
+    /// A callback that is a native has no register to leave its answer in:
+    /// the combinator keeps it, and it is as good until the next call as a
+    /// compiled function's is. (A program has no way to write this, since
+    /// a native has no type to be passed by; a native package has.)
+    #[test]
+    fn a_native_callback_answers_as_a_compiled_one_does() {
+        let double = native("double", |args| Ok(Value::Int(int(args, 0) * 2)));
+        let odd = native("odd", |args| Ok(Value::Bool(int(args, 0) % 2 == 1)));
+        let add = native("add", |args| Ok(Value::Int(int(args, 0) + int(args, 1))));
+        let text = native("text", |args| {
+            Ok(Value::Str(crate::value::SauleStr::new(format!(
+                "n{}",
+                int(args, 0)
+            ))))
+        });
+
+        let source = ints(&[1, 2, 3, 4, 5]);
+        let mapped = iter_map(&[source.clone(), double]).unwrap();
+        assert_eq!(as_ints(&mapped[0]), [2, 4, 6, 8, 10]);
+        let kept = iter_filter(&[source.clone(), odd.clone()]).unwrap();
+        assert_eq!(as_ints(&kept[0]), [1, 3, 5]);
+        let total = iter_reduce(&[source.clone(), Value::Int(100), add.clone()]).unwrap();
+        assert!(matches!(total[0], Value::Int(115)));
+        let pairs = iter_zip_with(&[source.clone(), source.clone(), add]).unwrap();
+        assert_eq!(as_ints(&pairs[0]), [2, 4, 6, 8, 10]);
+        assert!(matches!(
+            iter_count(&[source.clone(), odd.clone()]).unwrap()[0],
+            Value::Int(3)
+        ));
+        assert!(matches!(
+            iter_find_index(&[source.clone(), odd]).unwrap()[0],
+            Value::Int(1)
+        ));
+
+        // An answer that owns something is kept past the call after it.
+        let named = iter_map(&[source.clone(), text]).unwrap();
+        let Value::Table(named) = &named[0] else {
+            panic!("not a table");
+        };
+        let names: Vec<String> = named
+            .borrow()
+            .array
+            .iter()
+            .map(|v| v.to_display_string())
+            .collect();
+        assert_eq!(names, ["n1", "n2", "n3", "n4", "n5"]);
+        // The table gone over is as it was.
+        assert_eq!(as_ints(&source), [1, 2, 3, 4, 5]);
+    }
+
+    /// A failing callback is said with the combinator's name in front, and
+    /// what is not a function is refused before any element is read.
+    #[test]
+    fn a_callback_that_fails_is_reported_by_the_combinator() {
+        let fails = native("fails", |_| Err("no".to_string()));
+        let err = iter_map(&[ints(&[1]), fails]).unwrap_err();
+        assert!(err.starts_with("Iter.map: "), "{err}");
+        let err = iter_map(&[ints(&[1]), Value::Int(3)]).unwrap_err();
+        assert_eq!(err, "Iter.map: expected a function, got `integer`");
+        // Over nothing, a callback is never called.
+        let fails = native("fails", |_| Err("no".to_string()));
+        assert!(as_ints(&iter_map(&[ints(&[]), fails]).unwrap()[0]).is_empty());
+    }
+
+    /// `first`, `last`, `take` and `skip` read the table where it is.
+    #[test]
+    fn the_ends_of_a_table_without_copying_it() {
+        let source = ints(&[1, 2, 3, 4]);
+        assert!(matches!(iter_first(&[source.clone()]).unwrap()[0], Value::Int(1)));
+        assert!(matches!(iter_last(&[source.clone()]).unwrap()[0], Value::Int(4)));
+        assert!(matches!(iter_first(&[ints(&[])]).unwrap()[0], Value::Nil));
+        assert!(matches!(iter_last(&[ints(&[])]).unwrap()[0], Value::Nil));
+        let take = |n: i64| as_ints(&iter_take(&[source.clone(), Value::Int(n)]).unwrap()[0]);
+        let skip = |n: i64| as_ints(&iter_skip(&[source.clone(), Value::Int(n)]).unwrap()[0]);
+        assert_eq!(take(2), [1, 2]);
+        assert_eq!(take(9), [1, 2, 3, 4]);
+        assert!(take(0).is_empty() && take(-3).is_empty());
+        assert_eq!(skip(3), [4]);
+        assert_eq!(skip(-1), [1, 2, 3, 4]);
+        assert!(skip(4).is_empty() && skip(9).is_empty());
+        // A table first, then the count: the order the two are refused in.
+        let err = iter_take(&[Value::Int(1), Value::Nil]).unwrap_err();
+        assert!(err.contains("table"), "{err}");
+        let err = iter_take(&[source.clone(), Value::Nil]).unwrap_err();
+        assert!(err.contains("integer"), "{err}");
+        assert_eq!(as_ints(&source), [1, 2, 3, 4]);
+    }
 }

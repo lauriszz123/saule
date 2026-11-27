@@ -156,7 +156,7 @@ pub fn refusal(v: &Value) -> Option<String> {
                 o.class.name
             )),
         },
-        Value::EnumVariant(ev) if ev.value.get().is_some_and(|v| matches!(v, Value::Table(_))) => {
+        Value::EnumVariant(ev) if ev.value().is_some_and(|v| matches!(v, Value::Table(_))) => {
             Some(format!(
                 "`{}.{}` carries data, and only plain enum variants cross into a package",
                 ev.enum_name, ev.variant_name

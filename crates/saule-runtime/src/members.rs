@@ -7,11 +7,10 @@
 //! value — and it covers every receiver kind in one place, so each kind
 //! answers the same way wherever it is reached from.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::error::{RuntimeError, a_type};
-use crate::value::{EnumObject, EnumVariantObject, NativeClosure, SauleStr, TableObject, Value};
+use crate::value::{EnumObject, EnumVariantObject, NativeClosure, SauleStr, Value};
 
 /// A callable that constructs a fresh `EnumVariant` carrying its arguments
 /// as an array-style table payload — what `Event.Click` is as a *value*,
@@ -43,16 +42,13 @@ pub(crate) fn make_tuple_variant_ctor(
                     args.len()
                 ));
             }
-            let payload = Value::Table(Rc::new(RefCell::new(TableObject::from_array(
-                args.to_vec(),
-            ))));
-            let variant = Rc::new(EnumVariantObject {
-                enum_name: SauleStr::new(enum_name.clone()),
-                variant_name: SauleStr::new(variant_name.clone()),
+            let variant = Rc::new(EnumVariantObject::carrying(
+                SauleStr::new(enum_name.clone()),
+                SauleStr::new(variant_name.clone()),
                 tag,
-                value: std::cell::OnceCell::from(payload),
-                enum_obj: RefCell::new(Some(enum_obj.clone())),
-            });
+                args.to_vec(),
+                Some(enum_obj.clone()),
+            ));
             Ok(vec![Value::EnumVariant(variant)])
         }),
         param_names: Vec::new(),
@@ -135,8 +131,7 @@ pub fn read_member(
         }
         Value::EnumVariant(variant) => match name {
             "value" => Ok(variant
-                .value
-                .get()
+                .value()
                 .cloned()
                 .unwrap_or(Value::Str(variant.variant_name.clone()))),
             "name" => Ok(Value::Str(variant.variant_name.clone())),

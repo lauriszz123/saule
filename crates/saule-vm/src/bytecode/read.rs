@@ -357,6 +357,7 @@ impl<'a> Reader<'a> {
                 })
             })?,
             caches: RefCell::new(Vec::new()),
+            plain_loops: std::cell::OnceCell::new(),
             paths: self.list(|r| {
                 let links = r.list(|r| {
                     Ok(PathLink {

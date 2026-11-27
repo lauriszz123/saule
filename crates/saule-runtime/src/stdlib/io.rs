@@ -244,13 +244,13 @@ fn install_enum(env: &Rc<RefCell<Prelude>>, name: &str, variants: &[(&str, &str)
     let mut tags = fxmap();
     // Declaration order is the slice order, so the index is the tag.
     for (tag, (vname, vvalue)) in variants.iter().enumerate() {
-        let variant = Rc::new(EnumVariantObject {
-            enum_name: name.to_string().into(),
-            variant_name: (*vname).to_string().into(),
-            tag: tag as u32,
-            value: std::cell::OnceCell::from(Value::Str(SauleStr::new((*vvalue).to_string()))),
-            enum_obj: RefCell::new(None),
-        });
+        let variant = Rc::new(EnumVariantObject::valued(
+            name.to_string().into(),
+            (*vname).to_string().into(),
+            tag as u32,
+            Some(Value::Str(SauleStr::new((*vvalue).to_string()))),
+            None,
+        ));
         variant_dict.insert((*vname).to_string(), Rc::clone(&variant));
         by_tag.push(Some(variant));
         tags.insert((*vname).to_string(), tag as u32);
@@ -292,7 +292,7 @@ fn expect_string(name: &str, args: &[Value], idx: usize) -> Result<String, Strin
 /// or accept a raw string (handy for tests and ad-hoc calls).
 fn extract_enum_string(name: &str, args: &[Value], idx: usize) -> Result<String, String> {
     match args.get(idx) {
-        Some(Value::EnumVariant(ev)) => match ev.value.get() {
+        Some(Value::EnumVariant(ev)) => match ev.value() {
             Some(Value::Str(s)) => Ok((**s).clone()),
             _ => Err(format!(
                 "{name}: enum variant `{}.{}` has no string value",

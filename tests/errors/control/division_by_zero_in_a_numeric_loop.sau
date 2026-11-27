@@ -1,0 +1,16 @@
+-- A division by zero part of the way through a loop of arithmetic.
+--
+-- Such a loop is run on plain numbers (`saule-vm`'s `vm/plain.rs`), which
+-- stops before an instruction that would fail and hands it to the main
+-- loop: the error is the main loop's, at the line it would have been, with
+-- every variable holding what it held when the division was reached.
+-- `scripts/test_plain.sh` compares what is printed with and without.
+class Main
+	static fn main()
+		local total: integer = 0
+		for i: integer = -3, 3 do
+			total = total + 60 / i
+		end
+		println(total)
+	end
+end

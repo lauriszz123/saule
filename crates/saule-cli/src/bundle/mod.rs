@@ -10,6 +10,19 @@
 //! it as `Os.args()`. Its bundled files and native packages are unpacked
 //! once into a cache directory ([`cache`]), which then serves as the
 //! program's `Project.root` and as the Saule home its packages load from.
+//!
+//! **Shared** (`saule build --shared`): the output is the archive alone,
+//! behind a first line that names the saule to run it,
+//!
+//! ```text
+//! #!/bin/saule run
+//! ```
+//!
+//! so that every program on a machine runs on one runtime instead of each
+//! carrying a copy. `saule run FILE` is what that line asks for
+//! ([`run_given`]): a file that ends in an archive is run as the program in
+//! it. Its native packages are not in the file either: they are loaded from
+//! the home of the saule that runs it.
 
 mod archive;
 mod cache;
@@ -29,13 +42,16 @@ struct Manifest {
     /// Built from a project rather than a single file: it must declare
     /// `Main.main`, and its `Project` fields are filled in.
     require_main: bool,
+    /// Built with `--shared`: its native packages are the runtime's own,
+    /// in the Saule home, and not unpacked beside its files.
+    shared: bool,
 }
 
 impl Manifest {
     fn write(&self) -> Vec<u8> {
         format!(
-            "name={}\nversion={}\nrequire_main={}\n",
-            self.name, self.version, self.require_main
+            "name={}\nversion={}\nrequire_main={}\nshared={}\n",
+            self.name, self.version, self.require_main, self.shared
         )
         .into_bytes()
     }
@@ -46,12 +62,14 @@ impl Manifest {
             name: "app".into(),
             version: String::new(),
             require_main: true,
+            shared: false,
         };
         for line in text.lines() {
             match line.split_once('=') {
                 Some(("name", v)) => m.name = v.into(),
                 Some(("version", v)) => m.version = v.into(),
                 Some(("require_main", v)) => m.require_main = v == "true",
+                Some(("shared", v)) => m.shared = v == "true",
                 _ => {}
             }
         }
@@ -63,6 +81,14 @@ impl Manifest {
 
 pub(crate) fn cmd_build(args: BuildArgs) {
     let target = args.target.clone().unwrap_or_else(|| PathBuf::from("."));
+    let exe = std::env::current_exe().unwrap_or_else(|e| {
+        eprintln!("error: can't find the saule binary to build with: {e}");
+        process::exit(1);
+    });
+    // Before anything is compiled: a path that can't be written in the
+    // output's first line is a mistake in the command.
+    let runtime = args.shared.as_deref().map(|given| runtime_for(given, &exe));
+    let shared = runtime.is_some();
 
     let (entry, manifest, root, bundle) = if target.is_dir() {
         let project = crate::project::configure_project(&target, true);
@@ -73,6 +99,7 @@ pub(crate) fn cmd_build(args: BuildArgs) {
             name: info.name.clone(),
             version: info.version.clone(),
             require_main: true,
+            shared,
         };
         (entry, manifest, info.root, config.bundle)
     } else if target.is_file() {
@@ -89,6 +116,7 @@ pub(crate) fn cmd_build(args: BuildArgs) {
             name,
             version: String::new(),
             require_main: false,
+            shared,
         };
         // A lone file bundles nothing unless it sits in a project's folder
         // structure the user asked for — and a file has no config to ask in.
@@ -124,18 +152,21 @@ pub(crate) fn cmd_build(args: BuildArgs) {
             data: bytecode,
         },
     ];
-    let native = native_packages(&program, &mut entries);
+    let native = native_packages(&program, &mut entries, !shared);
     let files = bundled_files(&root, bundle, &mut entries);
 
-    let exe = std::env::current_exe().unwrap_or_else(|e| {
-        eprintln!("error: can't find the saule binary to build with: {e}");
-        process::exit(1);
-    });
     let out = args
         .output
         .clone()
         .unwrap_or_else(|| root.join("build").join(&manifest.name));
-    let runner = write_executable(&exe, &out, &archive::pack(&entries));
+    let packed = archive::pack(&entries);
+    let runner = match &runtime {
+        Some(runtime) => {
+            write_output(&out, first_line(runtime).into_bytes(), &packed);
+            None
+        }
+        None => Some(write_executable(&exe, &out, &packed)),
+    };
 
     let program_size = entries
         .iter()
@@ -143,12 +174,17 @@ pub(crate) fn cmd_build(args: BuildArgs) {
         .map_or(0, |e| e.data.len());
     let total = std::fs::metadata(&out).map_or(0, |m| m.len());
     println!("built {} ({})", out.display(), size(total));
-    println!("  runtime          {}", size(runner));
+    match (&runtime, runner) {
+        (Some(runtime), _) => println!("  runtime          {} (shared)", runtime.display()),
+        (None, runner) => println!("  runtime          {}", size(runner.unwrap_or(0))),
+    }
     println!(
         "  program          {} (bytecode)",
         size(program_size as u64)
     );
-    if native.0 > 0 {
+    if native.0 > 0 && shared {
+        println!("  native packages  {} (the runtime's own)", native.0);
+    } else if native.0 > 0 {
         println!("  native packages  {} ({})", size(native.1), native.0);
     }
     if files.0 > 0 {
@@ -210,9 +246,15 @@ fn relabel(root: &Path) -> impl Fn(&str) -> String {
     }
 }
 
-/// Every dynamic native package the program imports, as archive entries.
-/// Returns how many, and their size.
-fn native_packages(program: &saule_vm::program::Program, entries: &mut Vec<Entry>) -> (usize, u64) {
+/// Every dynamic native package the program imports, as archive entries
+/// when `packed`: a shared program leaves them to the runtime that runs
+/// it, and need not have them where it is built. Returns how many, and
+/// their size.
+fn native_packages(
+    program: &saule_vm::program::Program,
+    entries: &mut Vec<Entry>,
+    packed: bool,
+) -> (usize, u64) {
     let mut names: Vec<&str> = program
         .modules
         .iter()
@@ -222,7 +264,7 @@ fn native_packages(program: &saule_vm::program::Program, entries: &mut Vec<Entry
     names.dedup();
 
     let mut bytes = 0;
-    for name in &names {
+    for name in names.iter().filter(|_| packed) {
         let Some(path) = saule_runtime::dynamic_packages::package_path(name) else {
             eprintln!("error: native package `{name}` is imported but not installed");
             process::exit(1);
@@ -309,6 +351,61 @@ fn write_executable(exe: &Path, out: &Path, archive: &[u8]) -> u64 {
     let runner_len = archive::runner_len(exe).unwrap_or_else(|e| fail("reading saule for", e));
     let mut bytes = std::fs::read(exe).unwrap_or_else(|e| fail("reading saule for", e));
     bytes.truncate(runner_len as usize);
+    write_output(out, bytes, archive);
+    runner_len
+}
+
+/// The saule a shared program names in its first line: `given`, or this
+/// one when no path was. It is written there as it is, so it has to be a
+/// whole path the operating system can read off that line.
+fn runtime_for(given: &Path, exe: &Path) -> PathBuf {
+    let refuse = |why: &str| -> ! {
+        eprintln!("error: --shared: {why}");
+        process::exit(1);
+    };
+    let runtime = if given.as_os_str().is_empty() {
+        // This binary with a program packed into it is not a saule that
+        // runs other programs.
+        let whole = std::fs::metadata(exe).map_or(0, |m| m.len());
+        if archive::runner_len(exe).ok() != Some(whole) {
+            refuse("this saule is a built program; give the path of a saule to share");
+        }
+        exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf())
+    } else {
+        given.to_path_buf()
+    };
+    let Some(text) = runtime.to_str() else {
+        refuse("the path of the saule is not text");
+    };
+    if !runtime.is_absolute() {
+        refuse(&format!(
+            "`{text}` is not a whole path (it is where the saule is on the machine the program runs on)"
+        ));
+    }
+    if text.chars().any(|c| c.is_whitespace()) {
+        refuse(&format!(
+            "`{text}` has a space in it, which the first line of a program cannot carry"
+        ));
+    }
+    // The shortest any system reads of that line.
+    if first_line(&runtime).len() > 127 {
+        refuse(&format!("`{text}` is too long for the first line of a program"));
+    }
+    runtime
+}
+
+/// What a shared program starts with: the operating system runs the saule
+/// named there, with `run`, this file and the program's own arguments.
+fn first_line(runtime: &Path) -> String {
+    format!("#!{} run\n", runtime.display())
+}
+
+/// Write `bytes` and then `archive` to `out`, executable.
+fn write_output(out: &Path, mut bytes: Vec<u8>, archive: &[u8]) {
+    let fail = |what: &str, e: std::io::Error| -> ! {
+        eprintln!("error: {what} '{}': {e}", out.display());
+        process::exit(1);
+    };
     bytes.extend_from_slice(archive);
 
     if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -324,7 +421,6 @@ fn write_executable(exe: &Path, out: &Path, archive: &[u8]) -> u64 {
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755));
     }
     std::fs::rename(&tmp, out).unwrap_or_else(|e| fail("writing", e));
-    runner_len
 }
 
 fn size(bytes: u64) -> String {
@@ -350,26 +446,61 @@ pub(crate) fn run_embedded() -> Option<i32> {
         }
     };
 
+    Some(run(&exe, &embedded, std::env::args().skip(1).collect()))
+}
+
+/// `saule run FILE [ARGS]` where FILE is a program `saule build --shared`
+/// made (or any built program): run it on this saule, and return its exit
+/// code. `None` when the command line is anything else, which is then
+/// read as usual. What follows the file is the program's, whatever it
+/// looks like, and never an option of saule's.
+pub(crate) fn run_given() -> Option<i32> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next()? != "run" {
+        return None;
+    }
+    let file = PathBuf::from(args.next()?);
+    if !file.is_file() {
+        return None;
+    }
+    let embedded = match archive::read(&file) {
+        Ok(Some(e)) => e,
+        Ok(None) => return None,
+        Err(e) => {
+            eprintln!("error: {}: {e}", file.display());
+            return Some(1);
+        }
+    };
+    Some(run(&file, &embedded, std::env::args().skip(3).collect()))
+}
+
+/// Run the program in `embedded`, the archive at the end of `file`, with
+/// `args` as its `Os.args()`. Its exit code.
+fn run(file: &Path, embedded: &archive::Embedded, args: Vec<String>) -> i32 {
     let manifest = Manifest::read(embedded.get(archive::MANIFEST).unwrap_or_default());
     let Some(bytecode) = embedded.get(archive::PROGRAM) else {
-        eprintln!("error: this executable has no program in it");
-        return Some(1);
+        eprintln!("error: {} has no program in it", file.display());
+        return 1;
     };
 
     // Bundled files and packages live on disk, where the program and the
-    // loader expect them; with neither, the executable's folder is the root.
-    let root = match cache::unpack(&manifest.name, &embedded) {
+    // loader expect them; with neither, the file's folder is the root. A
+    // shared program's packages are the runtime's, in the home it has.
+    let root = match cache::unpack(&manifest.name, embedded) {
         Ok(Some(dir)) => {
-            saule_project::home::set_override(dir.clone());
+            if !manifest.shared {
+                saule_project::home::set_override(dir.clone());
+            }
             dir.join(archive::FILES.trim_end_matches('/'))
         }
-        Ok(None) => exe
+        Ok(None) => file
             .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(".")),
         Err(e) => {
             eprintln!("error: can't unpack {}: {e}", manifest.name);
-            return Some(1);
+            return 1;
         }
     };
 
@@ -384,14 +515,14 @@ pub(crate) fn run_embedded() -> Option<i32> {
             dependencies: Vec::new(),
         });
     }
-    saule_runtime::stdlib::os::set_script_args(std::env::args().skip(1).collect());
+    saule_runtime::stdlib::os::set_script_args(args);
     saule_runtime::init();
 
     let program = match saule_vm::bytecode::decode(bytecode) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
-            return Some(1);
+            return 1;
         }
     };
 
@@ -402,16 +533,16 @@ pub(crate) fn run_embedded() -> Option<i32> {
     let outcome = saule_vm::run_program(program);
     saule_vm::sampling::finish();
     match outcome {
-        Ok(true) => Some(0),
-        Ok(false) if !manifest.require_main => Some(0),
+        Ok(true) => 0,
+        Ok(false) if !manifest.require_main => 0,
         Ok(false) => {
             eprintln!("error: the program has no `class Main` with a `static fn main()`");
-            Some(1)
+            1
         }
         Err(e) => {
             eprintln!("{:?}", Report::new(e).with_source_code(source));
             crate::run::print_stack_trace(&saule_vm::take_stack_trace());
-            Some(1)
+            1
         }
     }
 }

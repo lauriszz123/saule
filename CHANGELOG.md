@@ -4,6 +4,95 @@ Newest first. Releases not listed here had no notes written for them; see
 [GitHub Releases](https://github.com/lauriszz123/saule/releases) and the commit
 history.
 
+## 26.34
+
+### Added
+
+- **`saule build --shared`**: a built program without the runtime in it.
+  The output is the bytecode and the bundled files behind a first line
+  that names the saule to run it (`--shared=/bin/saule`; this saule when
+  no path is given), a few hundred kilobytes where the whole executable
+  is twelve megabytes with Shine in it. Programs built so share one
+  runtime and one copy of each native package, loaded from that saule's
+  home. `saule run <file>` runs one, and passes on everything after the
+  file as the program's arguments.
+
+### Changed
+
+- **`Table.sort` with a comparator that only compares**, `(a, b) => a < b`
+  and its like over integers or floats, sorts the numbers without calling
+  it: about eight times as fast for 200 000 of them. The order is the same;
+  any other comparator is called as before.
+- **`match` over an enum with guards** tests the tag once. An arm whose
+  guard fails goes straight to the next arm for the same variant, and an
+  arm of a `return match` returns where it used to jump to the return.
+- **Loops of arithmetic** run about a tenth faster: the instructions that
+  only read and write registers find them through one pointer.
+- **A call of a small method is no call.** A method of a few instructions
+  that cannot fail (a getter, a setter, `push` and `pop` of a stack kept
+  in a table) is compiled where it is called, after a test that the
+  object is of the class the method belongs to; an object of a subclass
+  takes the call as before. A constructor that only stores its arguments
+  is compiled in place too. About a third less time for code that is
+  mostly such calls.
+- **A generic function given a lambda** is compiled as what it does with
+  it: `pickMax(a, b, better)`, where `pickMax` only chooses between its
+  arguments by calling `better`, and `better` is `(x, y) => x > y` held
+  in a local, becomes the comparison.
+- **A tuple variant keeps its fields in itself.** `Event.Click(x, y)` was
+  a variant holding a table; it is one object now, made in a fifth less
+  time, and a `match` reads `x` and `y` straight out of it. `.value` is
+  the same table of the fields it was, made when first asked for.
+- **A function that is one `match` over its argument** is compiled where
+  it is called, like the generic function above.
+- **The false branch of an `if`** costs one instruction where it cost
+  two: about 5% off most programs, a fifth off recursive ones.
+- **`match` over an enum with fields** runs in about 60% of the time, all
+  of the above together.
+- **`String.match`, `String.gmatch` and `String.gsub`** run in about 60%
+  of the time on ASCII text, and 80% on text that is not: text that is
+  all ASCII is matched where it lies and not decoded first, and a search
+  goes straight to the next place the pattern's first item can match.
+  What they return is unchanged.
+- **`Iter`'s combinators and `Table.sort` with a function** call it in
+  about two thirds of the time. The function's result is read where it
+  left it and not copied on the way, and the table is read where it is:
+  it was copied whole for each call of a combinator, in case the function
+  wrote to it, and is now copied only when one does. `Iter.first`,
+  `last`, `take` and `skip` no longer copy the table to take a part of
+  it. What they return is unchanged, a function that writes to the table
+  it is called about included.
+- **A table of numbers is freed** without a call for each number.
+- **A numeric `for` whose body is arithmetic** runs in about 60% of the
+  time: its numbers are taken out of their registers when it starts,
+  worked on as plain integers and floats, and put back when it leaves.
+  The body may hold comparisons, `if`, `while`, `break`, `continue`,
+  conversions between integer and float, loops of the same kind, and
+  reads and writes of numbers in a table by index (`a[i][k] * b[k][j]`);
+  a call or a field in it leaves the loop as it was. A `while` that is
+  not inside a `for` is run the same way once it has gone round a few
+  times. Nothing a program does or reports changes, a division by zero
+  or an index past the end in such a loop included.
+- **A call through an interface** takes about 80% of the time, and a
+  method that returns nothing comes back without a call into the
+  runtime.
+- **`for v in coroutine`** and `resume` take about nine tenths of the time: a
+  `yield` leaves the coroutine without an error value being copied on
+  the way out.
+- **Reading an object, a table or a number out of a table by index, a
+  field into a local and a local into a field** copy the value as the
+  kind it is, which the processor does not have to wait for.
+- **Two instructions added** (`ISREADY`, `SWITCHTAG`), so a program built
+  with `saule build` has to be built again.
+
+### Fixed
+
+- **A prelude enum compares equal to itself in every module.**
+  `Os.platform() == OsPlatform.Macos` and `info.kind == FsKind.Dir` held
+  only in the module compiled last.
+- **The installer's instructions** put `SAULE_CHANNEL` and `SAULE_VERSION`
+  on the `sh` after the pipe, where the script sees them.
+
 ## 26.33
 
 A faster virtual machine. Nothing in the language changes; on the benchmark

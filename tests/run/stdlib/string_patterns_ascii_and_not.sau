@@ -1,0 +1,130 @@
+-- Patterns over text that is all ASCII and over text that is not.
+--
+-- A subject and a pattern that are both ASCII are matched as bytes, where
+-- they lie; anything else is decoded to characters first. Nothing a program
+-- can see says which ran, so every case here is asked twice: of ASCII text,
+-- and of the same text with one letter that is not ASCII, which takes the
+-- other way. The answers differ by that letter and by nothing else.
+--
+-- `assert` throughout: run_tests.sh gates exit status only.
+
+fn joined(found: table<string>?) -> string
+	if found == nil then
+		return "nil"
+	end
+	return String.join("|", found!)
+end
+
+-- Every match of `pat` in `s`: each whole match, then its captures.
+fn every(s: string, pat: string) -> string
+	local out: table<string> = {}
+	for whole, caps in String.gmatch(s, pat) do
+		out[#out + 1] = whole .. "=" .. String.join("|", caps)
+	end
+	return String.join(" ", out)
+end
+
+fn replaced(s: string, pat: string, with: string) -> string
+	local out: string, n: integer = String.gsub(s, pat, with)
+	return out .. " (" .. n .. ")"
+end
+
+-- ─── String.match ───────────────────────────────────────────────────────────
+
+assert(joined(String.match("key = value", "(%w+)%s*=%s*(%w+)")) == "key|value")
+assert(joined(String.match("key = valuė", "(%w+)%s*=%s*(%w+)")) == "key|valuė")
+
+-- No captures: the whole match.
+assert(joined(String.match("took=41ms code=7", "%d+")) == "41")
+assert(joined(String.match("took=41ms codė=7", "%d+")) == "41")
+
+-- Found after places the first item cannot match, and not found at all.
+assert(joined(String.match("user=ada code=1234 took=9ms", "code=(%d+)")) == "1234")
+assert(joined(String.match("user=adė code=1234 took=9ms", "code=(%d+)")) == "1234")
+assert(joined(String.match("user=ada took=9ms", "code=(%d+)")) == "nil")
+assert(joined(String.match("user=adė took=9ms", "code=(%d+)")) == "nil")
+assert(joined(String.match("", "%a")) == "nil")
+
+-- Anchored, and from a place given: counted in characters either way.
+assert(joined(String.match("2026-11-27 INFO", "^(%d+)-(%d+)-(%d+)")) == "2026|11|27")
+assert(joined(String.match("2026-11-27 ĮNFO", "^(%d+)-(%d+)-(%d+)")) == "2026|11|27")
+assert(joined(String.match("x2026-11-27", "^(%d+)-(%d+)-(%d+)")) == "nil")
+assert(joined(String.match("abc abc", "%a+", 5)) == "abc")
+assert(joined(String.match("ąbc abc", "%a+", 5)) == "abc")
+assert(joined(String.match("one two", "%a+", -3)) == "two")
+assert(joined(String.match("onė two", "%a+", -3)) == "two")
+assert(joined(String.match("abc", "%a+", 9)) == "nil")
+
+-- More captures than are held in place.
+assert(joined(String.match("a1b2c3", "(%a)(%d)(%a)(%d)(%a)(%d)")) == "a|1|b|2|c|3")
+assert(joined(String.match("ą1b2c3", "(%a)(%d)(%a)(%d)(%a)(%d)")) == "ą|1|b|2|c|3")
+
+-- Every class, of ASCII: the two ways have to sort each character alike.
+local ascii: string = ""
+for code: integer = 1, 127 do
+	ascii = ascii .. String.char(code)
+end
+for cl in String.gmatch("adlsuwxpcgADLSUWXPCG", ".") do
+	local direct: string = every(ascii, "%" .. cl .. "+")
+	assert(direct != "", "class %" .. cl .. " matches something")
+	-- As a set, and as a set with a letter in it that is not ASCII and not
+	-- in the text: the same runs, the second found by the other way.
+	assert(every(ascii, "[%" .. cl .. "]+") == direct, "set of %" .. cl)
+	assert(every(ascii, "[%" .. cl .. "ė]+") == direct, "decoded %" .. cl)
+end
+
+-- ─── String.gmatch ──────────────────────────────────────────────────────────
+
+assert(every("the quick fox", "%a+") == "the=the quick=quick fox=fox")
+assert(every("thė quick fox", "%a+") == "thė=thė quick=quick fox=fox")
+assert(every("a=1, b=22, c=333", "(%a+)=(%d+)") == "a=1=a|1 b=22=b|22 c=333=c|333")
+assert(every("ą=1, b=22, c=333", "(%a+)=(%d+)") == "ą=1=ą|1 b=22=b|22 c=333=c|333")
+assert(every("abc", "%d") == "")
+assert(every("ąbc", "%d") == "")
+
+-- A match of nothing steps on by one character.
+assert(every("ab", "x*") == "= = =")
+assert(every("ąb", "x*") == "= = =")
+
+-- The whole match and the one capture a pattern without any has are equal.
+for whole, caps in String.gmatch("one two", "%a+") do
+	assert(#caps == 1 and caps[1] == whole)
+end
+
+-- A step asked again after the last match stays done.
+local step: fn() -> (string?, table<string>?) = String.gmatch("a b", "%a")
+local seen: string = ""
+for turn: integer = 1, 4 do
+	local whole: string?, caps: table<string>? = step()
+	seen = seen .. (whole ?? "-")
+	assert((whole == nil) == (caps == nil))
+end
+assert(seen == "ab--")
+
+-- ─── String.gsub ────────────────────────────────────────────────────────────
+
+assert(replaced("2026-11-27 code=41 took=9ms", "%d+", "#") == "#-#-# code=# took=#ms (5)")
+assert(replaced("2026-11-27 codė=41 took=9ms", "%d+", "#") == "#-#-# codė=# took=#ms (5)")
+assert(replaced("john smith", "(%a+) (%a+)", "%2, %1") == "smith, john (1)")
+assert(replaced("john smįth", "(%a+) (%a+)", "%2, %1") == "smįth, john (1)")
+assert(replaced("ab", "%a", "[%0]") == "[a][b] (2)")
+assert(replaced("ąb", "%a", "[%0]") == "[ą][b] (2)")
+assert(replaced("ab", "a", "100%%") == "100%b (1)")
+
+-- What is written in need not be ASCII for the subject to be.
+assert(replaced("a b", "%a", "ė%0ž") == "ėaž ėbž (2)")
+assert(replaced("a b", " ", "—") == "a—b (1)")
+
+-- Anchored: once. Nothing matched: as it was. A match of nothing: every place.
+assert(replaced("aaa", "^a", "b") == "baa (1)")
+assert(replaced("aaą", "^a", "b") == "baą (1)")
+assert(replaced("abc", "%d", "!") == "abc (0)")
+assert(replaced("ab", "x*", "-") == "-a-b- (3)")
+assert(replaced("ąb", "x*", "-") == "-ą-b- (3)")
+
+local two: string, count: integer = String.gsub("aaaa", "a", "b", 2)
+assert(two == "bbaa" and count == 2)
+local none: string, zero: integer = String.gsub("aaaa", "a", "b", 0)
+assert(none == "aaaa" and zero == 0)
+
+println("ok")

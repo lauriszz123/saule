@@ -253,6 +253,60 @@ impl CallSession for Calls {
             }
         }
     }
+
+    fn call_ref(
+        &mut self,
+        args: &[Value],
+        span: std::ops::Range<usize>,
+    ) -> Result<&Value, RuntimeError> {
+        let Some(vm) = self.vm.as_mut() else {
+            return Err(RuntimeError::Internal {
+                message: "internal: a call session is used after one of its calls failed".into(),
+                span,
+            });
+        };
+        if let Err(e) = vm.invoke_kept(&self.handle, &self.proto, &self.chunk, args, span) {
+            // As in `call_first`.
+            let mut vm = self.vm.take().expect("checked just above");
+            vm.abandon();
+            return Err(e);
+        }
+        Ok(self.vm.as_ref().expect("checked just above").kept())
+    }
+
+    fn compares(&self) -> Option<saule_runtime::value::Comparison> {
+        comparison_of(&self.proto)
+    }
+}
+
+/// What `proto` is, when it is one typed comparison of its two parameters
+/// and a return of the answer: `(a, b) => a < b` compiles to `LTI 2 0 1`
+/// and `RET1 2`, and `a > b` to the same with the operands the other way
+/// round. Nothing else: a third instruction could be anything.
+fn comparison_of(proto: &Proto) -> Option<saule_runtime::value::Comparison> {
+    use crate::op::Op;
+    use saule_runtime::value::Comparison::*;
+    let [test, ret] = proto.code.as_slice() else {
+        return None;
+    };
+    let two = proto.n_params == 2 && !proto.is_variadic;
+    if !two || ret.op() != Some(Op::RET1) || ret.a() != test.a() {
+        return None;
+    }
+    let forward = match (test.b(), test.c()) {
+        (0, 1) => true,
+        (1, 0) => false,
+        _ => return None,
+    };
+    Some(match (test.op()?, forward) {
+        (Op::LTI, true) => IntLess,
+        (Op::LTI, false) => IntGreater,
+        (Op::LEI, true) => IntAtMost,
+        (Op::LEI, false) => IntAtLeast,
+        (Op::LTF, true) => FloatLess,
+        (Op::LTF, false) => FloatGreater,
+        _ => return None,
+    })
 }
 
 impl Drop for Calls {

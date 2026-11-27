@@ -115,6 +115,58 @@ impl Vm {
         self.callee_missed(recv, slot, proto, here)
     }
 
+    /// [`callee_packed`](Self::callee_packed) for `CALLIF`: the same cache
+    /// and the same answer in one register, with the interface's table to
+    /// fall back on.
+    ///
+    /// An interface call came back as a `Result<(usize, u32),
+    /// RuntimeError>` every time, as `CALLM`'s did before it had this:
+    /// 72 bytes written and read to carry an error a hit never has.
+    #[inline(never)]
+    pub(crate) fn iface_callee_packed(
+        &mut self,
+        recv: usize,
+        iface: u32,
+        slot: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> u64 {
+        if let Value::Instance(inst) = &self.stack[recv] {
+            let inst = inst.borrow();
+            if let Some((module, target)) = proto
+                .caches
+                .borrow()
+                .get(here as usize)
+                .and_then(|c| c.probe(&inst.class))
+            {
+                return (module as u64) << 32 | target as u64;
+            }
+        }
+        self.iface_callee_missed(recv, iface, slot, proto, here)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn iface_callee_missed(
+        &mut self,
+        recv: usize,
+        iface: u32,
+        slot: usize,
+        proto: &Proto,
+        here: u32,
+    ) -> u64 {
+        match self.itable_lookup(recv, iface, slot, proto, here) {
+            Ok((module, target)) => {
+                self.remember_callee(recv, proto, here, module, target);
+                (module as u64) << 32 | target as u64
+            }
+            Err(e) => {
+                self.fault = Some(Box::new(e));
+                NO_HIT
+            }
+        }
+    }
+
     /// The call site's cache had nothing: look the method up and remember
     /// it, or leave the error to be taken.
     #[cold]
@@ -255,28 +307,6 @@ impl Vm {
                 ),
                 span: proto.span_at(here),
             })
-    }
-
-    /// [`itable_lookup`](Self::itable_lookup) behind the same per-call-site
-    /// cache `CALLM` uses (§8.4).
-    ///
-    /// Interface dispatch has *two* probes to skip rather than one — the
-    /// `class_of` map and then the itable — so a hit is worth strictly more
-    /// here than on a vtable call.
-    pub(crate) fn itable_lookup_cached(
-        &self,
-        recv: usize,
-        iface: u32,
-        slot: usize,
-        proto: &Proto,
-        here: u32,
-    ) -> Result<(usize, u32), RuntimeError> {
-        if let Some(hit) = self.cached_callee(recv, proto, here)? {
-            return Ok(hit);
-        }
-        let (module, target) = self.itable_lookup(recv, iface, slot, proto, here)?;
-        self.remember_callee(recv, proto, here, module, target);
-        Ok((module, target))
     }
 
     /// Resolve an interface method slot against the receiver's class.
@@ -536,7 +566,7 @@ impl Vm {
                 crate::sampling::leave_native(running);
                 self.sample_point();
                 let vs = vs.map_err(|m| self.native_failure(m, nc.name, site))?;
-                self.store_results(dst, &vs, n_ret);
+                self.store_owned(dst, vs, n_ret);
                 Ok(())
             }
             // `Image(…)` on a native package's class. A Saule class is built
@@ -802,6 +832,18 @@ impl Vm {
             // Into the VM's own buffer, not a fresh `Vec`: this runs once
             // per re-entrant invocation, which on `Table.sort` is once per
             // comparison. See [`Vm::results`].
+            // A caller that reads the result where it is (`invoke_kept`):
+            // the first of them, or `nil` put where the function's own
+            // registers began when it returned nothing.
+            if self.keep_result {
+                self.kept_at = if count == 0 {
+                    self.set_reg(frame.base as usize, Value::Nil);
+                    frame.base
+                } else {
+                    src as u32
+                };
+                return true;
+            }
             self.results.clear();
             self.results.reserve(count);
             for i in 0..count {
@@ -904,6 +946,54 @@ impl Vm {
             && let Some(f) = self.frames.last_mut()
         {
             f.top = (dst + vals.len()) as u32;
+        }
+    }
+
+    /// [`store_results`](Self::store_results) for a caller that owns the
+    /// values, which are moved into the registers.
+    ///
+    /// Every native that returns more than one value hands back a `Vec` of
+    /// its own: an iterator's step, `String.gsub`. Read as a slice, each
+    /// value was cloned into its register and the original dropped with
+    /// the `Vec` a moment later, a count up and a count down for every
+    /// string and table returned. What ends up in the registers and in
+    /// `top` is the same.
+    pub(crate) fn store_owned(&mut self, dst: usize, vals: Vec<Value>, n_ret: u8) {
+        let given = vals.len();
+        let wanted = if n_ret == ALL_RESULTS {
+            given
+        } else {
+            n_ret as usize
+        };
+        self.ensure_stack(dst + wanted);
+        // A number by its parts, anything else taken out of its place,
+        // and `nil` for what is wanted past the last. Asked of the `Vec`'s
+        // iterator, a value came back as an `Option`, put together on the
+        // stack in three pieces and read back whole to be stored: a load
+        // that waits on all three (`Value::clone_parts`), and a sixth of
+        // a coroutine's resume, which comes back through here.
+        let mut vals = vals;
+        for i in 0..wanted {
+            match vals.get_mut(i) {
+                Some(Value::Int(n)) => {
+                    let n = *n;
+                    self.set_reg(dst + i, Value::Int(n));
+                }
+                Some(Value::Float(f)) => {
+                    let f = *f;
+                    self.set_reg(dst + i, Value::Float(f));
+                }
+                Some(v) => {
+                    let v = std::mem::replace(v, Value::Nil);
+                    self.set_reg(dst + i, v);
+                }
+                None => self.set_reg(dst + i, Value::Nil),
+            }
+        }
+        if n_ret == ALL_RESULTS
+            && let Some(f) = self.frames.last_mut()
+        {
+            f.top = (dst + given) as u32;
         }
     }
 

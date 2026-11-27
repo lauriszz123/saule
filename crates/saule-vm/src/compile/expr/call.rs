@@ -114,7 +114,20 @@ impl Compiler<'_> {
 
         // `obj.method(args)` and `Class.method(args)`.
         if let Expr::Member { obj, name } = &callee.value {
-            return self.method_call_to(e, obj, name, &positional, dst, want);
+            // An operand beside this call may have been read where it is
+            // on the word that the call runs nothing (`runs_in_place`). If
+            // the call was then compiled as a call after all, that operand
+            // could be changed under it: refused here, loudly, rather than
+            // compiled wrong.
+            let promised = want == Want::Fixed(1) && self.runs_in_place(e);
+            let out = self.method_call_to(e, obj, name, &positional, dst, want)?;
+            if promised && self.in_place_last != Some(e.id) {
+                return Err(CompileError::unsupported(
+                    "a call that was to be compiled in place and was not",
+                    span.clone(),
+                ));
+            }
+            return Ok(out);
         }
         // `obj?.method(args)` — the nil check has to wrap the *call*, not
         // just the callee lookup, or `p?.foo()` on a nil `p` would end up
@@ -478,15 +491,23 @@ impl Compiler<'_> {
                     span.clone(),
                 ));
             }
+            // The *declaring* class, so an inherited `static fn` reached
+            // through a subclass name still loads the parent's proto.
+            let packed = ((s.class) << 16) | s.slot as u32;
+            // A function of a few early returns, called with what it needs
+            // known here: its body, in place of the call.
+            if want == Want::Fixed(1)
+                && let Some(out) = self.inline_static_call(packed, args, dst, span)?
+            {
+                self.in_place_last = Some(e.id);
+                return Ok(out);
+            }
             let m = self.mark();
             let base = self.alloc_n((args.len().max(1) as u16).max(want.slots()), span)?;
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + i as u16)?;
             }
             let a = self.reg8(base, span)?;
-            // The *declaring* class, so an inherited `static fn` reached
-            // through a subclass name still loads the parent's proto.
-            let packed = ((s.class) << 16) | s.slot as u32;
             self.emit_static_call(a, args.len() as u8 + 1, want.c(), packed, span);
             return self.finish_call(base, dst, want, m, span);
         }
@@ -618,10 +639,15 @@ impl Compiler<'_> {
         // path instead would trade the `MOVE` this saves for the `EXTRAARG`
         // that path needs, which is no saving at all.
         if matches!(want, Want::Fixed(0) | Want::Fixed(1)) {
-            self.emit(
-                Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
-                span,
-            );
+            // A small method that cannot fail is compiled right here, behind
+            // a test of the receiver's class: see `compile::inline`.
+            let wanted = want != Want::Fixed(0);
+            if !self.inline_method(class, slot, base, args.len() + 1, wanted, false, span)? {
+                self.emit(
+                    Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
+                    span,
+                );
+            }
         } else {
             self.emit(
                 Instruction::abc(Op::CALLM_MR, a, args.len() as u8 + 1, want.c()),
@@ -697,7 +723,7 @@ impl Compiler<'_> {
     }
 }
 
-use crate::compile::ctx::func::InlineBody;
+use crate::compile::ctx::func::{InlineBody, StaticLambda};
 
 impl Compiler<'_> {
     /// The proto `name` is bound to, when it is a local in
@@ -800,6 +826,389 @@ impl Compiler<'_> {
             .then(|| std::rc::Rc::new((names, std::sync::Arc::clone(expr))))
     }
 
+    /// Whether `m` is a function a call could be replaced by, as far as its
+    /// own shape says: fixed parameters, and a body that is `return e`
+    /// after at most two `if c then return e end`. Whether a particular
+    /// call can be is [`inline_static_call`](Self::inline_static_call)'s.
+    pub(crate) fn returns_early_only(m: &saule_ast::Method) -> bool {
+        use saule_ast::Stmt;
+        let one = |values: &Vec<Spanned<Expr>>| values.len() == 1;
+        let Some((last, earlier)) = m.body.split_last() else {
+            return false;
+        };
+        m.is_static
+            && m.params.iter().all(|p| !p.variadic && p.default.is_none())
+            && earlier.len() <= 2
+            && matches!(&last.value, Stmt::Return(values) if one(values))
+            && earlier.iter().all(|s| match &s.value {
+                Stmt::If {
+                    then_block,
+                    elseifs,
+                    else_block: None,
+                    ..
+                } => {
+                    elseifs.is_empty()
+                        && matches!(then_block.as_slice(), [only]
+                            if matches!(&only.value, Stmt::Return(values) if one(values)))
+                }
+                _ => false,
+            })
+    }
+
+    /// `Main.pickMax(a, b, better)` where `pickMax` only chooses between
+    /// its arguments by calling one of them, and `better` is a lambda this
+    /// function holds in a local for its whole life: the body, compiled
+    /// right here, with the lambda's own body where it is called. A generic
+    /// function over "how to compare" becomes the comparison.
+    ///
+    /// `None` when the call has to stay a call. As for a lambda
+    /// ([`inline_lambda_call`](Self::inline_lambda_call)), only what can
+    /// neither fail nor call anything is taken, so that no error, stack
+    /// trace or depth limit can tell the call never happened: every
+    /// expression of the body is a parameter, a call of a parameter that is
+    /// such a lambda here, or arithmetic and comparisons on proved numbers.
+    /// What [`inline_static_call`](Self::inline_static_call) needs to
+    /// know before it emits anything, or `None` when the call stays a
+    /// call: the function, which of its parameters are values, and the
+    /// lambda each of the others was given. Reads, and changes nothing.
+    fn static_call_plan(&self, packed: u32, args: &[&Spanned<Expr>]) -> Option<StaticPlan> {
+        use saule_ast::Stmt;
+        let m = self.inline_statics.get(&packed).cloned()?;
+        if m.params.len() != args.len() {
+            return None;
+        }
+        // Which parameters the body calls, and with how many arguments.
+        let mut called: Vec<(String, usize)> = Vec::new();
+        let mut exprs: Vec<&Spanned<Expr>> = Vec::new();
+        for stmt in &m.body {
+            match &stmt.value {
+                Stmt::Return(values) => exprs.push(&values[0]),
+                Stmt::If {
+                    cond, then_block, ..
+                } => {
+                    exprs.push(cond);
+                    if let Stmt::Return(values) = &then_block[0].value {
+                        exprs.push(&values[0]);
+                    }
+                }
+                _ => return None,
+            }
+        }
+        for e in &exprs {
+            Self::calls_in(e, &mut called);
+        }
+        // A parameter that is matched on has to be what its type says and
+        // nothing less: a nullable one may be nil, which has no tag.
+        let mut matched: Vec<String> = Vec::new();
+        for e in &exprs {
+            Self::matched_in(e, &mut matched);
+        }
+        for p in &m.params {
+            let an_enum = matches!(&p.ty, saule_ast::Type::Named(n)
+                if self.layouts.enum_of(n).is_some());
+            if matched.contains(&p.name) && !an_enum {
+                return None;
+            }
+        }
+        // Each called parameter has to be given a lambda that can be
+        // compiled in place; the others are values.
+        let mut values: Vec<String> = Vec::new();
+        let mut lambdas: Vec<(String, u16, u32, InlineBody)> = Vec::new();
+        for (p, arg) in m.params.iter().zip(args.iter().copied()) {
+            let arity = called.iter().find(|(n, _)| n == &p.name).map(|(_, n)| *n);
+            let Some(arity) = arity else {
+                values.push(p.name.clone());
+                continue;
+            };
+            // What is called is a function, not something to match on.
+            if matched.contains(&p.name) {
+                return None;
+            }
+            let Expr::Ident(given) = &arg.value else {
+                return None;
+            };
+            let (Some(reg), Some((proto, Some(body)))) =
+                (self.f.lookup(given), self.static_lambda(given, arity))
+            else {
+                return None;
+            };
+            lambdas.push((p.name.clone(), reg, proto, body));
+        }
+        let names: Vec<&str> = lambdas.iter().map(|(n, ..)| n.as_str()).collect();
+        if !exprs.iter().all(|e| self.only_chooses(e, &values, &names)) {
+            return None;
+        }
+        Some(StaticPlan { m, values, lambdas })
+    }
+
+    /// The static function `obj.name` names, as `CALLSTAT` packs it, when
+    /// `obj` is a class and nothing between the call and the function has
+    /// yet to be declared.
+    fn static_target(&self, obj: &Spanned<Expr>, name: &str) -> Option<u32> {
+        let Expr::Ident(class_name) = &obj.value else {
+            return None;
+        };
+        if self.layouts.enum_of(class_name).is_some() || self.reaches_undeclared(class_name) {
+            return None;
+        }
+        let class = self.class_named_by(obj)?;
+        let s = self.chunk.classes[class as usize].smindex.get(name)?;
+        Some((s.class << 16) | s.slot as u32)
+    }
+
+    /// Whether `e` is a call of a static function that is compiled in
+    /// place of the call, with arguments that run nothing: an operand
+    /// beside it can then be read where it is
+    /// ([`operand_is_pure`](Self::operand_is_pure)). `total = total +
+    /// Main.handle(e)` copied `total` aside before every call that was
+    /// never made.
+    ///
+    /// The promise is kept or the program does not compile: see
+    /// `in_place_last`.
+    pub(crate) fn runs_in_place(&self, e: &Spanned<Expr>) -> bool {
+        let Expr::Call { callee, args, .. } = &e.value else {
+            return false;
+        };
+        let Expr::Member { obj, name } = &callee.value else {
+            return false;
+        };
+        let mut given = Vec::with_capacity(args.len());
+        for a in args {
+            match a {
+                saule_ast::CallArg::Positional(v) if !a.is_trailing_block() => given.push(v),
+                _ => return false,
+            }
+        }
+        let Some(packed) = self.static_target(obj, name) else {
+            return false;
+        };
+        let Some(plan) = self.static_call_plan(packed, &given) else {
+            return false;
+        };
+        plan.m
+            .params
+            .iter()
+            .zip(&given)
+            .filter(|(p, _)| plan.values.contains(&p.name))
+            .all(|(_, a)| self.operand_is_pure(a))
+    }
+
+    fn inline_static_call(
+        &mut self,
+        packed: u32,
+        args: &[&Spanned<Expr>],
+        dst: u16,
+        span: &std::ops::Range<usize>,
+    ) -> Result<Option<Results>, CompileError> {
+        use saule_ast::Stmt;
+        let Some(StaticPlan { m, values, lambdas }) = self.static_call_plan(packed, args) else {
+            return Ok(None);
+        };
+
+        let mark = self.mark();
+        // A destination above everything in use is kept out of the
+        // arguments' way, so that the body's value goes straight to it.
+        while self.f.regs.top() <= dst {
+            self.alloc(span)?;
+        }
+        // The value arguments, in the order they are written: read where
+        // they are when none of them can disturb another.
+        let given: Vec<&Spanned<Expr>> = m
+            .params
+            .iter()
+            .zip(args.iter().copied())
+            .filter(|(p, _)| values.contains(&p.name))
+            .map(|(_, a)| a)
+            .collect();
+        let in_place = given.iter().all(|a| self.operand_is_pure(a));
+        let mut regs = Vec::with_capacity(given.len());
+        for a in &given {
+            regs.push(self.operand_to_reg(a, in_place)?);
+        }
+        let target = if regs.contains(&dst) {
+            self.alloc(span)?
+        } else {
+            dst
+        };
+
+        // The body sees its parameters and nothing of this function's:
+        // every name in it was checked to be one of them. A lambda
+        // parameter is the caller's local under the parameter's name.
+        let kept = std::mem::take(&mut self.f.static_lambdas);
+        self.f.enter_scope();
+        for (name, reg) in values.iter().zip(&regs) {
+            self.f.declare(name, *reg);
+        }
+        for (name, reg, proto, body) in &lambdas {
+            self.f.declare(name, *reg);
+            self.f.static_lambdas.push(StaticLambda {
+                name: std::rc::Rc::from(name.as_str()),
+                reg: *reg,
+                proto: *proto,
+                inline: Some(body.clone()),
+            });
+        }
+        let mut to_end = Vec::new();
+        let mut out = Ok(());
+        for stmt in &m.body {
+            out = (|| {
+                match &stmt.value {
+                    Stmt::If {
+                        cond, then_block, ..
+                    } => {
+                        let fails = self.cond_jumps_if_false(cond)?;
+                        if let Stmt::Return(values) = &then_block[0].value {
+                            self.expr_to(&values[0], target)?;
+                        }
+                        to_end.push(self.emit_jump(Op::JMP, 0, span));
+                        for l in fails {
+                            self.patch_here(l)?;
+                        }
+                    }
+                    Stmt::Return(values) => {
+                        self.expr_to(&values[0], target)?;
+                    }
+                    _ => {}
+                }
+                Ok(())
+            })();
+            if out.is_err() {
+                break;
+            }
+        }
+        self.f.leave_scope();
+        self.f.static_lambdas = kept;
+        out?;
+        for l in to_end {
+            self.patch_here(l)?;
+        }
+        if target != dst {
+            let (a, b) = (self.reg8(dst, span)?, self.reg8(target, span)?);
+            self.emit(Instruction::abc(Op::MOVE, a, b, 0), span);
+        }
+        self.free_to(mark);
+        Ok(Some(Results {
+            base: dst,
+            count: Some(1),
+            terminated: false,
+        }))
+    }
+
+    /// The names `e` calls as functions, each with how many arguments,
+    /// added to `out`. A name called with two different counts is given
+    /// one no lambda has, so that it is taken for no lambda.
+    fn calls_in(e: &Spanned<Expr>, out: &mut Vec<(String, usize)>) {
+        match &e.value {
+            Expr::Call { callee, args, .. } => {
+                if let Expr::Ident(name) = &callee.value {
+                    match out.iter_mut().find(|(n, _)| n == name) {
+                        Some((_, n)) if *n != args.len() => *n = usize::MAX,
+                        Some(_) => {}
+                        None => out.push((name.clone(), args.len())),
+                    }
+                }
+                for a in args {
+                    if let saule_ast::CallArg::Positional(v) = a {
+                        Self::calls_in(v, out);
+                    }
+                }
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                Self::calls_in(lhs, out);
+                Self::calls_in(rhs, out);
+            }
+            Expr::Unary { rhs, .. } => Self::calls_in(rhs, out),
+            Expr::Match { scrutinee, arms } => {
+                Self::calls_in(scrutinee, out);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        Self::calls_in(guard, out);
+                    }
+                    if let saule_ast::MatchBody::Expr(body) = &arm.body {
+                        Self::calls_in(body, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The names `e` matches on, at any depth, added to `out`.
+    fn matched_in(e: &Spanned<Expr>, out: &mut Vec<String>) {
+        match &e.value {
+            Expr::Match { scrutinee, arms } => {
+                if let Expr::Ident(n) = &scrutinee.value {
+                    out.push(n.clone());
+                }
+                for arm in arms {
+                    if let saule_ast::MatchBody::Expr(body) = &arm.body {
+                        Self::matched_in(body, out);
+                    }
+                }
+            }
+            Expr::Binary { lhs, rhs, .. } => {
+                Self::matched_in(lhs, out);
+                Self::matched_in(rhs, out);
+            }
+            Expr::Unary { rhs, .. } => Self::matched_in(rhs, out),
+            _ => {}
+        }
+    }
+
+    /// Whether `e` only reads the parameters called `values`, calls the
+    /// ones called `lambdas` with such expressions, and otherwise does
+    /// what [`cannot_fail`](Self::cannot_fail) allows.
+    fn only_chooses(&self, e: &Spanned<Expr>, values: &[String], lambdas: &[&str]) -> bool {
+        match &e.value {
+            Expr::Ident(n) => values.contains(n),
+            Expr::Call {
+                callee,
+                args,
+                type_args: None,
+            } => {
+                matches!(&callee.value, Expr::Ident(n) if lambdas.contains(&n.as_str()))
+                    && args.iter().all(|a| match a {
+                        saule_ast::CallArg::Positional(v) => self.only_chooses(v, values, lambdas),
+                        _ => false,
+                    })
+            }
+            // `match v case E.A(x, y) then … end` over a parameter: each
+            // arm a variant with its fields named, or `_`, and a guard and
+            // a body that only choose in their turn, the fields being
+            // values to them. Reading a tag and a field of a value the
+            // type checker proved an enum's cannot fail.
+            Expr::Match { scrutinee, arms } => {
+                use saule_ast::{MatchBody, Pattern};
+                matches!(&scrutinee.value, Expr::Ident(n) if values.contains(n))
+                    && arms.iter().all(|arm| {
+                        let mut seen = values.to_vec();
+                        let plain = match &arm.pattern.value {
+                            Pattern::Wildcard => true,
+                            Pattern::Variant { fields, .. } => {
+                                fields.iter().all(|f| match &f.value {
+                                    Pattern::Bind(n) if !lambdas.contains(&n.as_str()) => {
+                                        seen.push(n.clone());
+                                        true
+                                    }
+                                    Pattern::Wildcard => true,
+                                    _ => false,
+                                })
+                            }
+                            _ => false,
+                        };
+                        plain
+                            && arm
+                                .guard
+                                .as_ref()
+                                .is_none_or(|g| self.only_chooses(g, &seen, lambdas))
+                            && matches!(&arm.body, MatchBody::Expr(body)
+                                if self.only_chooses(body, &seen, lambdas))
+                    })
+            }
+            _ => self.cannot_fail(e, values),
+        }
+    }
+
     fn cannot_fail(&self, e: &Spanned<Expr>, params: &[String]) -> bool {
         use crate::compile::ctx::Num;
         use saule_ast::{BinOp::*, UnaryOp};
@@ -831,6 +1240,16 @@ impl Compiler<'_> {
             _ => false,
         }
     }
+}
+
+/// See [`Compiler::static_call_plan`].
+struct StaticPlan {
+    m: std::rc::Rc<saule_ast::Method>,
+    /// The parameters that are values, by name.
+    values: Vec<String>,
+    /// The parameters that are called: name, the register of the lambda
+    /// given, its proto, and its body.
+    lambdas: Vec<(String, u16, u32, InlineBody)>,
 }
 
 impl Compiler<'_> {

@@ -3966,6 +3966,25 @@ built program names the file, line and column with an empty snippet.
 The executable runs on the operating system and processor it was built on,
 and carries the Saule version that built it.
 
+#### One runtime for several programs
+
+Each executable carries the whole runtime, about seven megabytes, and the
+native packages it imports. Where many built programs sit on one machine
+(the apps of a system image), `--shared` leaves both out:
+
+```sh
+saule build --shared              # this saule runs it
+saule build --shared=/bin/saule   # the saule at that path does
+```
+
+The output is the program and its bundled files alone, behind a first line
+that names the saule to run it (`#!/bin/saule run`). On Linux and macOS it
+is executable as it is; anywhere, `saule run <output> [arguments]` runs it,
+and everything after the file is the program's, never an option of
+`saule`'s. The saule that runs it has to be the same build as the one that
+built it, and loads the program's native packages from its own home
+(`SAULE_HOME/native_packages`), so those are installed once beside it.
+
 ### Tests
 
 `saule test` runs every top-level function named `test_...` that takes no

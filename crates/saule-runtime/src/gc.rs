@@ -428,13 +428,13 @@ mod tests {
     fn collects_only_what_it_can_prove() {
         reset();
         let t = table();
-        let variant = Rc::new(crate::value::EnumVariantObject {
-            enum_name: SauleStr::from("Option"),
-            variant_name: SauleStr::from("Some"),
-            tag: 0,
-            value: std::cell::OnceCell::from(Value::Table(Rc::clone(&t))),
-            enum_obj: RefCell::new(None),
-        });
+        let variant = Rc::new(crate::value::EnumVariantObject::valued(
+            SauleStr::from("Option"),
+            SauleStr::from("Some"),
+            0,
+            Some(Value::Table(Rc::clone(&t))),
+            None,
+        ));
         put(&t, "wrapped", Value::EnumVariant(variant));
         // A real cycle, but one this collector declines to reason about.
         assert_eq!(collect(), 0, "opaque payloads are treated as external");

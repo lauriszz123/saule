@@ -404,6 +404,13 @@ fn interned_empty() -> SauleStr {
 
 /// `(is_ascii, char_len)` for `s`, computed once per string.
 fn str_facts(s: &SauleStr) -> (bool, usize) {
+    // A short string is counted faster than it is remembered, and keeps
+    // what was remembered of a long one in place: a loop over the words of
+    // a long text asks about each word and about the text in turn.
+    if s.len() <= 32 {
+        let ascii = s.is_ascii();
+        return (ascii, if ascii { s.len() } else { s.chars().count() });
+    }
     STR_MEMO.with(|m| {
         let mut m = m.borrow_mut();
         if let Some((cached, ascii, n)) = m.as_ref()
@@ -918,14 +925,23 @@ fn str_match(args: &[Value]) -> Result<Value, String> {
     expect_min_arity("String.match", args, 2)?;
     let s = expect_string("String.match", args, 0)?;
     let pat = expect_string("String.match", args, 1)?;
-    let chars = Chars::of(&s);
-    let pchars = Chars::of(&pat);
-
     let init: i64 = if args.len() >= 3 {
         expect_int("String.match", args, 2)?
     } else {
         1
     };
+
+    // All ASCII: matched where it lies, a byte to a character.
+    if both_ascii(&s, &pat) {
+        let start = resolve_index(init, s.len());
+        return Ok(match pattern::find(s.as_bytes(), pat.as_bytes(), start)? {
+            None => Value::Nil,
+            Some(m) => captures_table(&s, &m),
+        });
+    }
+
+    let chars = Chars::of(&s);
+    let pchars = Chars::of(&pat);
     let start = resolve_index(init, chars.len());
 
     match pattern::find(&chars, &pchars, start)? {
@@ -953,15 +969,51 @@ fn str_gmatch(args: &[Value]) -> Result<Value, String> {
     expect_arity("String.gmatch", args, 2)?;
     let s = expect_string("String.gmatch", args, 0)?;
     let pat = expect_string("String.gmatch", args, 1)?;
-    let chars: Rc<Vec<char>> = Rc::new(s.chars().collect());
-    let pchars: Rc<Vec<char>> = Rc::new(pat.chars().collect());
-    if pattern::is_anchored(&pchars) {
+    if pat.starts_with('^') {
         return Err(
             "String.gmatch cannot loop over an anchored pattern — `^` matches in one place \
              only; use `String.match` for a single anchored match, or drop the `^`"
                 .to_string(),
         );
     }
+
+    // All ASCII: the step holds the two strings as they are and matches
+    // their bytes, where the other way decodes both into buffers of its own.
+    if both_ascii(&s, &pat) {
+        let pos = std::cell::Cell::new(0usize);
+        return Ok(Value::NativeClosure(Rc::new(NativeClosure {
+            name: "String.gmatch#step",
+            func: Box::new(move |_args: &[Value]| {
+                let at = pos.get();
+                if at > s.len() {
+                    return Ok(vec![Value::Nil, Value::Nil]);
+                }
+                match pattern::find(s.as_bytes(), pat.as_bytes(), at)? {
+                    None => {
+                        // Park past the end so a loop that keeps calling stays done.
+                        pos.set(s.len() + 1);
+                        Ok(vec![Value::Nil, Value::Nil])
+                    }
+                    Some(m) => {
+                        pos.set(if m.end == m.start { m.end + 1 } else { m.end });
+                        let whole = Value::Str(SauleStr::new(s[m.start..m.end].to_owned()));
+                        // With no captures the table holds the whole match:
+                        // the same string, not a second copy of it.
+                        let captures = if m.captures.is_empty() {
+                            table_of(vec![whole.clone()])
+                        } else {
+                            captures_table(&s, &m)
+                        };
+                        Ok(vec![whole, captures])
+                    }
+                }
+            }),
+            param_names: Vec::new(),
+        })));
+    }
+
+    let chars: Rc<Vec<char>> = Rc::new(s.chars().collect());
+    let pchars: Rc<Vec<char>> = Rc::new(pat.chars().collect());
     let cursor = Rc::new(RefCell::new(0usize));
 
     Ok(Value::NativeClosure(Rc::new(NativeClosure {
@@ -1018,6 +1070,12 @@ fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
         None
     };
 
+    // All ASCII: matched as bytes, and what is kept of the subject is
+    // copied across a run at a time. The replacement is text either way.
+    if both_ascii(&s, &pat) {
+        return gsub_ascii(&s, &pat, &repl, limit);
+    }
+
     let chars = Chars::of(&s);
     let pchars = Chars::of(&pat);
     let rchars = Chars::of(&repl);
@@ -1062,6 +1120,75 @@ fn str_gsub(args: &[Value]) -> Result<Vec<Value>, String> {
         Value::Str(SauleStr::new(out)),
         Value::Int(count as i64),
     ])
+}
+
+/// [`str_gsub`] for a subject and a pattern that are all ASCII: the same
+/// loop over bytes, which are that text's characters.
+fn gsub_ascii(s: &str, pat: &str, repl: &str, limit: Option<usize>) -> Result<Vec<Value>, String> {
+    let (src, p) = (s.as_bytes(), pat.as_bytes());
+    let anchored = pattern::is_anchored(p);
+
+    let mut out = String::with_capacity(s.len());
+    let mut pos = 0usize;
+    let mut count = 0usize;
+
+    while limit.is_none_or(|l| count < l) {
+        let Some(m) = pattern::find(src, p, pos)? else {
+            break;
+        };
+        out.push_str(&s[pos..m.start]);
+        pattern::expand_replacement_ascii(repl, s, &m, &mut out)?;
+        count += 1;
+
+        if anchored {
+            pos = m.end;
+            break;
+        }
+
+        if m.end == m.start {
+            // Zero-width: as in `str_gsub`.
+            if m.end >= src.len() {
+                pos = m.end;
+                break;
+            }
+            out.push(src[m.end] as char);
+            pos = m.end + 1;
+        } else {
+            pos = m.end;
+        }
+    }
+
+    out.push_str(&s[pos.min(s.len())..]);
+    Ok(vec![
+        Value::Str(SauleStr::new(out)),
+        Value::Int(count as i64),
+    ])
+}
+
+/// Whether a subject and a pattern are both ASCII, and so matched as the
+/// bytes they are (`pattern`'s module docs). The subject's answer is
+/// remembered with its length, for the loop that matches one long string
+/// again and again; a pattern is short.
+#[inline]
+fn both_ascii(s: &SauleStr, pat: &str) -> bool {
+    // A short subject is looked at faster than it is remembered.
+    pat.is_ascii() && if s.len() <= 128 { s.is_ascii() } else { str_facts(s).0 }
+}
+
+/// The captures of `m` in the ASCII subject `s` as a `table<string>`, or
+/// the whole match when the pattern had none: what
+/// [`pattern::Match::capture_texts`] gives, made straight into values.
+fn captures_table(s: &str, m: &pattern::Match) -> Value {
+    let text = |from: usize, to: usize| Value::Str(SauleStr::new(s[from..to].to_owned()));
+    if m.captures.is_empty() {
+        table_of(vec![text(m.start, m.end)])
+    } else {
+        table_of(m.captures.iter().map(|&(from, to)| text(from, to)).collect())
+    }
+}
+
+fn table_of(values: Vec<Value>) -> Value {
+    Value::Table(Rc::new(RefCell::new(TableObject::from_array(values))))
 }
 
 /// A `table<string>` value from an iterator of pieces.

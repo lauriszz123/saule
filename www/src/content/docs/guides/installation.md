@@ -55,7 +55,7 @@ To take the `latest` channel:
 **macOS and Linux**
 
 ```sh
-SAULE_CHANNEL=latest curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+curl -fsSL https://lauriszz123.github.io/saule/install.sh | SAULE_CHANNEL=latest sh
 ```
 
 **Windows**
@@ -85,7 +85,10 @@ curl -fsSL https://lauriszz123.github.io/saule/install.sh | less
 
 ### Options
 
-Both installers are configured by environment variables.
+Both installers are configured by environment variables. On macOS and
+Linux they go on `sh`, after the pipe: the installer is the `sh`, and a
+variable written before `curl` is given to `curl` alone, so the installer
+never sees it and quietly installs the default.
 
 | Variable | Effect |
 |---|---|
@@ -95,7 +98,7 @@ Both installers are configured by environment variables.
 | `SAULE_NO_MODIFY_PATH=1` | Install the binaries but leave the shell profile and `PATH` alone |
 
 ```sh
-SAULE_VERSION=26.7 curl -fsSL https://lauriszz123.github.io/saule/install.sh | sh
+curl -fsSL https://lauriszz123.github.io/saule/install.sh | SAULE_VERSION=26.7 sh
 ```
 
 ### What gets installed

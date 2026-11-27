@@ -13,6 +13,7 @@
 > ./run_tests.sh                       # every fixture prints what it recorded
 > bash run_examples.sh                 # multi-module projects, likewise
 > python3 benchmarks/bench.py check    # still agrees with Lua
+> scripts/test_plain.sh                # the same with and without loop plans
 > ```
 
 ## Where we are
@@ -255,6 +256,469 @@ shared, answering 0, 1 or 2 through a `match`; shared, with `pc += skip`;
 its own again beside `JNIL` — were each a little faster on the two that
 use it and each `mandel` +12%, with `oop` +9% or `loop_arith` +7% beside
 it. What they had in common was an arm that changes `pc` after a call.
+
+### `Table.sort` by a plain comparison ✓ DONE
+
+`sort` was 1.75x of Lua, and nine tenths of it was not sorting:
+`(a, b) => a < b` is two instructions (`LTI`, `RET1`), and each of the three
+and a half million times a sort of 200 000 numbers asked it, a frame was
+pushed and popped around them (`push_frame_resolved` 29%, `pop_frame` 24%,
+`call_first` 16% of the run). That path had already had its allocations,
+its pool round trip and its downcast taken out; what was left was the call.
+
+So it is not made. A call session says what its function is when it is one
+typed comparison of its two parameters (`CallSession::compares`, told from
+the proto by `frame::comparison_of`: `LTI`, `LEI` or `LTF` over registers 0
+and 1, either way round, and a `RET1` of the answer), and `Table.sort`
+sorts such values itself (`sort_plainly`): integers by any of the four
+comparisons, floats by the two strict ones and only with no NaN among
+them, where the order is the one the merge would give. Anything else, a
+table with another kind of value in it included, is sorted by asking, as
+before.
+
+`sort` 0.150 → 0.018 s (0.21x of Lua), `tablelib` 0.205 → 0.145.
+`tests/run/stdlib/table_sort_by_a_plain_comparison.sau` sorts the same
+values both ways and compares.
+
+A comparator that reads a field (`(a, b) => a.age < b.age`) is still
+called; so is one over strings, which compiles to `ARITHX`.
+
+### `match`: a failed arm goes to the next arm for its variant ✓ DONE
+
+Under a `SWITCH` the first arm for a tag was already entered past its tag
+test. An arm whose guard failed still went to the arm below, which tested
+the tag again, and through every arm between it and the next one for the
+same variant. Now no arm under a switch tests the tag: a failed guard or
+payload jumps to the next arm for that variant, a wildcard, or the end
+(`match_chain`'s `waiting`). A wildcard with a guard keeps the chain,
+since after it fails the tag is anybody's.
+
+And a `JMP` to a `RET0`, a `RET1` or another `JMP` does what that one does
+(`peephole::thread_jumps`): every arm of a `return match …` ended in a jump
+to the one return after the last arm.
+
+`Main.handle` in `benchmarks/sau/match.sau` went from 37 instructions to
+24, and a call of it runs 4 to 7 of them where it ran 5 to 11. **`match`
+itself moved 4%** (0.181 → 0.173, 1.63x of Lua): the arms were a small part
+of it. What is left is the call (`CALLSTAT`, `enter_static`, `RET1`) and
+reading the payload, which is a table inside the variant, three objects a
+value: with the same number of cache misses as Lua it runs at three
+instructions a cycle where Lua runs at four.
+
+### Registers through a pointer in the arms that only use registers ~ PARTLY
+
+`loop_arith` ran 197 machine instructions an iteration, for four of
+Saule's; Lua runs 135 for its four. Each arm found a register by loading
+`self`, then the stack's pointer, then `base`, and adding them, per
+operand. The arithmetic, move, constant, float and loop arms and `GETF`
+now read and write through `regs`, a pointer to `R[0]` held across
+instructions (`r!`, `w!`), made again after any other arm (which may have
+grown the stack or changed `base`) and at the three places that change the
+frame and `continue`. 148 instructions an iteration; every benchmark runs
+1 to 24% fewer.
+
+**In time it is worth less than that:** `loop_arith` and `mandel` about 12%
+(0.043 → 0.037, 0.026 → 0.023), `fib` and `bintree` a few percent, the rest
+level, `interp` and `strings` 2 to 4% slower. With `regs` in a register the
+compiler moved `pc` out of one, so every instruction's fetch waits on a
+store. Four other shapes were measured (`perf stat`, instructions and
+cycles, every benchmark):
+
+- with the compare-and-jump arms through `regs` too: `loop_arith` −25% and
+  `mandel` −19% in cycles, and `fib` +15% (twice the mispredicted
+  branches), `coroutine` +7%;
+- `regs` made again for every instruction, held nowhere: 1 to 5% more
+  instructions on most of the suite;
+- `here` kept in the `Vm` and not in a local: `pc` back in a register,
+  `loop_arith` −17%, and `strings` +8%, `interp` +6%;
+- every function, or every jump target, aligned to 64 or 32 bytes
+  (`-align-all-functions`, `-align-all-nofallthru-blocks`): no steadier.
+
+Instruction counts are the same from run to run and cycles are within 2%,
+so the instrument is sound; what it shows is that at an unchanged
+instruction count a benchmark moves 5 to 15% with how the loop is laid
+out. The next step is the one the note on dispatch below ends on: an
+instruction pointer and a register pointer that the loop cannot spill,
+which means a loop that is not one function.
+
+### Small methods and choosing functions compiled where they are called ✓ DONE
+
+`generic` has nothing generic in its bytecode (see the entry above): it is
+six calls an iteration. What the compiler knows before the program runs is
+most of each of them, and it now uses it.
+
+**A small method, behind a test of the receiver's class**
+(`compile::inline`). `st.push(x)` is `push`'s own instructions laid down
+in the caller's registers from the receiver on (a method's frame starts
+at its receiver, so nothing is shuffled), after one new instruction,
+`ISREADY`, asks what cannot be known earlier: that the object is of
+exactly the class the type checker proved, a subclass not being it, and
+that the table the body indexes is there. Any other receiver takes the
+`CALLM` kept beside the body. Only a body that cannot fail once the test
+has passed is taken, so that no stack trace is a frame short: moves and
+constants, typed arithmetic that cannot divide by zero, comparisons and
+jumps, fields of `self`, and an element of a table `self` holds in a
+field. At most twelve instructions, from this module, compiled before the
+call that uses it.
+
+**A constructor that only stores** needs no test: the object was made
+by the `NEW` on the line above. `Point(x, y)` is a `NEW` and two `SETF`.
+
+**A static function that only chooses** (`inline_static_call`).
+`Main.pickMax(a, b, better)`, where `pickMax` is `return` after at most
+two `if c then return e end`, every expression a parameter, a call of a
+parameter, or arithmetic that cannot fail, and `better` is a lambda this
+function holds in a local for its whole life: the body is compiled in
+place, with the lambda's own body where it is called
+(`inline_lambda_call`, which was there). A generic function over "how to
+compare" becomes the comparison: `LTI`, `TEST`, two `MOVE`.
+
+`generic` 0.190 → 0.139 s (1.68x of Lua → 1.25x), 34% fewer machine
+instructions; `oop` 0.048 → 0.033 (1.31x → 0.92x); `vecops` 0.325 → 0.281;
+`interp` 0.489 → 0.443. The rest run the same instructions as before.
+
+What is left in `generic` is the test, three instructions a call
+(`ISREADY`, `TEST`, `JMP`), and the table read out of the field into a
+register for each index (`GETFIDX` names register 0 without saying so,
+and cannot be moved to another frame's registers). A local that holds
+what a constructor made and is never assigned again needs no test of its
+class; the names for that are there (`assigned_names`), and it is not
+done.
+
+A call site that sees several classes pays the test and then calls: two
+instructions more than before. `entity`, whose `score` is overridden in
+both subclasses, is level.
+
+### `match`: the fields in the variant, and four instructions fewer a turn ✓ DONE
+
+`match` ran 0.183 s against Lua's 0.104 after the routing above. It
+executed *fewer* machine instructions than Lua and took half again as
+many cycles: eleven dispatches a turn of the loop, and three objects read
+for each event.
+
+**The fields are in the variant.** `Event.Click(x, y)` was a variant
+holding a table holding an array: three allocations, and `GETPAY` went
+through all three. The fields are now in the variant object itself, one
+or two in place and more in a slice (`EnumVariantObject::carrying`).
+`.value` still answers with a table of them, made the first time it is
+asked for and kept; it may be written to, so from then on it is what the
+variant carries and `GETPAY` reads it as before. Building the 200 000
+events went from 128M cycles to 101M (Lua: 137M).
+
+**A function that is one `match` over its argument** is compiled where
+it is called, by the same road as `pickMax` (`inline_static_call`): arms
+that are variants with their fields named, guards and bodies that only
+choose. The parameter has to be an enum by its declared type; a nullable
+one keeps the call.
+
+**An operand beside such a call is read where it is.** `total = total +
+Main.handle(e)` copied `total` aside before a call that is no longer
+made. `operand_is_pure` now asks `runs_in_place`, which reads the same
+plan the emission does; `call_to_want` refuses to compile a call that
+was promised in place and came out a call, so a divergence between the
+two is a compile error and never a wrong program.
+
+**`SWITCHTAG`** is `GETTAG` and `SWITCH` as one instruction: the tag was
+read into a register nothing else looked at.
+
+**An arm that is one of its fields**, `case Key(c) then c`, reads the
+field straight into the destination (`field_to`), where it was bound to
+a register and moved.
+
+**A test that does not skip takes the `JMP` after it** (`or_jump!` in
+the dispatch): the false branch of every `if` was a second trip through
+the dispatch for the jump. This one is not `match`'s alone: `fib` -19%
+cycles, `nullsafe` -20%, `bytes` -14%, the coroutine three -8 to -12%,
+4.8% off the suite's geometric mean, with the instruction counts nearly
+unchanged. The peephole already turned `test; JMP +1` round, so what is
+left to fuse is the jump that goes somewhere.
+
+`match` 0.183 → 0.107 s (1.76x of Lua → 1.03x); 746M cycles → 462M, Lua
+469M. The loop is `GETIDXU`, `SWITCHTAG`, the arm, `ADDI`, `FORLOOP_I`.
+
+What is left: each arm but the last ends in a `JMP` to the end of the
+`match`, and the two arms for one variant each read the field the guard
+needed.
+
+### Patterns: ASCII text matched where it lies ✓ DONE
+
+`pattern` ran 0.379 s against Lua's 0.224: 7.48G instructions to Lua's
+4.01G. The matcher is a port of Lua's, so the difference was in what was
+done around it. The profile, by where the time went:
+
+- every call decoded the subject and the pattern into a `Vec<char>`, and
+  `gsub` wrote its result back a character at a time;
+- an unanchored search made a whole attempt at every place: `code=(%d+)`
+  over a line of fifty characters is thirty-odd calls of `do_match` that
+  each fail on the first character;
+- each search zeroed thirty-two captures, 512 bytes, to use none or three;
+- each step of `gmatch` built the matched word twice (once as the whole
+  match, once as the one capture a pattern without captures has), and the
+  VM cloned both results into their registers and dropped the originals.
+
+**ASCII as bytes.** The matcher is generic over a `Unit` (`char` or
+`u8`). A subject and a pattern that are both ASCII are matched as the
+bytes they are, a byte to a character, so no index changes its meaning
+and nothing is decoded (`both_ascii`, `gsub_ascii`, `captures_table` in
+`stdlib/string.rs`). Anything else takes the way it always took. The
+classes are asked of the same `char` in both, and the unit tests run
+every assertion both ways whenever the text allows (`found` in
+`pattern.rs`'s tests).
+
+**Places the first item cannot match are stepped over** (`leading_item`
+in `find`): when a pattern starts with a character, a class or a set that
+has to be taken at least once, the search compares its way to the next
+place that item matches and only attempts there. A failed attempt at such
+a place changed nothing and reported nothing, so none is missed; a first
+item that is malformed is reported before the scan, as the first attempt
+reported it.
+
+**A class of ASCII is a table read** (`ASCII_CLASS`), and the item a `+`
+or `*` repeats, or a search steps over, is read once for the loop and not
+for each character (`Item`, `holds`). A test checks the table against
+`match_class` for every ASCII character and every letter.
+
+**Four captures are held in place** and more go in a list (`Captures`).
+
+**A native's results are moved into the registers** (`Vm::store_owned`):
+every native that returns more than one value hands back a `Vec` it
+owns, and each value in it was cloned and then dropped. This one is the
+VM's and not the matcher's; it is 4% of `pattern` and nothing measurable
+of `iterlib`, whose steps return a string and an integer.
+
+`pattern` 0.379 → 0.226 s (1.69x of Lua → 1.01x); 7.48G instructions →
+3.90G, Lua 4.01G; 1.94G cycles → 1.13G, Lua 1.13G. The same benchmark
+with a letter that is not ASCII in every user name, so that every line
+takes the decoding way: 0.39 → 0.31 s, which is the stepping over and the
+moved results alone.
+
+The binary's layout moved with it, as it does with any change (see the
+note on registers above): `loop_arith` 0.033 → 0.036 s at the same
+753.27M instructions, and the three coroutine benchmarks 2 to 4% slower
+in time while executing 1% fewer instructions. A build with the matcher's
+changes and without the VM's put `loop_arith` at 0.039.
+
+What is left: the pattern is still read as it is matched, an item's end
+found again each time it is reached (`class_end`), and each result is two
+allocations for the string and two for the table of captures. A pattern
+compiled once and kept by the string it came from would take the first;
+the second is how strings and tables are made.
+
+### `Iter`: a callback's result read where it lies ✓ DONE
+
+`iterlib` ran 0.188 s against Lua's 0.119. It executed a fifth more
+instructions than Lua (3.08G to 2.56G) and took over half again as many
+cycles (977M to 600M): the time was not in what was done but in waiting.
+
+**Sixteen bytes read back whole a moment after they were written in
+parts.** An instruction writes a register as a tag and a payload, two
+stores. A callback's result then went register → the VM's results buffer
+→ a `Result<Value, RuntimeError>` → a `Result<Value, String>` → the
+combinator, and each move of a `Value` the compiler cannot see into is
+either one sixteen-byte load or, where it has split it, a tag and two
+overlapping eight-byte loads at offsets 1 and 8. Neither is contained in
+one of the stores that just wrote it, so the load waits for them to reach
+memory: a dozen cycles, three or four times a call. The argument went the
+same way in.
+
+- `CallSession::call_ref` lends the result where the function left it,
+  in its register (`Vm::invoke_kept`, `Vm::kept`; `pop_frame` records
+  where when `keep_result` is set), good until the next call. Most
+  combinators ask only whether it is true, and ask there.
+- What is kept is copied by its parts (`Value::clone_parts`,
+  `store_parts`, `push_parts`): the tag read, then the payload, as they
+  were written. `store_parts` and `push_parts` write from inside each arm
+  of the match; written as one assignment the arms met in a temporary on
+  the stack, filled in parts and read back whole, which was the same
+  wait a line later (41% of `call_ref` in the profile that showed it).
+- The arguments are lent too, and written into the callee's registers by
+  their parts. The callback's frame is pushed with `push_frame_raw`, as
+  the call instructions push theirs, and not through a 64-byte `Result`.
+
+**The table is read where it is.** Every combinator copied the whole
+array before its first call, in case the function wrote to the table,
+and dropped the copy after: for a thousand integers, a thousand values
+copied and a thousand calls of `Value`'s drop glue, as much as the
+callbacks cost. A `for` loop has the same worry and takes the array's
+lease instead (`ArrayPart::lease`); `Source` in `stdlib/iter.rs` is that
+for a native. The copy is made by the first write that happens while a
+combinator is going, and then once. `Iter.first`, `last`, `take` and
+`skip`, which call nothing, read the array under a borrow
+(`with_array`): `first` of a thousand elements had copied a thousand.
+
+**A table of numbers is freed without a call for each** (`Drop for
+ArrayPart`): the drop glue is asked for only by an element that owns
+something. This one is every program's: `tablelib` -6%, `wordfreq` -6%
+in cycles.
+
+**`Table.sort`'s comparator** goes by `call_ref` as well, when it is not
+one of the comparisons sorted without a call.
+
+`iterlib` 0.188 → 0.119 s (1.58x of Lua → 1.00x); 3.08G instructions →
+2.31G, Lua 2.56G; 977M cycles → 595M, Lua 600M. A program closer to what
+is written with these (20 000 objects sorted by a field, filtered and
+mapped by lambdas that read fields and call `String.len`, ten times):
+0.21 → 0.15 s.
+
+Layout moved with it again: `oop` 0.034 → 0.038 s at 3M fewer
+instructions, `coroutine` 0.336 → 0.348 at 31M fewer.
+
+What is left is the call itself: for each element the dispatch loop is
+entered and left, a frame pushed and popped, through a `dyn` call. The
+loop run by the VM itself (a combinator compiled where it is called, its
+lambda with it) would have none of that, and is the next step if this
+is wanted faster than Lua's hand-written loops.
+
+### Numeric loops run on numbers: the hot loop that is not one function ✓ DONE
+
+`loop_arith` ran 0.034 s against Lua's 0.025: 148 machine instructions a
+turn of a loop of four of Saule's, where Lua runs 135 for its four. An
+arm that adds two integers reads two tags, adds, looks at what the
+destination holds in case it has to be dropped, and writes a tag and a
+payload: thirty instructions with the fetch and the jump, of which one
+is the addition. "Dispatch", below, closes with the main loop at its
+floor and names the way past it: a hot loop that is not that function.
+
+**The same registers in a smaller loop bought nothing.** The first
+attempt was a second dispatch loop of forty arms over the same `Value`s
+(decode, tag checks, `put`): 135 instructions a turn, and the same
+cycles. What an arm costs is what it has to find out, not the size of
+the function it is in.
+
+**So the loop is run on the numbers** (`vm/plain.rs`). When a numeric
+`for` starts whose whole body reads and writes only registers, the
+registers it reads are looked at once, their numbers are copied into an
+array of 64-bit words, the body runs on that array from steps decoded
+when the plan was made, and what it wrote is copied back as values when
+it leaves. A step is a load, a jump, the operation and a store.
+
+- *What a loop needs* (`Plan::of`): every instruction from the one after
+  `FORPREP` to the `FORLOOP` is arithmetic, a comparison, a jump, a
+  constant, a move, a conversion between integer and float, or a numeric
+  `for` inside it; and every read finds the kind it reads. That is
+  followed forwards along every path, a set of kinds for each register
+  at each instruction, since the compiler does use one temporary for an
+  integer and later a float (`mandel`'s loops had none without this). A
+  register that may be read as it was when the loop started has to hold
+  that kind then, or the loop is left to the main loop whole.
+- *It cannot do what the main loop would not.* Arithmetic wraps in both.
+  For anything else an instruction can do (a division by zero, a `for`
+  with a step of zero) the plan stops before the instruction, copies
+  back, and returns its place: the main loop executes it, and the error
+  with its span is the main loop's. Nothing in a plan calls, so nothing
+  runs while the registers are out of date.
+- *Four places to jump from.* The step is written once and placed four
+  times in the loop: `loop_arith` 110M cycles with one, 103M with two,
+  96M with four.
+- `SAULE_PLAIN=0` makes no plans and `SAULE_PLAIN=trace` says which loops
+  got one. `scripts/test_plain.sh` runs every fixture and benchmark both
+  ways and compares standard output, standard error and the exit code:
+  it is a gate, with the three at the top of this file.
+
+`loop_arith` 0.034 → 0.020 s (1.36x of Lua → 0.80x): 743M instructions →
+433M, Lua 676M; 163M cycles → 97M, Lua 127M. `mandel`, whose two `for`
+loops and the `while` inside them are one plan, 0.023 → 0.020 s (1.21x →
+1.05x): 433M instructions → 230M, Lua 405M, and 107M cycles → 95M, Lua
+91M. It is bound by its chain of float operations through memory, as
+Lua's is. `closure`, whose lambda is compiled where it is called and
+leaves a loop of arithmetic, 0.010 → 0.005 s.
+
+**Tables, and a `while` on its own.** Two things the first version left
+out, both since added:
+
+- *A table in the loop.* A register may hold a table, kept as a counted
+  reference beside the words, and three more steps work on one: an
+  element read as an integer, a float or a boolean, or as a table (the
+  row of a matrix); a number stored into the array part; and `#t`. A
+  read finds out what the element is when it runs, since nothing says so
+  before: the plan is made for the kind the instructions after it need,
+  and an element of any other kind, an index outside the array part or
+  a table that is borrowed stops the plan before the instruction, as a
+  division by zero does. A store goes into the array part in place and
+  is only of a number, so the cycle collector has nothing to be told.
+- *A `while`.* A backward `JMP` whose region is a plan's is where a
+  `while` not inside a `for` starts from. It has no count of turns to
+  be judged by, so it is handed over on every eighth time round
+  (`Plan::due`); a `for` is handed over when its turns times the weight
+  of its body are worth copying the registers in and out
+  (`Plan::worth`), which a loop of three turns is not.
+
+`matrix` 0.025 → 0.016 s (1.56x of Lua → 1.0x): its three loops and the
+`a[i][k] * b[k][j]` in them are one plan.
+
+What does not have a plan: a loop with a call or a field in it, which is
+still most loops in most programs.
+
+### Values copied as the kind they are: calls on objects ✓ DONE
+
+`iface` ran 0.215 s against Lua's 0.156, `entity` 0.039 against 0.029,
+and the three coroutine benchmarks 1.3x to 1.4x. None of them is short of
+an optimisation; each loses a dozen cycles at a time, in the same way, at
+a handful of places.
+
+**What is being waited for.** A `Value` is written as a tag and a
+payload, two stores. Copied as a `Value` of any kind it is read as
+sixteen bytes in one load, and a load that covers two stores still on
+their way to memory waits for both: about twelve cycles, for a copy that
+is otherwise free. An arm that computes a value and the arm after it
+that copies it are exactly that. A third of `iface`'s samples were on
+such copies. The fix that works is to read and write a value as the
+kind it is, in an arm of a `match` of its own that leaves by itself:
+
+- `GETF` reads an integer or a float out of a field and writes it to the
+  register from that arm; `SETF` stores into a field with
+  `Value::store_parts`; the short `RET1` return hands a number back by
+  its parts and leaves it where it was.
+- `GETIDXU` (`t[i]!`) writes an object, a table, an integer or a float
+  to its register from an arm for each. Cloned as a value of any kind,
+  the element was put together on the stack and copied from there
+  whole: a tenth of `entity`, whose loop is `es[i]!.update(dt)`.
+- `store_owned`, which a native closure's results come back through,
+  reads a number out of the `Vec` by its parts.
+
+**What did not work, and is not to be tried again without a reason.**
+The compiler merges arms that end in the same write: a helper that
+matches on the kind and then makes one call to store (`put_parts`, one
+write in `put` and `Value::store` after the old value is let go of,
+`Value::push_parts` on the way out of a coroutine) is compiled to a
+value built on the stack and copied whole, which is the wait it was
+written to remove. `MOVE` and every `MODI` through such a helper cost
+`iface` 2.04G cycles where it had cost 1.10G. Writing the result of
+`MODI` straight through `regs` cost `bintree` 10% and `iface` 7%.
+Each of these was measured on `iface`, `entity`, `oop`, `bintree`, `fib`
+and `interp` together, in instructions and cycles (`perf stat`), and
+kept only when none of them paid for it.
+
+**And three things that are plain work removed:**
+
+- `CALLIF` has `CALLM`'s lookup (`iface_callee_packed`): the call site's
+  cache answered in one register, where it came back as a
+  `Result<(usize, u32), RuntimeError>` through memory.
+- `RET0` has `RET1`'s short way back: a method that returns nothing, to
+  a caller that wants nothing or one value, pops its frame in the loop
+  and not in `pop_frame`. Not when the profiler has a sample due, since
+  a loop that calls nothing is charged to its function when the function
+  returns, and `pop_frame` is where that is done
+  (`crates/saule-cli/tests/profile.rs` fails without this).
+- A coroutine's `yield` leaves the loop as `Err(RuntimeError::Yield)`
+  named where it is returned. Handed to `native_throw` and back, the
+  whole error (eleven words) was copied twice to carry the one that
+  says which error it is.
+
+`iface` 0.215 → 0.171 s (1.38x of Lua → 1.10x): 3.87G instructions →
+3.74G, 1.10G cycles → 0.88G. `entity` 0.039 → 0.034 s (1.34x → 1.17x):
+692M instructions → 646M, 190M cycles → 162M. `bintree` 0.356 → 0.321 s
+(4.09G instructions → 3.76G). `coroutine` 0.340 → 0.297 s, `coro_pipe`
+0.323 → 0.293 s, `coro_tree` 0.290 → 0.255 s (5.86G instructions → 5.66G
+and 1.72G cycles → 1.52G for the first). `interp` 0.406 → 0.359 s and
+`generic` 0.128 → 0.116 s came with them.
+
+What is left in the coroutine three, at 1.15x to 1.27x: every resume
+comes back as a `Vec` of what was yielded, allocated in the coroutine
+and freed by the caller, because that is what a native closure returns;
+and a `for` over a coroutine in a function with a captured local parks
+and unparks that local around every step (12% of `coro_tree`). Both are
+the interface between two register files, not an arm that is slow.
 
 ## The profiles these tasks are built on
 

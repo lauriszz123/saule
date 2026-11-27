@@ -1,0 +1,191 @@
+-- `Iter`'s combinators call a function for each element, and go over the
+-- table as it was when they were called, whatever the function does to it
+-- meanwhile. They read the table where it is and are handed a copy only
+-- when it is written to, so each way a function can meddle is asked here,
+-- beside what a function may hand back: nothing, several values, something
+-- that is not a number.
+--
+-- `assert` throughout: run_tests.sh gates exit status only.
+
+fn joined(t: table<integer>) -> string
+	local parts: table<string> = {}
+	for v in t do
+		parts[#parts + 1] = "" .. v
+	end
+	return String.join(",", parts)
+end
+
+-- ─── a function that writes to the table it is called about ────────────────
+
+-- Appending: the new elements are not gone over.
+local grown: table<integer> = {1, 2, 3}
+local doubled: table<integer> = Iter.map(grown, fn(x: integer) -> integer
+	Table.insert(grown, x * 100)
+	return x * 2
+end)
+assert(joined(doubled) == "2,4,6")
+assert(joined(grown) == "1,2,3,100,200,300")
+
+-- Removing: the elements that were there are all gone over.
+local shrunk: table<integer> = {1, 2, 3, 4, 5, 6}
+local seen: table<integer> = {}
+local kept: table<integer> = Iter.filter(shrunk, fn(x: integer) -> boolean
+	seen[#seen + 1] = x
+	Table.remove(shrunk, 1)
+	return x % 2 == 0
+end)
+assert(joined(seen) == "1,2,3,4,5,6")
+assert(joined(kept) == "2,4,6")
+assert(#shrunk == 0)
+
+-- Overwriting: what was there is what is handed over.
+local changed: table<integer> = {1, 2, 3, 4}
+local total: integer = Iter.reduce(changed, 0, fn(acc: integer, x: integer) -> integer
+	for i: integer = 1, #changed do
+		changed[i] = 0
+	end
+	return acc + x
+end)
+assert(total == 10)
+assert(joined(changed) == "0,0,0,0")
+
+-- Emptied by the first call, for each of the ones that stop early or count.
+local each: table<fn(table<integer>, fn(integer) -> boolean) -> integer> = {
+	fn(t: table<integer>, f: fn(integer) -> boolean) -> integer
+		return Iter.count(t, f)
+	end,
+	fn(t: table<integer>, f: fn(integer) -> boolean) -> integer
+		return Iter.findIndex(t, f) ?? -1
+	end,
+	fn(t: table<integer>, f: fn(integer) -> boolean) -> integer
+		return Iter.find(t, f) ?? -1
+	end,
+	fn(t: table<integer>, f: fn(integer) -> boolean) -> integer
+		if Iter.any(t, f) then
+			return 1
+		end
+		return 0
+	end,
+	fn(t: table<integer>, f: fn(integer) -> boolean) -> integer
+		if Iter.all(t, f) then
+			return 1
+		end
+		return 0
+	end
+}
+local answers: table<integer> = {}
+for ask in each do
+	local t: table<integer> = {5, 6, 7, 8}
+	local calls: integer = 0
+	local answer: integer = ask(t, fn(x: integer) -> boolean
+		calls = calls + 1
+		Table.clear(t)
+		return x == 8
+	end)
+	answers[#answers + 1] = answer * 10 + calls
+end
+-- count: one match in four calls; findIndex 4 and find 8, each on the fourth
+-- call; any true on the fourth; all false on the first.
+assert(joined(answers) == "14,44,84,14,1")
+
+-- The same table twice, written to by the function.
+local pair: table<integer> = {1, 2, 3}
+local sums: table<integer> = Iter.zipWith(pair, pair, fn(a: integer, b: integer) -> integer
+	Table.insert(pair, 9)
+	return a + b
+end)
+assert(joined(sums) == "2,4,6")
+
+-- A combinator over the same table inside the function.
+local inner: table<integer> = {1, 2, 3}
+local nested: table<integer> = Iter.map(inner, x => x * Iter.count(inner, y => y <= x))
+assert(joined(nested) == "1,4,9")
+
+-- sortBy and groupBy, with a function that appends.
+local keys: table<integer> = {3, 1, 2}
+local sorted: table<integer> = Iter.sortBy(keys, fn(x: integer) -> integer
+	Table.insert(keys, 0)
+	return x
+end)
+assert(joined(sorted) == "1,2,3")
+local grouped: table<integer> = {1, 2, 3, 4, 5}
+local groups: table<integer, table<integer>> = Iter.groupBy(grouped, fn(x: integer) -> integer
+	Table.insert(grouped, 7)
+	return x % 2
+end)
+assert(joined(groups[1]!) == "1,3,5" and joined(groups[0]!) == "2,4")
+
+-- forEach, which hands nothing back.
+local visited: table<integer> = {}
+local walked: table<integer> = {4, 5}
+Iter.forEach(walked, fn(x: integer) -> nil
+	visited[#visited + 1] = x
+	Table.insert(walked, x)
+end)
+assert(joined(visited) == "4,5")
+
+-- ─── what a function hands back ─────────────────────────────────────────────
+
+-- Strings and tables, which are kept past the next call.
+local words: table<string> = Iter.map({1, 2, 3}, x => "n" .. x)
+assert(String.join(" ", words) == "n1 n2 n3")
+local boxes: table<table<integer>> = Iter.map({1, 2, 3}, x => {x, x * x})
+assert(boxes[1]![2] == 1 and boxes[2]![2] == 4 and boxes[3]![2] == 9)
+
+-- A string carried through reduce, and floats and booleans through map.
+assert(Iter.reduce({"a", "b", "c"}, "", (acc, s) => acc .. s) == "abc")
+local halves: table<float> = Iter.map({1, 2, 3}, x => (x as float) / 2.0)
+assert(halves[1] == 0.5 and halves[3] == 1.5)
+local flags: table<boolean> = Iter.map({1, 2, 3}, x => x % 2 == 1)
+assert(flags[1] == true and flags[2] == false and flags[3] == true)
+
+-- `nil` for some elements: the place is kept.
+local maybe: table<integer?> = Iter.map({1, 2, 3}, fn(x: integer) -> integer?
+	if x == 2 then
+		return nil
+	end
+	return x
+end)
+assert(maybe[1] == 1 and maybe[2] == nil and maybe[3] == 3)
+
+-- The elements a filter keeps are the table's own, not copies of them.
+local rows: table<table<integer>> = {{1}, {2}, {3}}
+local odd: table<table<integer>> = Iter.filter(rows, r => r[1]! % 2 == 1)
+odd[1]![1] = 10
+assert(rows[1]![1] == 10 and #odd == 2)
+assert(Iter.find(rows, r => r[1] == 3) == rows[3])
+
+-- ─── Table.sort with a function that is more than a comparison ──────────────
+
+class Person
+	name: string
+	age: integer
+
+	fn init(name: string, age: integer)
+		self.name = name
+		self.age = age
+	end
+end
+
+local people: table<Person> = {Person("c", 30), Person("a", 25), Person("b", 35), Person("d", 25)}
+Table.sort(people, (a, b) => a.age < b.age)
+assert(people[1]!.name == "a" and people[2]!.name == "d" and people[4]!.name == "b")
+Table.sort(people, (a, b) => a.name > b.name)
+assert(people[1]!.name == "d" and people[4]!.name == "a")
+
+-- Many elements, so that a register file is used again and again.
+local many: table<integer> = {}
+for i: integer = 1, 5000 do
+	many[i] = (i * 7919) % 5003
+end
+local evens: table<integer> = Iter.filter(Iter.map(many, x => x + 1), x => x % 2 == 0)
+local check: integer = Iter.reduce(evens, 0, (acc, x) => (acc + x) % 1000003)
+local by_hand: integer = 0
+for v in many do
+	if (v + 1) % 2 == 0 then
+		by_hand = (by_hand + v + 1) % 1000003
+	end
+end
+assert(check == by_hand)
+
+println("ok")

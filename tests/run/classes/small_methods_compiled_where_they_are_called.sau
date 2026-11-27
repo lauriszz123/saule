@@ -1,0 +1,211 @@
+-- A small method that cannot fail is compiled where it is called, behind
+-- a test that the receiver is of exactly the class whose method it is
+-- (`saule-vm`'s `compile::inline`). Nothing a program can see may change:
+-- each way the test can go, and each shape of body, is here with what a
+-- call gives.
+class Counter
+  n: integer
+  items: table<integer>
+
+  fn init()
+    self.n = 0
+    self.items = {}
+  end
+
+  fn bump() -> nil
+    self.n = self.n + 1
+  end
+
+  fn value() -> integer
+    return self.n
+  end
+
+  fn push(v: integer) -> nil
+    self.n = self.n + 1
+    self.items[self.n] = v
+  end
+
+  fn pop() -> integer?
+    if self.n == 0 then
+      return nil
+    end
+    local v: integer? = self.items[self.n]
+    self.n = self.n - 1
+    return v
+  end
+
+  fn step() -> integer
+    return 1
+  end
+
+  fn advance() -> integer
+    self.n = self.n + self.step()
+    return self.n
+  end
+end
+
+-- A subclass that overrides: the body laid down for `Counter` is not its.
+class ByTwo extends Counter
+  fn bump() -> nil
+    self.n = self.n + 2
+  end
+
+  fn value() -> integer
+    return self.n * 10
+  end
+
+  fn step() -> integer
+    return 5
+  end
+end
+
+-- Through a parameter typed as the parent: both classes arrive here.
+local fn drive(c: Counter) -> integer
+  c.bump()
+  c.bump()
+  return c.value()
+end
+
+local plain = Counter()
+local doubled = ByTwo()
+assert(drive(plain) == 2)
+assert(drive(doubled) == 40)
+assert(drive(plain) == 4)
+
+-- A method that calls another: the inner call is still looked up.
+assert(plain.advance() == 5)
+assert(doubled.advance() == 9)
+
+-- Push and pop through a table held in a field, the result used and not.
+local s = Counter()
+for i = 1, 50 do
+  s.push(i * 3)
+end
+assert(s.value() == 50)
+local total = 0
+for i = 1, 50 do
+  total += s.pop() ?? 0
+end
+assert(total == 3825)
+assert(s.pop() == nil)
+assert(s.value() == 0)
+
+-- The receiver is worked out once, whatever it is.
+local made = 0
+local fn fresh() -> Counter
+  made += 1
+  return Counter()
+end
+fresh().bump()
+assert(fresh().value() == 0)
+assert(made == 2)
+
+-- An argument is worked out once, and before the body runs.
+local order = ""
+local fn noted(v: integer) -> integer
+  order = order .. v
+  return v
+end
+s.push(noted(7))
+s.push(noted(8))
+assert(order == "78")
+assert(s.pop() == 8 and s.pop() == 7)
+
+-- A result written over the receiver's own variable.
+local c = Counter()
+c.bump()
+local kept: any = c
+kept = c.value()
+assert(kept == 1)
+
+-- From inside the class, on `self`, before every field is there: the
+-- body that indexes the table is only run once there is a table.
+class Early
+  n: integer
+  items: table<integer>
+
+  fn init()
+    self.n = 0
+    self.note()
+    self.items = {}
+    self.add(4)
+    self.add(5)
+  end
+
+  fn note() -> nil
+    self.n = self.n + 10
+  end
+
+  fn add(v: integer) -> nil
+    self.n = self.n + 1
+    self.items[self.n - 10] = v
+  end
+
+  fn at(i: integer) -> integer?
+    return self.items[i]
+  end
+end
+
+local early = Early()
+assert(early.n == 12)
+assert(early.at(1) == 4 and early.at(2) == 5 and early.at(3) == nil)
+-- Floats, and a constructor that only stores what it is given: the
+-- object has just been made, so its class is not even asked.
+class Dot
+  x: float
+  y: float
+
+  fn init(x: float, y: float)
+    self.x = x
+    self.y = y
+  end
+
+  fn move(dx: float, dy: float) -> nil
+    self.x = self.x + dx
+    self.y = self.y + dy
+  end
+
+  fn far() -> boolean
+    return self.x * self.x + self.y * self.y > 100.0
+  end
+
+  fn half() -> float
+    return self.x / 2.0
+  end
+end
+
+class Heavy extends Dot
+  w: float
+
+  fn init(x: float, y: float)
+    self.super(x, y)
+    self.w = 3.0
+  end
+
+  fn move(dx: float, dy: float) -> nil
+    self.x = self.x + dx * self.w
+    self.y = self.y + dy * self.w
+  end
+end
+
+local d = Dot(1.0, 2.0)
+assert(d.x == 1.0 and d.y == 2.0)
+assert(not d.far())
+for i = 1, 10 do
+  d.move(1.0, 0.5)
+end
+assert(d.x == 11.0 and d.y == 7.0)
+assert(d.far())
+assert(d.half() == 5.5)
+local heavy: Dot = Heavy(0.0, 0.0)
+heavy.move(1.0, 1.0)
+assert(heavy.x == 3.0 and heavy.y == 3.0)
+-- Arguments of a constructor are worked out once, in order.
+order = ""
+local fn tick(v: float) -> float
+  order = order .. "t"
+  return v
+end
+local e = Dot(tick(4.0), tick(5.0))
+assert(order == "tt" and e.x == 4.0 and e.y == 5.0)
+println("ok")

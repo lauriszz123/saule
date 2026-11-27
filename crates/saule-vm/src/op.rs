@@ -724,6 +724,25 @@ define_ops! {
     /// Appended after `SETFIDX`, never inserted: the numbering is the chunk
     /// ABI.
     ISNILP: Abc,
+    /// `R[A] := Bool(R[B] is an instance of exactly class EXTRAARG, and its
+    /// field C holds a table)`; `C` 255 asks nothing of any field.
+    ///
+    /// The test before a method compiled where it is called
+    /// (`compile::inline`): whether the receiver is of the one class whose
+    /// method that is, a subclass not being it, and whether the table the
+    /// body indexes is there, so that the body cannot fail. One instruction
+    /// for both, as both are read off the same object.
+    ///
+    /// Appended after `ISNILP`, never inserted: the numbering is the chunk
+    /// ABI.
+    ISREADY: Abc,
+    /// Jump through jump table `Bx` indexed by the tag of the enum variant
+    /// in `R[A]`.
+    ///
+    /// `GETTAG` and `SWITCH` as one: a `match` over an enum read the tag
+    /// into a register that nothing but the `SWITCH` on the next line ever
+    /// looked at.
+    SWITCHTAG: ABx,
 }
 
 /// The operator an `ARITHX` / `UNARYX` carries in its `EXTRAARG`.

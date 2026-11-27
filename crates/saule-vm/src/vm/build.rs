@@ -196,18 +196,15 @@ pub(crate) fn build_enums(
                     by_tag.push(None);
                     continue;
                 }
-                let obj = Rc::new(EnumVariantObject {
-                    enum_name: proto.name.to_string().into(),
-                    variant_name: v.name.to_string().into(),
-                    tag: tag as u32,
+                let obj = Rc::new(EnumVariantObject::valued(
+                    proto.name.to_string().into(),
+                    v.name.to_string().into(),
+                    tag as u32,
                     // A variant whose value is an expression has none yet;
                     // its declaration sets it when it runs.
-                    value: v
-                        .value
-                        .map(|k| std::cell::OnceCell::from(chunk.constants[k as usize].clone()))
-                        .unwrap_or_default(),
-                    enum_obj: RefCell::new(None),
-                });
+                    v.value.map(|k| chunk.constants[k as usize].clone()),
+                    None,
+                ));
                 variants.insert(v.name.to_string(), Rc::clone(&obj));
                 by_tag.push(Some(obj));
             }

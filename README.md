@@ -37,9 +37,16 @@ The installer picks the right build for the machine, verifies it against the
 release's `SHA256SUMS`, and installs `saule` and `saule-lsp` into `~/.saule/bin`.
 Running it again upgrades in place.
 
-That installs the **stable** channel. For the newest build of all, pass
-`SAULE_CHANNEL=latest` (`$env:SAULE_CHANNEL='latest'` on Windows) — the choice
-is remembered, so later upgrades stay on it. Full details, options and a
+That installs the **stable** channel. For the newest build of all, give the
+installer `SAULE_CHANNEL=latest`, on the `sh` after the pipe (before `curl`
+it reaches only `curl`):
+
+```sh
+curl -fsSL https://lauriszz123.github.io/saule/install.sh | SAULE_CHANNEL=latest sh
+```
+
+On Windows, `$env:SAULE_CHANNEL='latest'` before the `irm`. The choice is
+remembered, so later upgrades stay on it. Full details, options and a
 build-from-source path are in the
 [installation guide](https://lauriszz123.github.io/saule/guides/installation/).
 

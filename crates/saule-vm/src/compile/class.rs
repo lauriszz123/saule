@@ -78,6 +78,10 @@ impl Compiler<'_> {
             self.pending_self_static = Some((idx << 16) | slot as u32);
             let proto = self.method_proto(name, idx, m, /* has_self */ false, span);
             self.pending_self_static = None;
+            if Self::returns_early_only(m) {
+                self.inline_statics
+                    .insert((idx << 16) | slot as u32, std::rc::Rc::new(m.clone()));
+            }
             self.chunk.classes_mut()[idx as usize].static_methods[slot] = proto?;
         }
 
@@ -455,10 +459,15 @@ impl Compiler<'_> {
             for (i, arg) in args.iter().enumerate() {
                 self.expr_to(arg, base + 1 + i as u16)?;
             }
-            self.emit(
-                Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
-                span,
-            );
+            // The object was made on the line above, so its class is this
+            // one and no other: a small `init` is compiled right here, with
+            // nothing to test (`compile::inline`).
+            if !self.inline_method(class, slot, base, args.len() + 1, false, true, span)? {
+                self.emit(
+                    Instruction::abc(Op::CALLM, a, args.len() as u8 + 1, slot as u8),
+                    span,
+                );
+            }
             self.free_to(cm);
         }
 
@@ -606,7 +615,7 @@ pub(crate) fn set_variant_value(
     if let [saule_runtime::Value::EnumVariant(v), value] = args {
         // Set once, and a module body runs once — a second call has nothing
         // to change.
-        let _ = v.value.set(value.clone());
+        v.set_value(value.clone());
     }
     Ok(saule_runtime::Value::Nil)
 }
