@@ -6,6 +6,17 @@ history.
 
 ## 26.34
 
+### Added
+
+- **`saule build --shared`**: a built program without the runtime in it.
+  The output is the bytecode and the bundled files behind a first line
+  that names the saule to run it (`--shared=/bin/saule`; this saule when
+  no path is given), a few hundred kilobytes where the whole executable
+  is twelve megabytes with Shine in it. Programs built so share one
+  runtime and one copy of each native package, loaded from that saule's
+  home. `saule run <file>` runs one, and passes on everything after the
+  file as the program's arguments.
+
 ### Changed
 
 - **`Table.sort` with a comparator that only compares**, `(a, b) => a < b`
