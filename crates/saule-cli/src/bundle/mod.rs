@@ -377,7 +377,12 @@ fn runtime_for(given: &Path, exe: &Path) -> PathBuf {
     let Some(text) = runtime.to_str() else {
         refuse("the path of the saule is not text");
     };
-    if !runtime.is_absolute() {
+    // Whole where the program runs, which need not be the kind of machine
+    // it is built on: `/bin/saule` names nothing on Windows, where a path
+    // starts at a drive, and is what a program built there for a Linux
+    // image has to say. A path from the root is whole on every system that
+    // reads a first line at all.
+    if !(text.starts_with('/') || runtime.is_absolute()) {
         refuse(&format!(
             "`{text}` is not a whole path (it is where the saule is on the machine the program runs on)"
         ));
