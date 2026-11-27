@@ -49,6 +49,11 @@ history.
   two: about 5% off most programs, a fifth off recursive ones.
 - **`match` over an enum with fields** runs in about 60% of the time, all
   of the above together.
+- **`String.match`, `String.gmatch` and `String.gsub`** run in about 60%
+  of the time on ASCII text, and 80% on text that is not: text that is
+  all ASCII is matched where it lies and not decoded first, and a search
+  goes straight to the next place the pattern's first item can match.
+  What they return is unchanged.
 - **Two instructions added** (`ISREADY`, `SWITCHTAG`), so a program built
   with `saule build` has to be built again.
 

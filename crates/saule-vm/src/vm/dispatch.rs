@@ -253,7 +253,7 @@ impl Vm {
             .collect();
         let vs =
             self.foreign(|_| saule_runtime::call::call_method(&recv, name, &args, site.span()))?;
-        self.store_results(base + a, &vs, n_ret);
+        self.store_owned(base + a, vs, n_ret);
         Ok(())
     }
 

@@ -439,6 +439,70 @@ What is left: each arm but the last ends in a `JMP` to the end of the
 `match`, and the two arms for one variant each read the field the guard
 needed.
 
+### Patterns: ASCII text matched where it lies ✓ DONE
+
+`pattern` ran 0.379 s against Lua's 0.224: 7.48G instructions to Lua's
+4.01G. The matcher is a port of Lua's, so the difference was in what was
+done around it. The profile, by where the time went:
+
+- every call decoded the subject and the pattern into a `Vec<char>`, and
+  `gsub` wrote its result back a character at a time;
+- an unanchored search made a whole attempt at every place: `code=(%d+)`
+  over a line of fifty characters is thirty-odd calls of `do_match` that
+  each fail on the first character;
+- each search zeroed thirty-two captures, 512 bytes, to use none or three;
+- each step of `gmatch` built the matched word twice (once as the whole
+  match, once as the one capture a pattern without captures has), and the
+  VM cloned both results into their registers and dropped the originals.
+
+**ASCII as bytes.** The matcher is generic over a `Unit` (`char` or
+`u8`). A subject and a pattern that are both ASCII are matched as the
+bytes they are, a byte to a character, so no index changes its meaning
+and nothing is decoded (`both_ascii`, `gsub_ascii`, `captures_table` in
+`stdlib/string.rs`). Anything else takes the way it always took. The
+classes are asked of the same `char` in both, and the unit tests run
+every assertion both ways whenever the text allows (`found` in
+`pattern.rs`'s tests).
+
+**Places the first item cannot match are stepped over** (`leading_item`
+in `find`): when a pattern starts with a character, a class or a set that
+has to be taken at least once, the search compares its way to the next
+place that item matches and only attempts there. A failed attempt at such
+a place changed nothing and reported nothing, so none is missed; a first
+item that is malformed is reported before the scan, as the first attempt
+reported it.
+
+**A class of ASCII is a table read** (`ASCII_CLASS`), and the item a `+`
+or `*` repeats, or a search steps over, is read once for the loop and not
+for each character (`Item`, `holds`). A test checks the table against
+`match_class` for every ASCII character and every letter.
+
+**Four captures are held in place** and more go in a list (`Captures`).
+
+**A native's results are moved into the registers** (`Vm::store_owned`):
+every native that returns more than one value hands back a `Vec` it
+owns, and each value in it was cloned and then dropped. This one is the
+VM's and not the matcher's; it is 4% of `pattern` and nothing measurable
+of `iterlib`, whose steps return a string and an integer.
+
+`pattern` 0.379 → 0.226 s (1.69x of Lua → 1.01x); 7.48G instructions →
+3.90G, Lua 4.01G; 1.94G cycles → 1.13G, Lua 1.13G. The same benchmark
+with a letter that is not ASCII in every user name, so that every line
+takes the decoding way: 0.39 → 0.31 s, which is the stepping over and the
+moved results alone.
+
+The binary's layout moved with it, as it does with any change (see the
+note on registers above): `loop_arith` 0.033 → 0.036 s at the same
+753.27M instructions, and the three coroutine benchmarks 2 to 4% slower
+in time while executing 1% fewer instructions. A build with the matcher's
+changes and without the VM's put `loop_arith` at 0.039.
+
+What is left: the pattern is still read as it is matched, an item's end
+found again each time it is reached (`class_end`), and each result is two
+allocations for the string and two for the table of captures. A pattern
+compiled once and kept by the string it came from would take the first;
+the second is how strings and tables are made.
+
 ## The profiles these tasks are built on
 
 Leaf-weighted, `sample`, release build. **Do not re-measure these to start a

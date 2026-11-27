@@ -536,7 +536,7 @@ impl Vm {
                 crate::sampling::leave_native(running);
                 self.sample_point();
                 let vs = vs.map_err(|m| self.native_failure(m, nc.name, site))?;
-                self.store_results(dst, &vs, n_ret);
+                self.store_owned(dst, vs, n_ret);
                 Ok(())
             }
             // `Image(…)` on a native package's class. A Saule class is built
@@ -904,6 +904,34 @@ impl Vm {
             && let Some(f) = self.frames.last_mut()
         {
             f.top = (dst + vals.len()) as u32;
+        }
+    }
+
+    /// [`store_results`](Self::store_results) for a caller that owns the
+    /// values, which are moved into the registers.
+    ///
+    /// Every native that returns more than one value hands back a `Vec` of
+    /// its own: an iterator's step, `String.gsub`. Read as a slice, each
+    /// value was cloned into its register and the original dropped with
+    /// the `Vec` a moment later, a count up and a count down for every
+    /// string and table returned. What ends up in the registers and in
+    /// `top` is the same.
+    pub(crate) fn store_owned(&mut self, dst: usize, vals: Vec<Value>, n_ret: u8) {
+        let given = vals.len();
+        let wanted = if n_ret == ALL_RESULTS {
+            given
+        } else {
+            n_ret as usize
+        };
+        self.ensure_stack(dst + wanted);
+        let mut vals = vals.into_iter();
+        for i in 0..wanted {
+            self.stack[dst + i] = vals.next().unwrap_or(Value::Nil);
+        }
+        if n_ret == ALL_RESULTS
+            && let Some(f) = self.frames.last_mut()
+        {
+            f.top = (dst + given) as u32;
         }
     }
 
